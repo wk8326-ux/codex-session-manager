@@ -128,8 +128,9 @@ class WatchdogServiceTests(unittest.TestCase):
         )
         service, secrets, probe, adapter = make_service(self.store, unavailable)
         session = self.create_session(secrets)
+        cache: dict[str, ProbeResult] = {}
 
-        run = service.check_session(session["id"], NOW)
+        run = service.check_session(session["id"], NOW, cache)
 
         self.assertEqual(run["decision"], "silent_channel_unavailable")
         self.assertEqual(adapter.read_calls, [])
@@ -139,6 +140,11 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertNotIn(API_KEY, repr(self.store.list_monitor_runs({})))
         channel = self.store.get_channel(session["channelId"])
         self.assertNotIn(API_KEY, repr(channel))
+        self.assertIsInstance(cache[session["channelId"]], ProbeResult)
+        self.assertNotIn(API_KEY, repr(cache))
+        self.assertFalse(
+            any("api_key" in name for name in vars(service))
+        )
 
     def test_resume_candidate_is_only_observed_when_actions_are_disabled(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
@@ -206,6 +212,31 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertLessEqual(len(run["detailSanitized"]), 500)
         stored = self.store.list_monitor_runs({})[0]
         self.assertEqual(stored["detailSanitized"], run["detailSanitized"])
+
+    def test_cached_probe_never_requires_secret_to_normalize_adapter_data(self) -> None:
+        cached_secret = "sk-cached-probe-secret"
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        snapshot = SessionSnapshot(
+            THREAD_ID,
+            "cached session",
+            "idle",
+            (),
+            TurnSnapshot("turn-cached", cached_secret),
+        )
+        service, secrets, probe, _adapter = make_service(
+            self.store, healthy, snapshot
+        )
+        session = self.create_session(secrets)
+        cache = {session["channelId"]: healthy}
+
+        run = service.check_session(session["id"], NOW, cache)
+
+        self.assertEqual(probe.calls, [])
+        self.assertEqual(secrets.unprotected, [])
+        self.assertEqual(run["sessionState"], "unknown")
+        self.assertEqual(run["detailSanitized"], "session state was not recognized")
+        self.assertNotIn(cached_secret, repr(run))
+        self.assertNotIn(cached_secret, repr(self.store.list_monitor_runs({})))
 
     def test_due_sessions_share_probe_and_fail_independently(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)

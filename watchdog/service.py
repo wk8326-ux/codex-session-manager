@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 
@@ -16,6 +17,48 @@ class SessionAdapter(Protocol):
 
 
 Probe = Callable[[ChannelConfig], ProbeResult]
+
+CHANNEL_CATEGORIES = frozenset(
+    {
+        "healthy",
+        "auth_error",
+        "rate_limited",
+        "upstream_error",
+        "other_http_error",
+        "network_error",
+        "protocol_error",
+    }
+)
+SESSION_STATES = frozenset(
+    {
+        "notLoaded",
+        "idle",
+        "active",
+        "systemError",
+        "completed",
+        "inProgress",
+        "failed",
+        "interrupted",
+        "unavailable",
+        "monitor_error",
+    }
+)
+TURN_ID = re.compile(
+    r"^(?:turn-[A-Za-z0-9][A-Za-z0-9._-]{0,119}|"
+    r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$"
+)
+DECISION_DETAILS = {
+    "resume_candidate": "enabled recovery rule matched",
+    "resume_candidate_observed": "enabled recovery rule matched",
+    "silent_codex_unavailable": "session data was unavailable",
+    "silent_manual_attention": "session requires manual attention",
+    "silent_no_turn": "session has no turn",
+    "silent_session_running": "session is running",
+    "silent_session_completed": "session is completed",
+    "silent_unknown": "session state was not recognized",
+    "silent_unrecoverable_error": "no enabled recovery rule matched",
+    "silent_monitor_error": "monitoring failed",
+}
 
 
 def _add_minutes(value: str, minutes: int) -> str:
@@ -44,14 +87,35 @@ def _error_category(error_signature: str) -> str:
     return "decision_error"
 
 
+def _channel_status(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value if value in CHANNEL_CATEGORIES else "protocol_error"
+
+
+def _session_state(value: str | None) -> str:
+    return value if value in SESSION_STATES else "unknown"
+
+
+def _turn_id(value: str | None) -> str | None:
+    if value is None or len(value) > 128 or TURN_ID.fullmatch(value) is None:
+        return None
+    return value
+
+
+def _decision_detail(decision: str, probe_result: ProbeResult | None) -> str:
+    if decision == "silent_channel_unavailable" and probe_result is not None:
+        return probe_result.detail
+    return DECISION_DETAILS.get(decision, "monitoring decision recorded")
+
+
 def _run_data(
     *,
     session_id: str,
     channel_id: str,
     now: str,
     decision: str,
-    detail: object,
-    api_key: str = "",
+    probe_result: ProbeResult | None = None,
     channel_status: str | None = None,
     http_status: int | None = None,
     session_state: str | None = None,
@@ -64,14 +128,16 @@ def _run_data(
         "channelId": channel_id,
         "startedAt": now,
         "finishedAt": now,
-        "channelStatus": _safe_detail(channel_status, api_key),
+        "channelStatus": _channel_status(channel_status),
         "httpStatus": http_status,
-        "sessionState": _safe_detail(session_state, api_key),
-        "turnId": _safe_detail(turn_id, api_key) if turn_id else None,
+        "sessionState": _session_state(session_state),
+        "turnId": _turn_id(turn_id),
         "errorCategory": error_category,
         "decision": decision,
         "durationMs": duration_ms,
-        "detailSanitized": _safe_detail(detail, api_key),
+        "detailSanitized": _safe_detail(
+            _decision_detail(decision, probe_result)
+        ),
     }
 
 
@@ -90,7 +156,7 @@ class WatchdogService:
         self._probe = probe
         self._adapter = adapter
 
-    def _probe_channel(self, channel: dict, now: str) -> tuple[ProbeResult, str]:
+    def _probe_channel(self, channel: dict, now: str) -> ProbeResult:
         api_key = ""
         try:
             api_key = self._secret_store.unprotect(channel["encryptedKey"])
@@ -104,25 +170,19 @@ class WatchdogService:
                 )
             )
         except Exception as error:
-            return (
-                ProbeResult(
-                    "network_error",
-                    None,
-                    f"channel probe failed ({type(error).__name__})",
-                    0,
-                    now,
-                ),
-                api_key,
+            return ProbeResult(
+                "network_error",
+                None,
+                f"channel probe failed ({type(error).__name__})",
+                0,
+                now,
             )
-        return (
-            ProbeResult(
-                result.category,
-                result.http_status,
-                _safe_detail(result.detail, api_key),
-                result.duration_ms,
-                result.checked_at or now,
-            ),
-            api_key,
+        return ProbeResult(
+            result.category,
+            result.http_status,
+            _safe_detail(result.detail, api_key),
+            result.duration_ms,
+            result.checked_at or now,
         )
 
     def check_session(
@@ -132,15 +192,6 @@ class WatchdogService:
         probe_cache: dict[str, ProbeResult] | None = None,
     ) -> dict:
         cache = probe_cache if probe_cache is not None else {}
-        return self._check_session(session_id, now, cache, {})
-
-    def _check_session(
-        self,
-        session_id: str,
-        now: str,
-        probe_cache: dict[str, ProbeResult],
-        api_keys: dict[str, str],
-    ) -> dict:
         session = self._store.get_session(session_id)
         if session is None or not session["enabled"]:
             raise ValueError("monitored session is missing or disabled")
@@ -148,12 +199,10 @@ class WatchdogService:
         if channel is None or not channel["enabled"]:
             raise ValueError("API channel is missing or disabled")
 
-        result = probe_cache.get(channel["id"])
+        result = cache.get(channel["id"])
         if result is None:
-            result, api_key = self._probe_channel(channel, now)
-            probe_cache[channel["id"]] = result
-            api_keys[channel["id"]] = api_key
-        api_key = api_keys.get(channel["id"], "")
+            result = self._probe_channel(channel, now)
+            cache[channel["id"]] = result
         self._store.record_channel_probe(channel["id"], result)
 
         snapshot: SessionSnapshot | None = None
@@ -171,7 +220,6 @@ class WatchdogService:
             decision = Decision(
                 "resume_candidate_observed",
                 decision.error_signature,
-                decision.detail,
             )
 
         turn = snapshot.latest_turn if snapshot is not None else None
@@ -192,8 +240,7 @@ class WatchdogService:
                 error_category=_error_category(decision.error_signature),
                 decision=decision.code,
                 duration_ms=result.duration_ms,
-                detail=decision.detail or result.detail,
-                api_key=api_key,
+                probe_result=result,
             ),
             next_check_at,
         )
@@ -201,14 +248,11 @@ class WatchdogService:
 
     def run_due(self, now: str) -> list[dict]:
         cache: dict[str, ProbeResult] = {}
-        api_keys: dict[str, str] = {}
         runs: list[dict] = []
         for session in self._store.list_due_sessions(now):
             try:
-                runs.append(
-                    self._check_session(session["id"], now, cache, api_keys)
-                )
-            except Exception as error:
+                runs.append(self.check_session(session["id"], now, cache))
+            except Exception:
                 decision = "silent_monitor_error"
                 settings = self._store.get_settings()
                 interval = (
@@ -223,8 +267,6 @@ class WatchdogService:
                             now=now,
                             session_state="monitor_error",
                             decision=decision,
-                            detail=f"monitoring failed ({type(error).__name__})",
-                            api_key=api_keys.get(session["channelId"], ""),
                         ),
                         _add_minutes(now, int(interval)),
                     )
