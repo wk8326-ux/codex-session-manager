@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from .channels import ProbeResult
+
 
 class WatchdogStoreError(RuntimeError):
     """Base error for watchdog persistence failures."""
@@ -308,6 +310,22 @@ class WatchdogStore:
 
     def get_channel(self, channel_id: str) -> dict | None:
         return self._one("SELECT * FROM api_channels WHERE id = ?", (channel_id,))
+
+    def record_channel_probe(self, channel_id: str, result: ProbeResult) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE api_channels
+                   SET last_probe_status = ?, last_http_status = ?,
+                       last_probe_detail = ?, last_checked_at = ?
+                   WHERE id = ?""",
+                (
+                    result.category,
+                    result.http_status,
+                    result.detail,
+                    result.checked_at,
+                    channel_id,
+                ),
+            )
 
     def create_session(self, data: dict) -> dict:
         session_id = str(data.get("id") or uuid4())
