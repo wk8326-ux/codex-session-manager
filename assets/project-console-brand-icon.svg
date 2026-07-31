@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="brand-shadow" x="-25%" y="-25%" width="150%" height="165%">
+      <feDropShadow dx="0" dy="34" stdDeviation="34" flood-color="#18221f" flood-opacity="0.22"/>
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#18221f" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect x="96" y="82" width="832" height="832" rx="116" fill="#18221f" filter="url(#brand-shadow)"/>
+
+  <g transform="translate(304 290) scale(17.333333)" fill="none" stroke="#fbfcfb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+  </g>
+
+  <circle cx="708" cy="694" r="92" fill="#18221f"/>
+  <circle cx="708" cy="694" r="66" fill="#62c792"/>
+</svg>

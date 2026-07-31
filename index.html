@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e9eeeb">
+  <title>本地项目控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --n-0: #fbfcfb;
+      --n-25: #f7f9f8;
+      --n-50: #eef1ef;
+      --n-100: #e2e7e4;
+      --n-200: #cbd3cf;
+      --n-300: #abb6b1;
+      --n-500: #68736f;
+      --n-600: #505b57;
+      --n-700: #3c4743;
+      --n-900: #18221f;
+      --accent-50: #edf6f2;
+      --accent-100: #dcece5;
+      --accent-300: #89b7a5;
+      --accent-500: #3a8069;
+      --accent-600: #2d715b;
+      --accent-700: #245e4c;
+      --running: #27845a;
+      --warning: #ad6b1d;
+      --danger: #b44538;
+      --info: #486c7d;
+      --surface-canvas: var(--n-50);
+      --surface-raised: var(--n-0);
+      --surface-sidebar: #e9eeeb;
+      --surface-sunken: #e7ebe9;
+      --text-primary: var(--n-900);
+      --text-secondary: var(--n-500);
+      --text-tertiary: #7e8985;
+      --border-subtle: rgba(24, 34, 31, 0.08);
+      --border-default: rgba(24, 34, 31, 0.15);
+      --shadow-raised: 0 10px 28px rgba(48, 64, 57, 0.07), 0 1px 3px rgba(48, 64, 57, 0.08);
+      --shadow-overlay: 0 24px 64px rgba(36, 48, 43, 0.18), 0 4px 12px rgba(36, 48, 43, 0.1);
+      --radius-input: 6px;
+      --radius-button: 6px;
+      --radius-surface: 8px;
+      --radius-dialog: 8px;
+      --font-body: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-display: Bahnschrift, "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-mono: "Cascadia Mono", Consolas, monospace;
+      --sidebar-width: 264px;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--surface-canvas); -webkit-font-smoothing: antialiased; }
+    body { margin: 0; min-width: 280px; min-height: 100dvh; color: var(--text-primary); background: var(--surface-canvas); font-family: var(--font-body); letter-spacing: 0; }
+    button, input, textarea { font: inherit; letter-spacing: 0; }
+    button, a { touch-action: manipulation; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: 0.46; }
+    [hidden] { display: none !important; }
+    svg { width: 18px; height: 18px; stroke-width: 1.8; flex: none; }
+    code { font-family: var(--font-mono); }
+
+    .skip-link { position: fixed; z-index: 60; left: 16px; top: 10px; transform: translateY(-160%); padding: 9px 14px; color: var(--n-0); background: var(--n-900); border-radius: var(--radius-button); }
+    .skip-link:focus { transform: translateY(0); }
+
+    .app-shell { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 100dvh; }
+    .sidebar { position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column; padding: 28px 22px 22px; overflow-y: auto; overscroll-behavior: contain; background: var(--surface-sidebar); border-right: 1px solid var(--border-subtle); }
+    .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text-primary); }
+    .brand-mark { position: relative; display: grid; place-items: center; width: 36px; height: 36px; color: var(--n-0); background: var(--n-900); border-radius: 5px; box-shadow: 0 6px 14px rgba(24, 34, 31, 0.13), 0 1px 2px rgba(24, 34, 31, 0.12); }
+    .brand-mark::after { content: ""; position: absolute; right: 5px; bottom: 5px; width: 5px; height: 5px; background: #62c792; border: 2px solid var(--n-900); border-radius: 50%; }
+    .brand-copy { min-width: 0; }
+    .brand-copy strong { display: block; font: 600 15px/1.25 var(--font-display); }
+    .brand-copy span { display: block; margin-top: 3px; color: var(--text-secondary); font: 11px/1.25 var(--font-mono); }
+
+    .sidebar-summary { margin-top: 54px; }
+    .summary-label { margin: 0; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .summary-number { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-family: var(--font-display); font-variant-numeric: tabular-nums; }
+    .summary-number strong { font-size: 46px; line-height: 1; font-weight: 600; }
+    .summary-number span { color: var(--text-secondary); font-size: 14px; }
+    .summary-track { height: 3px; margin-top: 18px; overflow: hidden; background: var(--n-200); }
+    .summary-track span { display: block; width: 0; height: 100%; background: var(--accent-600); transition: width 250ms ease-out; }
+
+    .filters { display: grid; gap: 4px; margin-top: 38px; }
+    .filters h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .filter-button { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; text-align: left; }
+    .filter-button span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .filter-button[aria-pressed="true"] { color: var(--accent-700); background: var(--accent-50); border-color: rgba(45, 113, 91, 0.11); font-weight: 600; }
+
+    .host-status { margin-top: auto; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
+    .host-line { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 12px; font-weight: 600; }
+    .host-line .light { width: 7px; height: 7px; background: var(--running); border-radius: 50%; box-shadow: 0 0 0 3px rgba(39, 132, 90, 0.12); }
+    .host-address { margin: 9px 0 0; color: var(--text-secondary); font: 11px/1.5 var(--font-mono); }
+    .refresh-state { display: flex; align-items: center; gap: 7px; margin: 10px 0 0; color: var(--text-tertiary); font-size: 11px; }
+    .refresh-state svg { width: 13px; height: 13px; }
+
+    .workspace { min-width: 0; padding: 42px clamp(24px, 4vw, 64px) 64px; }
+    .workspace-inner { width: min(1280px, 100%); margin: 0 auto; }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
+    .page-kicker { margin: 0 0 8px; color: var(--accent-700); font-size: 12px; font-weight: 700; }
+    h1 { max-width: 560px; margin: 0; font: 600 32px/1.16 var(--font-display); letter-spacing: 0; text-wrap: balance; }
+    .page-description { max-width: 640px; margin: 12px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.65; }
+
+    .button { min-height: 40px; display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; box-shadow: 0 1px 1px rgba(24, 34, 31, 0.03); transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, transform 100ms ease-out, box-shadow 140ms ease-out; }
+    .button.primary { color: var(--n-0); background: var(--accent-700); border-color: var(--accent-700); box-shadow: 0 5px 12px rgba(36, 94, 76, 0.14), 0 1px 2px rgba(36, 94, 76, 0.18); }
+    .button.danger { color: var(--danger); background: #fff9f8; border-color: rgba(180, 69, 56, 0.28); }
+    .button.ghost { background: transparent; border-color: transparent; box-shadow: none; }
+    .button.icon-only { width: 40px; padding: 0; }
+    .button:active { transform: scale(0.98); }
+    .button:focus-visible, .filter-button:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+
+    .board { margin-top: 38px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
+    .board-toolbar { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-subtle); }
+    .board-title { display: flex; align-items: baseline; gap: 10px; }
+    .board-title h2 { margin: 0; font-size: 14px; font-weight: 700; }
+    .board-title span { color: var(--text-tertiary); font: 11px var(--font-mono); }
+    .last-updated { display: flex; align-items: center; gap: 7px; color: var(--text-tertiary); font-size: 11px; }
+    .last-updated svg { width: 13px; height: 13px; }
+
+    .column-head, .service-row { display: grid; grid-template-columns: 42px 34px minmax(220px, 1.25fr) minmax(150px, 0.78fr) minmax(190px, 1fr) minmax(92px, 0.42fr) 240px; column-gap: 18px; align-items: center; }
+    .column-head { min-height: 38px; padding: 0 18px; color: var(--text-tertiary); background: var(--n-25); border-bottom: 1px solid var(--border-subtle); font-size: 11px; }
+    .service-list { margin: 0; padding: 0; list-style: none; }
+    .service-item { position: relative; }
+    .service-row { position: relative; min-height: 126px; padding: 18px; border-bottom: 1px solid var(--border-subtle); }
+    .service-list li:last-child .service-row { border-bottom: 0; }
+    .service-row[data-state="running"], .service-row[data-state="online"] { background: #f5f9f7; }
+
+    .bus-slot { position: relative; align-self: stretch; display: grid; place-items: center; }
+    .bus-slot::before, .bus-slot::after { content: ""; position: absolute; left: 50%; width: 1px; height: 50%; background: var(--n-200); transform: translateX(-50%); }
+    .bus-slot::before { top: -18px; }
+    .bus-slot::after { bottom: -18px; }
+    .service-list li:first-child .bus-slot::before, .service-list li:last-child .bus-slot::after { display: none; }
+    .node-light { position: relative; z-index: 1; width: 14px; height: 14px; background: var(--surface-raised); border: 2px solid var(--n-300); border-radius: 50%; box-shadow: 0 0 0 5px var(--surface-raised); }
+    .node-light.running, .node-light.online { background: var(--running); border-color: var(--running); box-shadow: 0 0 0 5px var(--surface-raised), 0 0 0 8px rgba(39, 132, 90, 0.09); }
+    .node-light.offline { border-color: var(--danger); }
+    .node-light.needs-config { background: var(--warning); border-color: var(--warning); }
+    .node-light.external { background: var(--info); border-color: var(--info); }
+
+    .drag-cell { align-self: stretch; display: grid; place-items: center; }
+    .drag-handle { position: relative; width: 34px; min-height: 44px; display: grid; place-items: center; padding: 0; color: var(--n-300); background: transparent; border: 0; border-radius: var(--radius-button); cursor: grab; touch-action: none; }
+    .drag-handle::before { content: ""; position: absolute; inset: 0 -5px; }
+    .drag-handle svg { width: 17px; height: 17px; }
+    .drag-handle:active, .service-item.is-dragging .drag-handle { color: var(--accent-700); cursor: grabbing; }
+    .service-item.is-dragging { z-index: 2; }
+    .service-item.is-dragging .service-row { background: var(--accent-50); box-shadow: 0 10px 24px rgba(48, 64, 57, 0.13), 0 1px 4px rgba(48, 64, 57, 0.12); }
+    body.is-sorting { cursor: grabbing; user-select: none; }
+
+    .service-identity { min-width: 0; }
+    .service-name-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .service-name { margin: 0; overflow: hidden; color: var(--text-primary); font-size: 16px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+    .state-text { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .state-text::before { content: ""; width: 6px; height: 6px; background: var(--n-300); border-radius: 50%; }
+    .state-text.running, .state-text.online { color: var(--running); }
+    .state-text.running::before, .state-text.online::before { background: var(--running); }
+    .state-text.offline { color: var(--danger); }
+    .state-text.offline::before { background: var(--danger); }
+    .state-text.needs-config { color: var(--warning); }
+    .state-text.needs-config::before { background: var(--warning); }
+    .state-text.external { color: var(--info); }
+    .state-text.external::before { background: var(--info); }
+    .service-note { margin: 9px 0 0; overflow: hidden; color: var(--text-secondary); font-size: 12px; line-height: 1.5; white-space: nowrap; text-overflow: ellipsis; }
+    .service-source { margin: 7px 0 0; overflow: hidden; color: var(--text-tertiary); font: 11px/1.45 var(--font-mono); white-space: nowrap; text-overflow: ellipsis; }
+
+    .route-block, .command-block, .runtime-block { min-width: 0; }
+    .route-primary, .command-primary, .runtime-primary { overflow: hidden; color: var(--text-primary); font: 12px/1.5 var(--font-mono); white-space: nowrap; text-overflow: ellipsis; }
+    .route-secondary, .command-secondary, .runtime-secondary { margin-top: 6px; overflow: hidden; color: var(--text-tertiary); font-size: 11px; line-height: 1.45; white-space: nowrap; text-overflow: ellipsis; }
+    .route-primary a { color: var(--accent-700); text-decoration: underline; text-decoration-color: rgba(36, 94, 76, 0.28); text-underline-offset: 3px; }
+    .command-primary code { font-size: 11px; }
+
+    .row-actions { display: flex; justify-content: flex-start; align-items: center; gap: 6px; }
+    .row-actions > .button { min-height: 38px; height: 38px; gap: 6px; padding-right: 10px; padding-left: 10px; }
+    .more-actions { display: flex; margin-left: auto; padding-left: 10px; border-left: 1px solid var(--border-subtle); }
+    .more-actions .button { width: 36px; min-width: 36px; padding: 0; color: var(--text-secondary); }
+    .empty-state { padding: 64px 24px; text-align: center; }
+    .empty-state svg { width: 28px; height: 28px; color: var(--n-300); }
+    .empty-state h3 { margin: 16px 0 0; font-size: 15px; }
+    .empty-state p { margin: 8px 0 0; color: var(--text-secondary); font-size: 13px; }
+
+    .skeleton { position: relative; overflow: hidden; height: 126px; border-bottom: 1px solid var(--border-subtle); }
+    .skeleton::after { content: ""; position: absolute; left: 74px; top: 28px; width: min(260px, 36%); height: 13px; background: var(--n-100); border-radius: 3px; box-shadow: 0 28px 0 var(--n-100), 350px 0 0 var(--n-100), 350px 28px 0 var(--n-100); opacity: 0.72; }
+
+    dialog { max-height: calc(100dvh - 28px); padding: 0; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-dialog); box-shadow: var(--shadow-overlay); }
+    dialog::backdrop { background: rgba(24, 34, 31, 0.42); }
+    .project-dialog { width: min(680px, calc(100% - 28px)); }
+    .dialog-head { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 18px 0 24px; border-bottom: 1px solid var(--border-subtle); }
+    .dialog-head h2 { margin: 0; font: 600 18px var(--font-display); }
+    .dialog-head .button { border: 0; background: transparent; box-shadow: none; }
+    .project-form { max-height: calc(100dvh - 96px); overflow-y: auto; padding: 24px; overscroll-behavior: contain; }
+    .field-stack { display: grid; gap: 18px; }
+    .field { display: grid; gap: 7px; }
+    .field > span, .field-label { color: var(--n-700); font-size: 12px; font-weight: 700; }
+    .field-hint { margin: -1px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+    input, textarea { width: 100%; min-height: 42px; padding: 9px 11px; color: var(--text-primary); background: var(--n-0); border: 1px solid var(--border-default); border-radius: var(--radius-input); font-size: 13px; }
+    input::placeholder, textarea::placeholder { color: #929c98; }
+    textarea { min-height: 76px; resize: vertical; line-height: 1.5; }
+    input[name="path"], input[name="startCommand"], input[name="stopCommand"], input[name="url"] { font-family: var(--font-mono); font-size: 12px; }
+    .segment { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; background: var(--surface-sunken); border-radius: var(--radius-surface); }
+    .segment label { position: relative; }
+    .segment input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .segment span { min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-input); font-size: 12px; font-weight: 600; cursor: pointer; }
+    .segment input:checked + span { color: var(--text-primary); background: var(--surface-raised); border-color: var(--border-subtle); box-shadow: 0 1px 3px rgba(24, 34, 31, 0.08); }
+    .local-fields { display: grid; gap: 18px; padding: 20px 0 2px; border: 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+    .port-field { max-width: 180px; }
+    .form-error { margin: 0; padding: 10px 12px; color: #8e3026; background: #fff5f3; border: 1px solid rgba(180, 69, 56, 0.2); border-radius: var(--radius-input); font-size: 12px; line-height: 1.5; }
+    .dialog-actions { display: flex; justify-content: flex-start; gap: 8px; padding-top: 4px; }
+
+    .log-dialog { width: min(920px, calc(100% - 28px)); }
+    .log-meta { color: var(--text-tertiary); font: 11px var(--font-mono); }
+    .log-content { min-height: 320px; max-height: 62dvh; overflow: auto; margin: 0; padding: 20px 24px; color: #dfe7e3; background: #1c2723; font: 12px/1.65 var(--font-mono); white-space: pre-wrap; overscroll-behavior: contain; }
+
+    .confirm-dialog { width: min(440px, calc(100% - 28px)); padding: 24px; }
+    .confirm-icon { display: grid; place-items: center; width: 40px; height: 40px; color: var(--danger); background: #fff0ed; border-radius: 50%; }
+    .confirm-dialog h2 { margin: 18px 0 0; font-size: 18px; }
+    .confirm-dialog p { margin: 10px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+    .confirm-dialog .dialog-actions { padding-top: 22px; }
+
+    #toast { position: fixed; z-index: 50; right: 24px; bottom: max(24px, env(safe-area-inset-bottom)); max-width: min(420px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 11px 14px; color: var(--n-0); background: var(--n-900); border-radius: var(--radius-button); box-shadow: var(--shadow-overlay); font-size: 13px; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity 160ms ease-out, transform 160ms ease-out; }
+    #toast.visible { opacity: 1; transform: translateY(0); }
+    #toast svg { width: 16px; height: 16px; color: #72d49f; }
+
+    @media (hover: hover) and (pointer: fine) {
+      .button:hover { border-color: var(--n-300); box-shadow: 0 4px 10px rgba(48, 64, 57, 0.08), 0 1px 2px rgba(48, 64, 57, 0.07); }
+      .button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
+      .button.danger:hover { background: #fff0ed; border-color: rgba(180, 69, 56, 0.4); }
+      .button.ghost:hover { background: var(--n-50); border-color: transparent; box-shadow: none; }
+      .filter-button:hover { color: var(--text-primary); background: rgba(251, 252, 251, 0.52); }
+      .drag-handle:hover { color: var(--n-600); background: var(--n-50); }
+      .service-row:hover { background-color: var(--n-25); }
+      .service-row[data-state="running"]:hover, .service-row[data-state="online"]:hover { background-color: rgba(45, 113, 91, 0.055); }
+    }
+
+    @media (max-width: 1440px) {
+      .column-head, .service-row { grid-template-columns: 42px 34px minmax(210px, 1.2fr) minmax(150px, 0.8fr) minmax(90px, 0.45fr) 240px; }
+      .column-head > :nth-child(5), .command-block { display: none; }
+    }
+
+    @media (max-width: 820px) {
+      .app-shell { display: block; }
+      .sidebar { position: static; width: 100%; height: auto; display: grid; grid-template-columns: 1fr auto; gap: 24px; padding: 20px; border-right: 0; border-bottom: 1px solid var(--border-subtle); overflow: visible; }
+      .sidebar-summary { margin-top: 0; text-align: right; }
+      .summary-number { justify-content: flex-end; margin-top: 4px; }
+      .summary-number strong { font-size: 30px; }
+      .summary-track { display: none; }
+      .filters { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 0; overflow-x: auto; padding-bottom: 3px; }
+      .filters h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      .filter-button { flex: none; min-height: 38px; gap: 9px; padding: 0 11px; background: rgba(251, 252, 251, 0.42); border-color: var(--border-subtle); }
+      .host-status { display: none; }
+      .workspace { padding: 30px 20px 52px; }
+      .page-head { align-items: center; }
+      h1 { font-size: 27px; }
+      .page-description { display: none; }
+      .board { margin-top: 26px; }
+      .column-head { display: none; }
+      .service-row { grid-template-columns: 28px 34px minmax(0, 1fr) auto; gap: 10px; min-height: 0; padding: 19px 14px; }
+      .bus-slot { grid-row: 1 / span 4; }
+      .drag-cell { grid-row: 1 / span 4; }
+      .bus-slot::before { top: -19px; }
+      .bus-slot::after { bottom: -19px; }
+      .service-identity { grid-column: 3 / 4; }
+      .route-block { grid-column: 3 / -1; }
+      .command-block { display: block; grid-column: 3 / -1; }
+      .runtime-block { display: none; }
+      .row-actions { grid-column: 3 / -1; justify-content: flex-start; margin-top: 4px; }
+      .more-actions { margin-left: auto; }
+    }
+
+    @media (max-width: 520px) {
+      .sidebar { padding: 17px 16px 14px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .summary-number strong { font-size: 27px; }
+      .workspace { padding: 24px 12px 44px; }
+      .page-head { gap: 14px; padding: 0 4px; }
+      .page-kicker { margin-bottom: 5px; }
+      h1 { font-size: 23px; }
+      .page-head > .button { width: 42px; min-width: 42px; padding: 0; }
+      .page-head > .button > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      .board-toolbar { padding: 0 13px 0 16px; }
+      .last-updated span { display: none; }
+      .service-row { padding: 18px 10px; }
+      .service-name-line { align-items: flex-start; flex-direction: column; gap: 5px; }
+      .service-name { max-width: 100%; white-space: normal; }
+      .service-note { display: -webkit-box; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+      .route-primary, .command-primary { white-space: normal; overflow-wrap: anywhere; }
+      .row-actions { flex-wrap: wrap; }
+      .project-dialog, .log-dialog { width: 100%; max-width: none; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; }
+      .project-form { max-height: calc(100dvh - 66px); padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); }
+      input, textarea { font-size: 16px; }
+      .log-content { max-height: calc(100dvh - 66px); min-height: calc(100dvh - 66px); }
+      #toast { right: 16px; left: 16px; max-width: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到项目列表</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="项目状态与筛选">
+      <a class="brand" href="/" aria-label="本地项目控制台首页">
+        <span class="brand-mark" id="brand-icon"></span>
+        <span class="brand-copy"><strong>本地项目控制台</strong><span>LOCALHOST / 8765</span></span>
+      </a>
+
+      <section class="sidebar-summary" aria-labelledby="summary-heading">
+        <p class="summary-label" id="summary-heading">本地服务运行中</p>
+        <div class="summary-number"><strong id="running-count">0</strong><span>/ <span id="local-count">0</span> 个</span></div>
+        <div class="summary-track" aria-hidden="true"><span id="running-track"></span></div>
+      </section>
+
+      <nav class="filters" aria-label="项目筛选">
+        <h2>查看范围</h2>
+        <button class="filter-button" type="button" data-filter="all" aria-pressed="true"><span>全部项目</span><span data-count="all">0</span></button>
+        <button class="filter-button" type="button" data-filter="running" aria-pressed="false"><span>运行中</span><span data-count="running">0</span></button>
+        <button class="filter-button" type="button" data-filter="stopped" aria-pressed="false"><span>已关闭</span><span data-count="stopped">0</span></button>
+        <button class="filter-button" type="button" data-filter="needs-config" aria-pressed="false"><span>待配置</span><span data-count="needs-config">0</span></button>
+        <button class="filter-button" type="button" data-filter="external" aria-pressed="false"><span>网页入口</span><span data-count="external">0</span></button>
+      </nav>
+
+      <div class="host-status">
+        <div class="host-line"><span class="light" aria-hidden="true"></span><span>控制台在线</span></div>
+        <p class="host-address">127.0.0.1:8765</p>
+        <p class="refresh-state"><span id="refresh-icon"></span><span>每 5 秒同步一次状态</span></p>
+      </div>
+    </aside>
+
+    <main class="workspace" id="main-content">
+      <div class="workspace-inner">
+        <header class="page-head">
+          <div>
+            <p class="page-kicker">项目总览</p>
+            <h1>服务运行台</h1>
+            <p class="page-description">启动本地项目、检查端口，并从同一个位置进入所有工作界面。</p>
+          </div>
+          <button class="button primary" id="add-project" type="button"><span id="add-icon"></span><span>添加项目</span></button>
+        </header>
+
+        <section class="board" aria-labelledby="board-heading">
+          <div class="board-toolbar">
+            <div class="board-title"><h2 id="board-heading">服务节点</h2><span id="visible-count">0 项</span></div>
+            <div class="last-updated"><span id="updated-icon"></span><span id="last-updated">正在读取状态</span></div>
+          </div>
+          <div class="column-head" aria-hidden="true"><span></span><span></span><span>项目</span><span>入口与端口</span><span>启动命令</span><span>状态</span><span>操作</span></div>
+          <ol class="service-list" id="projects" aria-live="polite" aria-busy="true">
+            <li class="skeleton"></li><li class="skeleton"></li><li class="skeleton"></li>
+          </ol>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog class="project-dialog" id="project-dialog" aria-labelledby="form-title">
+    <div class="dialog-head"><h2 id="form-title">添加项目</h2><button class="button icon-only" type="button" data-close="project-dialog" aria-label="关闭项目表单"><span data-icon="x"></span></button></div>
+    <form class="project-form" id="project-form" novalidate>
+      <div class="field-stack">
+        <label class="field"><span>项目名称</span><input required name="name" autocomplete="off" placeholder="例如：公益项目管理系统"></label>
+        <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="field-label">项目类型</legend><div class="segment"><label><input type="radio" name="mode" value="local" checked><span><span data-icon="terminal"></span>本地进程</span></label><label><input type="radio" name="mode" value="external"><span><span data-icon="globe"></span>网页入口</span></label></div></fieldset>
+        <fieldset class="local-fields" id="local-fields">
+          <label class="field port-field"><span>本地端口</span><input name="port" inputmode="numeric" autocomplete="off" placeholder="例如：5173"></label>
+          <label class="field"><span>工作目录</span><input name="path" autocomplete="off" placeholder="D:\path\to\project"><small class="field-hint">启动命令会在这个目录中执行。</small></label>
+          <label class="field"><span>启动命令</span><input name="startCommand" autocomplete="off" placeholder="npm run dev 或 start-server.bat"></label>
+          <label class="field"><span>关闭命令（可选）</span><input name="stopCommand" autocomplete="off" placeholder="docker compose down"><small class="field-hint">留空时，控制台会结束它启动的进程及子进程。</small></label>
+        </fieldset>
+        <label class="field"><span>访问链接</span><input name="url" inputmode="url" autocomplete="url" placeholder="http://127.0.0.1:5173"></label>
+        <label class="field"><span>备注（可选）</span><textarea name="note" placeholder="项目用途或启动前置条件"></textarea></label>
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button class="button primary" type="submit" id="save-project"><span data-icon="check"></span><span>保存项目</span></button><button class="button" type="button" data-close="project-dialog">取消</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="log-dialog" id="log-dialog" aria-labelledby="log-title">
+    <div class="dialog-head"><div><h2 id="log-title">运行日志</h2><span class="log-meta" id="log-project"></span></div><button class="button icon-only" type="button" data-close="log-dialog" aria-label="关闭运行日志"><span data-icon="x"></span></button></div>
+    <pre class="log-content" id="log-content" tabindex="0"></pre>
+  </dialog>
+
+  <dialog class="confirm-dialog" id="delete-dialog" aria-labelledby="delete-title">
+    <div class="confirm-icon" id="delete-icon"></div>
+    <h2 id="delete-title">删除这个项目？</h2>
+    <p>“<strong id="delete-name"></strong>”将从控制台移除，不会删除项目目录或文件。</p>
+    <div class="dialog-actions"><button class="button danger" type="button" id="confirm-delete"><span data-icon="trash"></span><span>删除项目</span></button><button class="button" type="button" data-close="delete-dialog">取消</button></div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"><span id="toast-icon"></span><span id="toast-message"></span></div>
+
+  <script>
+    const iconPaths = {
+      activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+      check: '<path d="m20 6-11 11-5-5"/>',
+      edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+      external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+      file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h6"/>',
+      globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/>',
+      grip: '<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>',
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+      refresh: '<path d="M20 6v6h-6"/><path d="M4 18v-6h6"/><path d="M6.5 9a7 7 0 0 1 11.9-2.6L20 8M4 16l1.6 1.6A7 7 0 0 0 17.5 15"/>',
+      square: '<rect width="14" height="14" x="5" y="5" rx="1"/>',
+      terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+      trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>',
+      x: '<path d="M18 6 6 18M6 6l12 12"/>'
+    };
+    const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name] || ''}</svg>`;
+    const state = { projects: [], editing: null, deleting: null, filter: 'all', formBaseline: '', dragging: false, reordering: false };
+    const dragState = { item: null, pointerId: null, moved: false, originalIds: [] };
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => [...document.querySelectorAll(selector)];
+    const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
+    const safeHref = (value = '') => { try { const parsed = new URL(value); return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : ''; } catch { return ''; } };
+
+    function hydrateIcons() {
+      $('#brand-icon').innerHTML = icon('activity');
+      $('#add-icon').innerHTML = icon('plus');
+      $('#refresh-icon').innerHTML = icon('refresh');
+      $('#updated-icon').innerHTML = icon('refresh');
+      $('#delete-icon').innerHTML = icon('trash');
+      $('#toast-icon').innerHTML = icon('check');
+      $$('[data-icon]').forEach(element => { element.innerHTML = icon(element.dataset.icon); });
+    }
+
+    function toast(message) {
+      $('#toast-message').textContent = message;
+      $('#toast').classList.add('visible');
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 3000);
+    }
+
+    async function api(url, options) {
+      const response = await fetch(url, options);
+      const data = response.status === 204 ? null : await response.json();
+      if (!response.ok) throw new Error(data?.message || '操作失败，请重试。');
+      return data;
+    }
+
+    function currentProjects() {
+      if (state.filter === 'all') return state.projects;
+      if (state.filter === 'external') return state.projects.filter(project => project.mode === 'external');
+      return state.projects.filter(project => project.state === state.filter);
+    }
+
+    function runtimeText(project) {
+      if (project.mode === 'external') {
+        if (project.state === 'needs-config') return ['待配置', '补充网页地址'];
+        return [project.websiteActive ? '网页在线' : '网页离线', project.websiteDetail || (project.websiteActive ? '连接正常' : '连接失败')];
+      }
+      if (project.pidActive) return [`PID ${project.pid}`, project.startedAt || '由控制台启动'];
+      if (project.portActive) return ['端口在线', '检测到独立进程'];
+      if (project.state === 'needs-config') return ['待配置', '补充启动命令'];
+      return ['已关闭', project.startedAt ? `上次 ${project.startedAt}` : '没有活动进程'];
+    }
+
+    function primaryAction(project) {
+      const href = safeHref(project.url);
+      if (project.mode === 'external') {
+        return href ? `<a class="button primary" href="${escapeHtml(href)}" target="_blank" rel="noreferrer"><span>打开</span>${icon('external')}</a>` : `<button class="button" type="button" data-action="edit" data-id="${project.id}">${icon('edit')}<span>完成配置</span></button>`;
+      }
+      if (project.state === 'running') return `<button class="button danger" type="button" data-action="stop" data-id="${project.id}">${icon('square')}<span>关闭</span></button>`;
+      if (project.state === 'needs-config' || !project.pathExists) return `<button class="button" type="button" data-action="edit" data-id="${project.id}">${icon('edit')}<span>完成配置</span></button>`;
+      return `<button class="button primary" type="button" data-action="start" data-id="${project.id}">${icon('play')}<span>启动</span></button>`;
+    }
+
+    function projectRow(project) {
+      const href = safeHref(project.url);
+      const [runtimePrimary, runtimeSecondary] = runtimeText(project);
+      const routePrimary = href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(project.mode === 'external' ? new URL(href).host : project.url)}</a>` : '未设置访问地址';
+      const routeSecondary = project.mode === 'external' ? `${href ? new URL(href).protocol.slice(0, -1).toUpperCase() : 'HTTP'} 远程网页` : project.port ? `localhost:${escapeHtml(project.port)} · ${project.portActive ? '正在监听' : '未监听'}` : '未设置监控端口';
+      const source = project.mode === 'external' ? '远程网页服务' : project.path || '未设置工作目录';
+      const command = project.mode === 'external' ? '不由本机控制' : project.startCommand || '未设置启动命令';
+      const commandSecondary = project.mode === 'external' ? '控制台定时检测可达性' : project.stopCommand ? '已设置独立关闭命令' : '关闭时结束进程树';
+      return `<li class="service-item" data-project-id="${escapeHtml(project.id)}"><article class="service-row" data-state="${project.state}">
+        <div class="bus-slot" aria-hidden="true"><span class="node-light ${project.state}"></span></div>
+        <div class="drag-cell"><button class="drag-handle" type="button" aria-label="调整 ${escapeHtml(project.name)} 的顺序，使用上下方向键移动" aria-keyshortcuts="ArrowUp ArrowDown Home End" title="拖动调整顺序">${icon('grip')}</button></div>
+        <div class="service-identity"><div class="service-name-line"><h3 class="service-name">${escapeHtml(project.name)}</h3><span class="state-text ${project.state}">${escapeHtml(project.stateLabel)}</span></div><p class="service-note">${escapeHtml(project.note || '没有项目备注。')}</p><p class="service-source" title="${escapeHtml(source)}">${escapeHtml(source)}</p></div>
+        <div class="route-block"><div class="route-primary">${routePrimary}</div><div class="route-secondary">${routeSecondary}</div></div>
+        <div class="command-block"><div class="command-primary" title="${escapeHtml(command)}"><code>${escapeHtml(command)}</code></div><div class="command-secondary">${commandSecondary}</div></div>
+        <div class="runtime-block"><div class="runtime-primary">${escapeHtml(runtimePrimary)}</div><div class="runtime-secondary">${escapeHtml(runtimeSecondary)}</div></div>
+        <div class="row-actions">${primaryAction(project)}${project.mode === 'local' ? `<button class="button" type="button" data-action="log" data-id="${project.id}">${icon('file')}<span>日志</span></button>` : ''}<div class="more-actions"><button class="button ghost" type="button" data-action="edit" data-id="${project.id}" aria-label="编辑 ${escapeHtml(project.name)}" title="编辑项目">${icon('edit')}</button><button class="button ghost" type="button" data-action="delete" data-id="${project.id}" aria-label="删除 ${escapeHtml(project.name)}" title="删除项目">${icon('trash')}</button></div></div>
+      </article></li>`;
+    }
+
+    function render() {
+      const projects = currentProjects();
+      const local = state.projects.filter(project => project.mode !== 'external');
+      const running = local.filter(project => project.state === 'running').length;
+      const counts = { all: state.projects.length, running: 0, stopped: 0, 'needs-config': 0, external: 0 };
+      state.projects.forEach(project => {
+        if (project.mode === 'external') counts.external += 1;
+        if (project.state in counts && project.state !== 'external') counts[project.state] += 1;
+      });
+      $('#running-count').textContent = running;
+      $('#local-count').textContent = local.length;
+      $('#running-track').style.width = `${local.length ? Math.round(running / local.length * 100) : 0}%`;
+      Object.entries(counts).forEach(([key, value]) => { const element = document.querySelector(`[data-count="${key}"]`); if (element) element.textContent = value; });
+      $('#visible-count').textContent = `${projects.length} 项`;
+      $('#projects').innerHTML = projects.length ? projects.map(projectRow).join('') : `<li class="empty-state">${icon('terminal')}<h3>这个筛选下没有项目</h3><p>切换查看范围，或添加一个新的项目。</p></li>`;
+      $('#projects').setAttribute('aria-busy', 'false');
+      $('#last-updated').textContent = `刚刚同步 · ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
+    }
+
+    async function refresh({ quiet = true } = {}) {
+      if (state.dragging || state.reordering) return;
+      try {
+        state.projects = await api('/api/projects');
+        render();
+      } catch (error) {
+        $('#projects').setAttribute('aria-busy', 'false');
+        if (!quiet) toast(error.message);
+        $('#last-updated').textContent = '状态同步失败';
+      }
+    }
+
+    function applyVisibleOrder(visibleIds) {
+      const visibleSet = new Set(currentProjects().map(project => project.id));
+      const projectsById = new Map(state.projects.map(project => [project.id, project]));
+      let index = 0;
+      state.projects = state.projects.map(project => visibleSet.has(project.id) ? projectsById.get(visibleIds[index++]) : project);
+    }
+
+    async function persistProjectOrder(message) {
+      if (state.reordering) return;
+      state.reordering = true;
+      try {
+        await api('/api/projects/reorder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: state.projects.map(project => project.id) })
+        });
+        toast(message);
+      } catch (error) {
+        state.reordering = false;
+        await refresh();
+        toast(error.message);
+      } finally {
+        state.reordering = false;
+      }
+    }
+
+    function finishPointerSort(event, cancelled = false) {
+      if (!dragState.item || event.pointerId !== dragState.pointerId) return;
+      const item = dragState.item;
+      const handle = item.querySelector('.drag-handle');
+      if (handle?.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+      item.classList.remove('is-dragging');
+      document.body.classList.remove('is-sorting');
+      state.dragging = false;
+      const visibleIds = $$('.service-item').map(row => row.dataset.projectId);
+      const changed = dragState.moved && visibleIds.join('|') !== dragState.originalIds.join('|');
+      Object.assign(dragState, { item: null, pointerId: null, moved: false, originalIds: [] });
+      if (cancelled) {
+        render();
+        return;
+      }
+      if (!changed) return;
+      applyVisibleOrder(visibleIds);
+      render();
+      void persistProjectOrder('项目顺序已保存。');
+    }
+
+    function formValues() {
+      return JSON.stringify(Object.fromEntries(new FormData($('#project-form')).entries()));
+    }
+
+    function syncProjectMode() {
+      const form = $('#project-form');
+      const external = form.elements.mode.value === 'external';
+      $('#local-fields').hidden = external;
+      $('#local-fields').disabled = external;
+      form.elements.path.required = !external;
+      form.elements.startCommand.required = !external;
+      form.elements.url.placeholder = external ? 'https://example.com 或 http://192.0.2.1:8080' : 'http://127.0.0.1:5173';
+    }
+
+    function openForm(project = null) {
+      state.editing = project;
+      const form = $('#project-form');
+      form.reset();
+      $('#form-title').textContent = project ? '编辑项目' : '添加项目';
+      $('#form-error').hidden = true;
+      if (project) Object.entries(project).forEach(([key, value]) => { if (form.elements[key] && key !== 'mode') form.elements[key].value = value || ''; });
+      const modeRadio = form.querySelector(`input[name="mode"][value="${project?.mode || 'local'}"]`);
+      if (modeRadio) modeRadio.checked = true;
+      syncProjectMode();
+      state.formBaseline = formValues();
+      $('#project-dialog').showModal();
+      window.setTimeout(() => form.elements.name.focus(), 0);
+    }
+
+    function closeProjectDialog() {
+      if (formValues() !== state.formBaseline && !window.confirm('放弃尚未保存的修改吗？')) return;
+      $('#project-dialog').close();
+    }
+
+    function openDelete(project) {
+      state.deleting = project;
+      $('#delete-name').textContent = project.name;
+      $('#delete-dialog').showModal();
+      $('#confirm-delete').focus();
+    }
+
+    async function handleProjectAction(action, project) {
+      if (action === 'edit') return openForm(project);
+      if (action === 'delete') return openDelete(project);
+      if (action === 'log') {
+        const result = await api(`/api/projects/${project.id}/log`);
+        $('#log-title').textContent = `${project.name} · 运行日志`;
+        $('#log-project').textContent = project.path || project.url;
+        $('#log-content').textContent = result.content;
+        $('#log-dialog').showModal();
+        return;
+      }
+      if (action === 'start' || action === 'stop') {
+        const result = await api(`/api/projects/${project.id}/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        toast(result.message);
+        await refresh();
+      }
+    }
+
+    hydrateIcons();
+    $('#add-project').addEventListener('click', () => openForm());
+    $$('.filter-button').forEach(button => button.addEventListener('click', () => {
+      state.filter = button.dataset.filter;
+      $$('.filter-button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      render();
+    }));
+    $('#projects').addEventListener('pointerdown', event => {
+      const handle = event.target.closest('.drag-handle');
+      if (!handle || event.button !== 0 || state.reordering) return;
+      const item = handle.closest('.service-item');
+      if (!item) return;
+      event.preventDefault();
+      dragState.item = item;
+      dragState.pointerId = event.pointerId;
+      dragState.moved = false;
+      dragState.originalIds = $$('.service-item').map(row => row.dataset.projectId);
+      state.dragging = true;
+      item.classList.add('is-dragging');
+      document.body.classList.add('is-sorting');
+      handle.setPointerCapture?.(event.pointerId);
+    });
+    document.addEventListener('pointermove', event => {
+      if (!dragState.item || event.pointerId !== dragState.pointerId) return;
+      event.preventDefault();
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.service-item');
+      if (!target || target === dragState.item || target.parentElement !== dragState.item.parentElement) return;
+      const beforeTarget = event.clientY < target.getBoundingClientRect().top + target.offsetHeight / 2;
+      target.parentElement.insertBefore(dragState.item, beforeTarget ? target : target.nextElementSibling);
+      dragState.moved = true;
+    });
+    document.addEventListener('pointerup', event => finishPointerSort(event));
+    document.addEventListener('pointercancel', event => finishPointerSort(event, true));
+    $('#projects').addEventListener('keydown', event => {
+      const handle = event.target.closest('.drag-handle');
+      if (!handle || state.reordering || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      const item = handle.closest('.service-item');
+      const visibleIds = $$('.service-item').map(row => row.dataset.projectId);
+      const currentIndex = visibleIds.indexOf(item?.dataset.projectId);
+      if (currentIndex < 0) return;
+      const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? visibleIds.length - 1 : currentIndex + (event.key === 'ArrowUp' ? -1 : 1);
+      const boundedIndex = Math.max(0, Math.min(visibleIds.length - 1, targetIndex));
+      if (boundedIndex === currentIndex) return;
+      event.preventDefault();
+      const [projectId] = visibleIds.splice(currentIndex, 1);
+      visibleIds.splice(boundedIndex, 0, projectId);
+      applyVisibleOrder(visibleIds);
+      render();
+      $$('.service-item').find(row => row.dataset.projectId === projectId)?.querySelector('.drag-handle')?.focus();
+      void persistProjectOrder(`项目已移至第 ${boundedIndex + 1} 位。`);
+    });
+    document.addEventListener('click', async event => {
+      const close = event.target.closest('[data-close]');
+      if (close) {
+        if (close.dataset.close === 'project-dialog') closeProjectDialog(); else $(`#${close.dataset.close}`).close();
+        return;
+      }
+      const button = event.target.closest('[data-action]');
+      if (!button) return;
+      const project = state.projects.find(item => item.id === button.dataset.id);
+      if (!project) return;
+      try { await handleProjectAction(button.dataset.action, project); } catch (error) { toast(error.message); }
+    });
+    $('#project-form').addEventListener('change', event => { if (event.target.name === 'mode') syncProjectMode(); });
+    $('#project-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      $('#form-error').hidden = true;
+      if (!form.reportValidity()) return;
+      const values = Object.fromEntries(new FormData(form).entries());
+      if (values.mode === 'external') Object.assign(values, { path: '', startCommand: '', stopCommand: '', port: '' });
+      const submit = $('#save-project');
+      submit.disabled = true;
+      submit.querySelector('span:last-child').textContent = '正在保存';
+      try {
+        if (state.editing) await api(`/api/projects/${state.editing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+        else await api('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+        state.formBaseline = formValues();
+        $('#project-dialog').close();
+        toast(state.editing ? '项目修改已保存。' : '项目已添加。');
+        await refresh();
+      } catch (error) {
+        $('#form-error').textContent = error.message;
+        $('#form-error').hidden = false;
+        $('#form-error').focus?.();
+      } finally {
+        submit.disabled = false;
+        submit.querySelector('span:last-child').textContent = '保存项目';
+      }
+    });
+    $('#confirm-delete').addEventListener('click', async () => {
+      if (!state.deleting) return;
+      try {
+        await api(`/api/projects/${state.deleting.id}`, { method: 'DELETE' });
+        $('#delete-dialog').close();
+        toast('项目已从控制台移除。');
+        state.deleting = null;
+        await refresh();
+      } catch (error) { toast(error.message); }
+    });
+    [$('#project-dialog'), $('#log-dialog'), $('#delete-dialog')].forEach(dialog => {
+      dialog.addEventListener('click', event => { if (event.target === dialog) dialog === $('#project-dialog') ? closeProjectDialog() : dialog.close(); });
+      dialog.addEventListener('cancel', event => { if (dialog === $('#project-dialog')) { event.preventDefault(); closeProjectDialog(); } });
+    });
+
+    refresh({ quiet: false });
+    window.setInterval(() => refresh(), 5000);
+  </script>
+</body>
+</html>

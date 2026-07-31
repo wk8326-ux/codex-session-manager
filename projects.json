@@ -1,0 +1,67 @@
+[
+  {
+    "id": "invoice-tool",
+    "mode": "local",
+    "name": "发票识别工具",
+    "path": "D:\\WK_workfiles\\bot_workspace\\projects\\invoice-registration-assistant",
+    "startCommand": "start-invoice-tool.bat",
+    "stopCommand": "",
+    "port": "5173",
+    "url": "http://127.0.0.1:5173/",
+    "note": "常见发票识别及固定票月度核验，适用于PDF\\OFD\\JPG等各类格式发票的多层fallback识别的工具（文字识别、OCR识别、LLM介入）",
+    "pid": 5036,
+    "startedAt": "2026-07-30 15:34:29"
+  },
+  {
+    "id": "public-welfare",
+    "mode": "local",
+    "name": "公益项目管理系统",
+    "path": "D:\\WK_workfiles\\bot_workspace\\projects\\public-welfare-lifecycle-system",
+    "startCommand": "python -m uvicorn app.main:app --host 127.0.0.1 --port 8811",
+    "stopCommand": "",
+    "port": "8811",
+    "url": "http://127.0.0.1:8811/",
+    "note": "FastAPI + SQLite；数据保存在 data/mvp.db；主视图、住宿排房、行程调度。",
+    "pid": null,
+    "startedAt": ""
+  },
+  {
+    "id": "2addeb65745146e3b8338304bad6db00",
+    "mode": "local",
+    "name": "woxsheet",
+    "path": "D:\\WK_workfiles\\bot_workspace\\projects\\github\\woxsheet",
+    "startCommand": "npm run dev -- --host 127.0.0.1 --port 4173 --strictPort",
+    "stopCommand": "",
+    "port": "4173",
+    "url": "http://127.0.0.1:4173",
+    "note": "Woxsheet 基于 Tauri 2 + Rust + React/TypeScript 构建，使用 DuckDB 存储和查询大表数据，以 Glide Data Grid 提供高性能网格、Univer 处理公式，并通过 Calamine/OpenXML 与 SheetJS 完成 Excel 文件解析和导入。",
+    "pid": null,
+    "startedAt": ""
+  },
+  {
+    "id": "emby-workbench",
+    "mode": "external",
+    "name": "Emby 刮削工作台",
+    "path": "",
+    "startCommand": "",
+    "stopCommand": "",
+    "port": "",
+    "url": "http://172.245.223.134:59826/",
+    "note": "远程媒体工作台；控制台检测网页可达性并提供打开入口。",
+    "pid": null,
+    "startedAt": ""
+  },
+  {
+    "id": "pt-automation",
+    "mode": "external",
+    "name": "PT Manager",
+    "path": "",
+    "startCommand": "",
+    "stopCommand": "",
+    "port": "",
+    "url": "https://ptm.holdzywoo.top/dashboard#overview",
+    "note": "服务器常驻服务；通过 Cloudflare Access 验证后打开。",
+    "pid": null,
+    "startedAt": ""
+  }
+]

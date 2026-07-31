@@ -1,0 +1,4 @@
+.superpowers/
+watchdog.db
+watchdog.db-shm
+watchdog.db-wal
