@@ -108,6 +108,90 @@ class WatchdogApplicationApiTests(unittest.TestCase):
             self.assertTrue(status.body["schedulerRunning"])
             self.assertEqual(status.body["nextCheckAt"], now)
 
+    def test_dashboard_resources_have_stable_ui_response_shapes(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = WatchdogStore(Path(directory) / "watchdog.db")
+            store.initialize()
+            secrets = FakeSecretStore()
+            now = "2026-07-31T14:00:00Z"
+            application = WatchdogApplication(
+                store,
+                secrets,
+                lambda _config: ProbeResult("healthy", 200, "ok", 12, now),
+                FakeAdapter(),
+                FakeMonitorService(),
+                FakeScheduler(),
+                now_provider=lambda: now,
+            )
+            api = WatchdogHttpApi(application)
+            channel = api.dispatch(
+                "POST",
+                "/api/watchdog/channels",
+                {},
+                {
+                    "name": "primary",
+                    "baseUrl": "https://api.example/v1",
+                    "model": "model-a",
+                    "apiKey": "sk-secret",
+                },
+            ).body
+            api.dispatch(
+                "POST",
+                f"/api/watchdog/channels/{channel['id']}/probe",
+                {},
+                {},
+            )
+            session = api.dispatch(
+                "POST",
+                "/api/watchdog/sessions",
+                {},
+                {
+                    "name": "woxsheet",
+                    "threadId": "11111111-1111-1111-1111-111111111111",
+                    "channelId": channel["id"],
+                    "intervalMinutes": 10,
+                },
+            ).body
+            store.set_next_check(
+                session["id"],
+                now,
+                "2026-07-31T14:10:00Z",
+                "inProgress",
+                "silent_session_running",
+                "turn-1",
+            )
+            store.create_monitor_run(
+                {
+                    "sessionId": session["id"],
+                    "channelId": channel["id"],
+                    "startedAt": now,
+                    "finishedAt": now,
+                    "decision": "silent_session_running",
+                    "detailSanitized": "session is running",
+                }
+            )
+
+            status = api.dispatch("GET", "/api/watchdog/status", {}, None).body
+            sessions = api.dispatch("GET", "/api/watchdog/sessions", {}, None).body
+            channels = api.dispatch("GET", "/api/watchdog/channels", {}, None).body
+            runs = api.dispatch("GET", "/api/watchdog/runs", {}, None).body
+
+            self.assertEqual(
+                set(status),
+                {
+                    "schedulerRunning",
+                    "schedulerEnabled",
+                    "codexConnected",
+                    "resumeActionsEnabled",
+                    "nextCheckAt",
+                },
+            )
+            self.assertEqual(sessions[0]["state"], "running")
+            self.assertEqual(sessions[0]["effectiveIntervalMinutes"], 10)
+            self.assertEqual(channels[0]["apiKeyMasked"], "已保存")
+            self.assertEqual(channels[0]["lastProbeCategory"], "healthy")
+            self.assertEqual(runs[0]["detail"], "session is running")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e9eeeb">
+  <title>会话监控 · 本地项目控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --n-0: #fbfcfb;
+      --n-25: #f7f9f8;
+      --n-50: #eef1ef;
+      --n-100: #e2e7e4;
+      --n-200: #cbd3cf;
+      --n-300: #abb6b1;
+      --n-500: #68736f;
+      --n-600: #505b57;
+      --n-700: #3c4743;
+      --n-900: #18221f;
+      --accent-50: #edf6f2;
+      --accent-100: #dcece5;
+      --accent-500: #3a8069;
+      --accent-600: #2d715b;
+      --accent-700: #245e4c;
+      --running: #27845a;
+      --warning: #ad6b1d;
+      --danger: #b44538;
+      --info: #486c7d;
+      --surface-canvas: var(--n-50);
+      --surface-raised: var(--n-0);
+      --surface-sidebar: #e9eeeb;
+      --text-primary: var(--n-900);
+      --text-secondary: var(--n-500);
+      --text-tertiary: #7e8985;
+      --border-subtle: rgba(24, 34, 31, 0.08);
+      --border-default: rgba(24, 34, 31, 0.15);
+      --shadow-raised: 0 10px 28px rgba(48, 64, 57, 0.07), 0 1px 3px rgba(48, 64, 57, 0.08);
+      --radius-input: 6px;
+      --radius-button: 6px;
+      --radius-surface: 8px;
+      --font-body: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-display: Bahnschrift, "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-mono: "Cascadia Mono", Consolas, monospace;
+      --sidebar-width: 264px;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--surface-canvas); -webkit-font-smoothing: antialiased; }
+    body { margin: 0; min-width: 280px; min-height: 100dvh; color: var(--text-primary); background: var(--surface-canvas); font-family: var(--font-body); letter-spacing: 0; }
+    button, a { touch-action: manipulation; }
+    button { font: inherit; letter-spacing: 0; cursor: pointer; }
+    [hidden] { display: none !important; }
+    svg { width: 18px; height: 18px; flex: none; stroke-width: 1.8; }
+
+    .skip-link { position: fixed; z-index: 60; left: 16px; top: 10px; transform: translateY(-160%); padding: 9px 14px; color: var(--n-0); background: var(--n-900); border-radius: var(--radius-button); }
+    .skip-link:focus { transform: translateY(0); }
+
+    .app-shell { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 100dvh; }
+    .sidebar { position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column; padding: 28px 22px 22px; overflow-y: auto; overscroll-behavior: contain; background: var(--surface-sidebar); border-right: 1px solid var(--border-subtle); }
+    .brand { display: flex; align-items: center; gap: 12px; color: var(--text-primary); text-decoration: none; }
+    .brand-mark { position: relative; display: grid; place-items: center; width: 36px; height: 36px; color: var(--n-0); background: var(--n-900); border-radius: 5px; box-shadow: 0 6px 14px rgba(24, 34, 31, 0.13), 0 1px 2px rgba(24, 34, 31, 0.12); }
+    .brand-mark::after { content: ""; position: absolute; right: 5px; bottom: 5px; width: 5px; height: 5px; background: #62c792; border: 2px solid var(--n-900); border-radius: 50%; }
+    .brand-copy { min-width: 0; }
+    .brand-copy strong { display: block; font: 600 15px/1.25 var(--font-display); }
+    .brand-copy span { display: block; margin-top: 3px; color: var(--text-secondary); font: 11px/1.25 var(--font-mono); }
+
+    .workspace-nav { display: grid; gap: 4px; margin-top: 54px; }
+    .workspace-nav h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .nav-link { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
+    .nav-link svg { width: 16px; height: 16px; }
+    .nav-link[aria-current="page"] { color: var(--accent-700); background: var(--accent-50); border-color: rgba(45, 113, 91, 0.11); }
+
+    .sidebar-note { margin-top: 30px; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
+    .sidebar-note-label { margin: 0; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .sidebar-note-value { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; font-size: 13px; font-weight: 700; }
+    .status-dot { width: 7px; height: 7px; flex: none; background: var(--n-300); border: 2px solid transparent; border-radius: 50%; }
+    .status-dot.running { background: var(--running); }
+    .status-dot.warning { background: var(--warning); }
+    .sidebar-note-copy { margin: 8px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.55; }
+
+    .host-status { margin-top: auto; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
+    .host-line { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+    .host-address { margin: 9px 0 0; color: var(--text-secondary); font: 11px/1.5 var(--font-mono); }
+
+    .workspace { min-width: 0; padding: 42px clamp(24px, 4vw, 64px) 64px; }
+    .workspace-inner { width: min(1280px, 100%); margin: 0 auto; }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
+    .page-kicker { margin: 0 0 8px; color: var(--accent-700); font-size: 12px; font-weight: 700; }
+    h1 { margin: 0; font: 600 32px/1.16 var(--font-display); letter-spacing: 0; text-wrap: balance; }
+    .page-description { max-width: 690px; margin: 12px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.65; }
+    .head-state { flex: none; display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 0 12px; color: var(--text-secondary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-button); font-size: 12px; }
+    .head-state strong { color: var(--text-primary); font-weight: 700; }
+
+    .watchdog-tabs { display: flex; gap: 28px; margin-top: 34px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--border-default); scrollbar-width: thin; }
+    .watchdog-tab { position: relative; min-height: 46px; flex: none; padding: 0 2px; color: var(--text-secondary); background: transparent; border: 0; font-size: 13px; font-weight: 600; white-space: nowrap; }
+    .watchdog-tab::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; }
+    .watchdog-tab[aria-selected="true"] { color: var(--accent-700); }
+    .watchdog-tab[aria-selected="true"]::after { background: var(--accent-600); }
+
+    .tab-panel { padding-top: 26px; }
+    .recovery-rail { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 24px; }
+    .rail-step { position: relative; min-width: 0; display: flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; }
+    .rail-step:not(:last-child)::after { content: ""; position: absolute; top: 50%; right: 16px; left: 30px; z-index: -1; height: 1px; background: var(--n-200); }
+    .rail-node { z-index: 1; width: 14px; height: 14px; flex: none; background: var(--surface-canvas); border: 2px solid var(--n-300); border-radius: 50%; }
+    .rail-step:first-child .rail-node { border-color: var(--accent-600); }
+
+    .status-strip { display: grid; grid-template-columns: 1.15fr repeat(3, 1fr); margin: 0 0 24px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+    .status-item { min-width: 0; padding: 17px 18px; }
+    .status-item + .status-item { border-left: 1px solid var(--border-subtle); }
+    .status-item dt { color: var(--text-secondary); font-size: 11px; }
+    .status-item dd { margin: 7px 0 0; overflow: hidden; font: 600 18px/1.2 var(--font-display); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+    .status-item:first-child dd { color: var(--accent-700); }
+    .status-item dd small { color: var(--text-tertiary); font: 11px var(--font-body); }
+
+    .view-notice { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 16px; padding: 13px 15px; border: 1px solid var(--border-subtle); border-radius: var(--radius-input); font-size: 12px; line-height: 1.55; }
+    .view-notice svg { margin-top: 1px; }
+    .view-notice strong { display: block; margin-bottom: 2px; }
+    .view-notice p { margin: 0; color: var(--text-secondary); }
+    .view-notice.disabled { color: #7e4a0e; background: #fffaf2; border-color: rgba(173, 107, 29, 0.2); }
+    .view-notice.unavailable { color: #7f3027; background: #fff7f5; border-color: rgba(180, 69, 56, 0.2); }
+
+    .board { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
+    .board-toolbar { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-subtle); }
+    .board-title { display: flex; align-items: baseline; gap: 10px; }
+    .board-title h2 { margin: 0; font-size: 14px; }
+    .board-title span { color: var(--text-tertiary); font: 11px var(--font-mono); }
+    .board-meta { color: var(--text-tertiary); font-size: 11px; }
+    .column-head { min-height: 40px; display: grid; grid-template-columns: 72px minmax(190px, 1.2fr) minmax(170px, 1fr) 120px minmax(180px, 1fr) 120px; gap: 18px; align-items: center; padding: 0 20px; color: var(--text-tertiary); background: var(--n-25); border-bottom: 1px solid var(--border-subtle); font-size: 11px; }
+
+    .empty-state { min-height: 280px; display: grid; place-items: center; padding: 48px 24px; text-align: center; }
+    .empty-state-inner { max-width: 420px; }
+    .empty-icon { display: grid; place-items: center; width: 42px; height: 42px; margin: 0 auto; color: var(--accent-700); background: var(--accent-50); border-radius: var(--radius-surface); }
+    .empty-state h3 { margin: 16px 0 0; font-size: 15px; }
+    .empty-state p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+    .text-action { min-height: 44px; margin-top: 14px; padding: 0 4px; color: var(--accent-700); background: transparent; border: 0; font-size: 13px; font-weight: 700; text-decoration: underline; text-decoration-color: rgba(36, 94, 76, 0.3); text-underline-offset: 4px; }
+
+    .skeleton-list { padding: 8px 20px; }
+    .skeleton-row { height: 68px; display: grid; grid-template-columns: 42px minmax(140px, 1.2fr) minmax(120px, 1fr) 96px minmax(150px, 1fr); gap: 22px; align-items: center; border-bottom: 1px solid var(--border-subtle); }
+    .skeleton-row:last-child { border-bottom: 0; }
+    .skeleton-row span { height: 10px; background: var(--n-100); border-radius: 3px; animation: skeleton-pulse 1200ms ease-in-out infinite alternate; }
+    .skeleton-row span:first-child { width: 14px; height: 14px; border-radius: 50%; }
+
+    .record-columns { grid-template-columns: 150px minmax(170px, 1fr) 130px 90px 120px minmax(170px, 1.2fr); }
+    .channel-columns { grid-template-columns: minmax(180px, 1.2fr) minmax(210px, 1.4fr) 130px 110px minmax(160px, 1fr) 120px; }
+
+    .button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; box-shadow: 0 1px 1px rgba(24, 34, 31, 0.03); transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, transform 100ms ease-out, box-shadow 140ms ease-out; }
+    .button.primary { color: var(--n-0); background: var(--accent-700); border-color: var(--accent-700); box-shadow: 0 5px 12px rgba(36, 94, 76, 0.14), 0 1px 2px rgba(36, 94, 76, 0.18); }
+    .button:active { transform: scale(0.98); }
+    .nav-link:focus-visible, .watchdog-tab:focus-visible, .button:focus-visible, .text-action:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+
+    @keyframes skeleton-pulse { from { opacity: 0.48; } to { opacity: 0.92; } }
+
+    @media (hover: hover) and (pointer: fine) {
+      .nav-link:hover { color: var(--text-primary); background: rgba(251, 252, 251, 0.52); }
+      .watchdog-tab:hover { color: var(--text-primary); }
+      .button:hover { border-color: var(--n-300); box-shadow: 0 4px 10px rgba(48, 64, 57, 0.08), 0 1px 2px rgba(48, 64, 57, 0.07); }
+      .button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
+      .text-action:hover { color: var(--accent-600); }
+    }
+
+    @media (max-width: 820px) {
+      .app-shell { display: block; }
+      .sidebar { position: static; width: 100%; height: auto; display: grid; grid-template-columns: 1fr auto; gap: 20px; padding: 20px; border-right: 0; border-bottom: 1px solid var(--border-subtle); overflow: visible; }
+      .workspace-nav { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 0; overflow-x: auto; }
+      .workspace-nav h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      .nav-link { min-height: 44px; flex: none; background: rgba(251, 252, 251, 0.42); border-color: var(--border-subtle); }
+      .sidebar-note { margin: 0; padding: 0; border: 0; text-align: right; }
+      .sidebar-note-value { justify-content: flex-end; }
+      .sidebar-note-copy, .host-status { display: none; }
+      .workspace { padding: 30px 20px 52px; }
+      .page-head { align-items: center; }
+      h1 { font-size: 27px; }
+      .page-description { display: none; }
+      .watchdog-tabs { margin-top: 28px; gap: 22px; }
+      .status-strip { grid-template-columns: 1fr 1fr; }
+      .status-item:nth-child(3) { border-left: 0; border-top: 1px solid var(--border-subtle); }
+      .status-item:nth-child(4) { border-top: 1px solid var(--border-subtle); }
+      .column-head { display: none; }
+      .empty-state { min-height: 260px; }
+      .recovery-rail { margin-right: 8px; margin-left: 8px; }
+    }
+
+    @media (max-width: 520px) {
+      .sidebar { grid-template-columns: 1fr; padding: 17px 16px 14px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .sidebar-note { display: none; }
+      .workspace-nav { padding-top: 2px; }
+      .workspace { padding: 24px 12px 44px; }
+      .page-head { gap: 14px; padding: 0 4px; }
+      h1 { font-size: 23px; }
+      .head-state { min-height: 44px; max-width: 150px; padding: 0 10px; }
+      .head-state span:not(.status-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .watchdog-tabs { margin-top: 22px; padding: 0 4px; gap: 18px; }
+      .watchdog-tab { min-height: 48px; }
+      .tab-panel { padding-top: 20px; }
+      .recovery-rail { grid-template-columns: 1fr; gap: 10px; margin: 0 8px 20px; }
+      .rail-step:not(:last-child)::after { top: 14px; right: auto; bottom: -12px; left: 7px; width: 1px; height: auto; }
+      .status-item { padding: 15px 13px; }
+      .status-item dd { font-size: 16px; }
+      .board-toolbar { padding: 0 13px 0 16px; }
+      .board-meta { display: none; }
+      .empty-state { min-height: 250px; padding: 38px 18px; }
+      .button, .text-action { min-height: 44px; }
+      .skeleton-list { padding: 8px 14px; }
+      .skeleton-row { grid-template-columns: 18px minmax(120px, 1fr) 76px; gap: 14px; }
+      .skeleton-row span:nth-child(3), .skeleton-row span:nth-child(5) { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#watchdog-main">跳到会话监控内容</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="控制台工作区">
+      <a class="brand" href="/" aria-label="本地项目控制台首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </span>
+        <span class="brand-copy"><strong>本地项目控制台</strong><span>LOCALHOST / 8765</span></span>
+      </a>
+
+      <nav class="workspace-nav" aria-label="工作区导航">
+        <h2>工作区</h2>
+        <a class="nav-link" href="/">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/></svg>
+          <span>项目控制台</span>
+        </a>
+        <a class="nav-link" href="/watchdog" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span>会话监控</span>
+        </a>
+      </nav>
+
+      <section class="sidebar-note" aria-labelledby="resume-state-label">
+        <p class="sidebar-note-label" id="resume-state-label">自动续跑</p>
+        <p class="sidebar-note-value"><span class="status-dot warning" aria-hidden="true"></span><span>安全关闭</span></p>
+        <p class="sidebar-note-copy">只读监控保持可用，续跑动作等待专用测试会话验证。</p>
+      </section>
+
+      <div class="host-status">
+        <div class="host-line"><span class="status-dot running" aria-hidden="true"></span><span>控制台在线</span></div>
+        <p class="host-address">127.0.0.1:8765</p>
+      </div>
+    </aside>
+
+    <main class="workspace" id="watchdog-main">
+      <div class="workspace-inner">
+        <header class="page-head">
+          <div>
+            <p class="page-kicker">自动化工具</p>
+            <h1>会话监控</h1>
+            <p class="page-description">集中查看指定本地 Codex 会话的渠道健康、运行状态和安全续跑记录。</p>
+          </div>
+          <div class="head-state" aria-label="当前主机"><span class="status-dot running" aria-hidden="true"></span><span><strong>本机</strong> · 已连接</span></div>
+        </header>
+
+        <div class="watchdog-tabs" role="tablist" aria-label="会话监控视图">
+          <button class="watchdog-tab" id="tab-sessions" type="button" role="tab" aria-selected="true" aria-controls="panel-sessions" tabindex="0">监控会话</button>
+          <button class="watchdog-tab" id="tab-runs" type="button" role="tab" aria-selected="false" aria-controls="panel-runs" tabindex="-1">执行记录</button>
+          <button class="watchdog-tab" id="tab-channels" type="button" role="tab" aria-selected="false" aria-controls="panel-channels" tabindex="-1">添加监控渠道</button>
+        </div>
+
+        <section class="tab-panel" id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions" tabindex="0">
+          <div class="recovery-rail" aria-label="安全恢复链路">
+            <div class="rail-step"><span class="rail-node" aria-hidden="true"></span><span>渠道健康</span></div>
+            <div class="rail-step"><span class="rail-node" aria-hidden="true"></span><span>会话状态</span></div>
+            <div class="rail-step"><span class="rail-node" aria-hidden="true"></span><span>处理决策</span></div>
+          </div>
+
+          <dl class="status-strip" aria-label="监控概览">
+            <div class="status-item"><dt>已启用会话</dt><dd>0 <small>个</small></dd></div>
+            <div class="status-item"><dt>正在运行</dt><dd>0 <small>个</small></dd></div>
+            <div class="status-item"><dt>需要关注</dt><dd>0 <small>个</small></dd></div>
+            <div class="status-item"><dt>下次检查</dt><dd>--:--</dd></div>
+          </dl>
+
+          <div class="view-notice disabled" data-view-state="disabled">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M9 12l2 2 4-4"/></svg>
+            <div><strong>自动续跑已关闭</strong><p>当前只执行渠道和会话检查，不会发送续跑提示词。</p></div>
+          </div>
+
+          <div class="view-notice unavailable" data-view-state="unavailable" role="status" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+            <div><strong>Codex 连接不可用</strong><p>保留现有配置和记录；恢复连接前不会读取或续跑会话。</p></div>
+          </div>
+
+          <section class="board" aria-labelledby="sessions-heading">
+            <div class="board-toolbar">
+              <div class="board-title"><h2 id="sessions-heading">监控目录</h2><span>0 个会话</span></div>
+              <span class="board-meta">按检查时间排序</span>
+            </div>
+            <div class="column-head" aria-hidden="true"><span>链路</span><span>会话</span><span>监控渠道</span><span>检查周期</span><span>最后结果</span><span>操作</span></div>
+
+            <div class="skeleton-list" data-view-state="loading" aria-label="正在读取监控会话" aria-busy="true" hidden>
+              <div class="skeleton-row"><span></span><span></span><span></span><span></span><span></span></div>
+              <div class="skeleton-row"><span></span><span></span><span></span><span></span><span></span></div>
+              <div class="skeleton-row"><span></span><span></span><span></span><span></span><span></span></div>
+            </div>
+
+            <div class="empty-state" data-view-state="empty">
+              <div class="empty-state-inner">
+                <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+                <h3>还没有监控会话</h3>
+                <p>先添加一个监控渠道，再把需要持续观察的本地 Codex 会话加入目录。</p>
+                <button class="text-action" type="button" data-open-tab="tab-channels">前往添加监控渠道</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-runs" role="tabpanel" aria-labelledby="tab-runs" tabindex="0" hidden>
+          <section class="board" aria-labelledby="runs-heading">
+            <div class="board-toolbar">
+              <div class="board-title"><h2 id="runs-heading">任务执行记录</h2><span>最近 100 条</span></div>
+              <span class="board-meta">时间倒序</span>
+            </div>
+            <div class="column-head record-columns" aria-hidden="true"><span>时间</span><span>会话</span><span>渠道状态</span><span>HTTP</span><span>处理结果</span><span>原因</span></div>
+            <div class="empty-state" data-view-state="empty">
+              <div class="empty-state-inner">
+                <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg></span>
+                <h3>还没有执行记录</h3>
+                <p>会话完成首次检查后，静默、续跑和需要关注的原因会显示在这里。</p>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel" id="panel-channels" role="tabpanel" aria-labelledby="tab-channels" tabindex="0" hidden>
+          <section class="board" aria-labelledby="channels-heading">
+            <div class="board-toolbar">
+              <div class="board-title"><h2 id="channels-heading">监控渠道</h2><span>0 个渠道</span></div>
+              <span class="board-meta">密钥仅保存在本机</span>
+            </div>
+            <div class="column-head channel-columns" aria-hidden="true"><span>渠道</span><span>Base URL</span><span>模型</span><span>状态</span><span>最后测试</span><span>操作</span></div>
+            <div class="empty-state" data-view-state="empty">
+              <div class="empty-state-inner">
+                <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1v.1h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4h-.1v-4H3A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1v-.1h4V3a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.3.72.6 1 .3.25.65.38 1 .4h.1v4H21a1.7 1.7 0 0 0-1.6.6Z"/></svg></span>
+                <h3>还没有监控渠道</h3>
+                <p>渠道用于确认兼容 API 是否可用；保存后才能为会话选择对应的健康检查入口。</p>
+              </div>
+            </div>
+          </section>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+
+    function activateTab(tab, { focus = false } = {}) {
+      tabs.forEach(item => {
+        const active = item === tab;
+        item.setAttribute('aria-selected', String(active));
+        item.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach(panel => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
+      if (focus) tab.focus();
+    }
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => activateTab(tab));
+      tab.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        activateTab(tabs[targetIndex], { focus: true });
+      });
+    });
+
+    document.querySelectorAll('[data-open-tab]').forEach(button => {
+      button.addEventListener('click', () => {
+        const target = document.getElementById(button.dataset.openTab);
+        if (target) activateTab(target, { focus: true });
+      });
+    });
+  </script>
+</body>
+</html>

@@ -86,6 +86,11 @@
     .filter-button span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .filter-button[aria-pressed="true"] { color: var(--accent-700); background: var(--accent-50); border-color: rgba(45, 113, 91, 0.11); font-weight: 600; }
 
+    .tool-nav { display: grid; gap: 4px; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
+    .tool-nav h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .tool-link { min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
+    .tool-link svg { width: 16px; height: 16px; }
+
     .host-status { margin-top: auto; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
     .host-line { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 12px; font-weight: 600; }
     .host-line .light { width: 7px; height: 7px; background: var(--running); border-radius: 50%; box-shadow: 0 0 0 3px rgba(39, 132, 90, 0.12); }
@@ -107,6 +112,7 @@
     .button.icon-only { width: 40px; padding: 0; }
     .button:active { transform: scale(0.98); }
     .button:focus-visible, .filter-button:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+    .tool-link:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
 
     .board { margin-top: 38px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
     .board-toolbar { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-subtle); }
@@ -223,6 +229,7 @@
       .button.danger:hover { background: #fff0ed; border-color: rgba(180, 69, 56, 0.4); }
       .button.ghost:hover { background: var(--n-50); border-color: transparent; box-shadow: none; }
       .filter-button:hover { color: var(--text-primary); background: rgba(251, 252, 251, 0.52); }
+      .tool-link:hover { color: var(--accent-700); background: rgba(251, 252, 251, 0.52); }
       .drag-handle:hover { color: var(--n-600); background: var(--n-50); }
       .service-row:hover { background-color: var(--n-25); }
       .service-row[data-state="running"]:hover, .service-row[data-state="online"]:hover { background-color: rgba(45, 113, 91, 0.055); }
@@ -243,6 +250,9 @@
       .filters { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 0; overflow-x: auto; padding-bottom: 3px; }
       .filters h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
       .filter-button { flex: none; min-height: 38px; gap: 9px; padding: 0 11px; background: rgba(251, 252, 251, 0.42); border-color: var(--border-subtle); }
+      .tool-nav { grid-column: 1 / -1; margin-top: 0; padding-top: 14px; }
+      .tool-nav h2 { margin-bottom: 4px; }
+      .tool-link { width: fit-content; min-height: 44px; background: rgba(251, 252, 251, 0.42); border-color: var(--border-subtle); }
       .host-status { display: none; }
       .workspace { padding: 30px 20px 52px; }
       .page-head { align-items: center; }
@@ -317,6 +327,11 @@
         <button class="filter-button" type="button" data-filter="external" aria-pressed="false"><span>网页入口</span><span data-count="external">0</span></button>
       </nav>
 
+
+      <nav class="tool-nav" aria-label="自动化工具">
+        <h2>自动化工具</h2>
+        <a class="tool-link" href="/watchdog"><span data-icon="activity"></span><span>会话监控</span></a>
+      </nav>
       <div class="host-status">
         <div class="host-line"><span class="light" aria-hidden="true"></span><span>控制台在线</span></div>
         <p class="host-address">127.0.0.1:8765</p>
