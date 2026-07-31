@@ -373,11 +373,47 @@ class WatchdogStore:
             connection.execute("""UPDATE monitored_sessions SET last_checked_at = ?, next_check_at = ?, last_session_state = ?, last_check_result = ?, last_turn_id = ? WHERE id = ?""", (checked_at, next_check_at, state, result, last_turn_id, session_id))
 
     def create_monitor_run(self, data: dict) -> dict:
+        with self._connect() as connection:
+            return self._insert_monitor_run(connection, data)
+
+    def _insert_monitor_run(
+        self, connection: sqlite3.Connection, data: dict
+    ) -> dict:
         run_id = str(data.get("id") or uuid4())
         columns = {"id": run_id, "session_id": data.get("sessionId"), "channel_id": data.get("channelId"), "started_at": data["startedAt"], "finished_at": data.get("finishedAt"), "channel_status": data.get("channelStatus"), "http_status": data.get("httpStatus"), "session_state": data.get("sessionState"), "turn_id": data.get("turnId"), "error_category": data.get("errorCategory"), "decision": data["decision"], "resume_attempt": data.get("resumeAttempt"), "duration_ms": data.get("durationMs"), "detail_sanitized": data.get("detailSanitized", "")}
+        connection.execute(f"INSERT INTO monitor_runs({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", tuple(columns.values()))
+        return self._row(
+            connection.execute(
+                "SELECT * FROM monitor_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        )  # type: ignore[return-value]
+
+    def record_monitor_result(self, data: dict, next_check_at: str) -> dict:
+        session_id = data.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise WatchdogStoreError("monitor result requires a session id")
+        checked_at = data.get("finishedAt") or data["startedAt"]
+        state = data.get("sessionState") or "unknown"
         with self._connect() as connection:
-            connection.execute(f"INSERT INTO monitor_runs({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", tuple(columns.values()))
-        return self._one("SELECT * FROM monitor_runs WHERE id = ?", (run_id,))  # type: ignore[return-value]
+            run = self._insert_monitor_run(connection, data)
+            updated = connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_checked_at = ?, next_check_at = ?,
+                       last_session_state = ?, last_check_result = ?,
+                       last_turn_id = ?
+                   WHERE id = ?""",
+                (
+                    checked_at,
+                    next_check_at,
+                    state,
+                    data["decision"],
+                    data.get("turnId"),
+                    session_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise WatchdogStoreError("monitored session no longer exists")
+            return run
 
     def list_monitor_runs(self, filters: dict) -> list[dict]:
         clauses, params = [], []

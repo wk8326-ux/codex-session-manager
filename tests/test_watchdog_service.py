@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,7 +94,8 @@ def make_service(
 class WatchdogServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.store = WatchdogStore(Path(self.temp.name) / "watchdog.db")
+        self.database_path = Path(self.temp.name) / "watchdog.db"
+        self.store = WatchdogStore(self.database_path)
         self.store.initialize()
 
     def tearDown(self) -> None:
@@ -158,6 +160,31 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertIsNotNone(updated)
         self.assertEqual(updated["nextCheckAt"], "2026-07-31T06:20:00Z")
 
+    def test_adapter_error_message_is_sanitized_before_audit_persistence(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        snapshot = SessionSnapshot(
+            THREAD_ID,
+            "failed session",
+            "idle",
+            (),
+            TurnSnapshot(
+                "turn-failed",
+                "failed",
+                f"request failed with bearer {API_KEY}",
+            ),
+        )
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, snapshot
+        )
+        session = self.create_session(secrets)
+
+        run = service.check_session(session["id"], NOW)
+
+        self.assertEqual(adapter.read_calls, [THREAD_ID])
+        self.assertEqual(run["errorCategory"], "message")
+        self.assertNotIn(API_KEY, repr(run))
+        self.assertNotIn(API_KEY, repr(self.store.list_monitor_runs({})))
+
     def test_due_sessions_share_probe_and_fail_independently(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
         other_thread = "019f73f7-38a9-7ed1-b5c5-5a55913a71dd"
@@ -205,6 +232,33 @@ class WatchdogServiceTests(unittest.TestCase):
             "2026-07-31T06:15:00Z",
         )
         self.assertNotIn(API_KEY, repr(runs))
+
+    def test_run_and_schedule_update_roll_back_together(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store, healthy, failed_snapshot()
+        )
+        session = self.create_session(secrets)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """CREATE TRIGGER fail_next_check
+                   BEFORE UPDATE OF next_check_at ON monitored_sessions
+                   BEGIN
+                       SELECT RAISE(ABORT, 'forced session update failure');
+                   END"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            service.check_session(session["id"], NOW)
+
+        self.assertEqual(self.store.list_monitor_runs({}), [])
+        unchanged = self.store.get_session(session["id"])
+        self.assertIsNotNone(unchanged)
+        self.assertEqual(unchanged["nextCheckAt"], "2026-07-31T06:00:00Z")
 
 
 if __name__ == "__main__":

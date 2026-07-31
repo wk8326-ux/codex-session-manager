@@ -26,8 +26,22 @@ def _add_minutes(value: str, minutes: int) -> str:
 
 
 def _safe_detail(detail: object, api_key: str = "") -> str:
-    value = str(detail or "")[:500]
-    return value.replace(api_key, "[redacted]") if api_key else value
+    value = str(detail or "")
+    if api_key:
+        value = value.replace(api_key, "[redacted]")
+    return value[:500]
+
+
+def _error_category(error_signature: str) -> str:
+    if not error_signature:
+        return ""
+    if error_signature.startswith("message:"):
+        return "message"
+    if ":http:" in error_signature:
+        return "http_status"
+    if error_signature.endswith(":kind"):
+        return "error_kind"
+    return "decision_error"
 
 
 class WatchdogService:
@@ -116,7 +130,8 @@ class WatchdogService:
             snapshot.thread_status if snapshot is not None else "unavailable"
         )
         interval = session["intervalMinutes"] or settings["defaultIntervalMinutes"]
-        run = self._store.create_monitor_run(
+        next_check_at = _add_minutes(now, int(interval))
+        run = self._store.record_monitor_result(
             {
                 "sessionId": session["id"],
                 "channelId": channel["id"],
@@ -126,19 +141,12 @@ class WatchdogService:
                 "httpStatus": result.http_status,
                 "sessionState": state,
                 "turnId": turn.id if turn is not None else None,
-                "errorCategory": decision.error_signature,
+                "errorCategory": _error_category(decision.error_signature),
                 "decision": decision.code,
                 "durationMs": result.duration_ms,
                 "detailSanitized": decision.detail or result.detail,
-            }
-        )
-        self._store.set_next_check(
-            session["id"],
-            now,
-            _add_minutes(now, int(interval)),
-            state,
-            decision.code,
-            turn.id if turn is not None else None,
+            },
+            next_check_at,
         )
         return run
 
@@ -150,7 +158,12 @@ class WatchdogService:
                 runs.append(self.check_session(session["id"], now, cache))
             except Exception as error:
                 decision = "silent_monitor_error"
-                runs.append(self._store.create_monitor_run(
+                settings = self._store.get_settings()
+                interval = (
+                    session["intervalMinutes"]
+                    or settings["defaultIntervalMinutes"]
+                )
+                runs.append(self._store.record_monitor_result(
                     {
                         "sessionId": session["id"],
                         "channelId": session["channelId"],
@@ -161,19 +174,7 @@ class WatchdogService:
                         "detailSanitized": (
                             f"monitoring failed ({type(error).__name__})"
                         ),
-                    }
-                ))
-                settings = self._store.get_settings()
-                interval = (
-                    session["intervalMinutes"]
-                    or settings["defaultIntervalMinutes"]
-                )
-                self._store.set_next_check(
-                    session["id"],
-                    now,
+                    },
                     _add_minutes(now, int(interval)),
-                    "monitor_error",
-                    decision,
-                    None,
-                )
+                ))
         return runs
