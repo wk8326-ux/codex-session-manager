@@ -132,6 +132,11 @@ class CodexAdapterTests(unittest.TestCase):
     def test_start_turn_sends_one_text_input_without_thread_overrides(self) -> None:
         transport = FakeTransport(
             {
+                "thread/resume": {
+                    "thread": {
+                        "id": "thread-1",
+                    }
+                },
                 "turn/start": {
                     "turn": {
                         "id": "turn-new",
@@ -151,19 +156,27 @@ class CodexAdapterTests(unittest.TestCase):
             transport.calls,
             [
                 (
+                    "thread/resume",
+                    {"threadId": "thread-1"},
+                ),
+                (
                     "turn/start",
                     {
                         "threadId": "thread-1",
                         "input": [
-                            {"type": "text", "text": "继续当前开发任务"}
+                            {
+                                "type": "text",
+                                "text": "继续当前开发任务",
+                                "text_elements": [],
+                            }
                         ],
                     },
                 )
             ],
         )
-        params = transport.calls[0][1]
-        self.assertNotIn("approvalPolicy", params)
-        self.assertNotIn("approvalsReviewer", params)
+        for _method, params in transport.calls:
+            self.assertNotIn("approvalPolicy", params)
+            self.assertNotIn("approvalsReviewer", params)
 
     def test_start_turn_timeout_or_eof_is_an_uncertain_send_failure(self) -> None:
         class FailingTransport:
@@ -171,6 +184,8 @@ class CodexAdapterTests(unittest.TestCase):
                 self.error = error
 
             def request(self, method: str, params: dict) -> dict:
+                if method == "thread/resume":
+                    return {"thread": {"id": THREAD_ID}}
                 raise self.error
 
             def close(self) -> None:
@@ -184,7 +199,14 @@ class CodexAdapterTests(unittest.TestCase):
                     )
 
     def test_malformed_turn_start_response_is_a_protocol_error(self) -> None:
-        adapter = CodexAppServerAdapter(FakeTransport({"turn/start": {}}))
+        adapter = CodexAppServerAdapter(
+            FakeTransport(
+                {
+                    "thread/resume": {"thread": {"id": THREAD_ID}},
+                    "turn/start": {},
+                }
+            )
+        )
 
         with self.assertRaises(CodexProtocolError) as raised:
             adapter.start_turn(THREAD_ID, "continue")
@@ -192,6 +214,21 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, CodexAdapterError)
         self.assertNotIsInstance(raised.exception, DefiniteSendFailure)
         self.assertNotIsInstance(raised.exception, UncertainSendFailure)
+
+    def test_resume_failure_is_definite_before_turn_start(self) -> None:
+        class ResumeFailingTransport:
+            def request(self, method: str, params: dict) -> dict:
+                self.method = method
+                raise TimeoutError("resume timed out")
+
+            def close(self) -> None:
+                return
+
+        transport = ResumeFailingTransport()
+        with self.assertRaises(DefiniteSendFailure):
+            CodexAppServerAdapter(transport).start_turn(THREAD_ID, "continue")
+
+        self.assertEqual(transport.method, "thread/resume")
 
     def test_read_thread_rejects_malformed_protocol_responses(self) -> None:
         malformed = (

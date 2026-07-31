@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID
@@ -15,6 +16,7 @@ from watchdog.codex_adapter import CodexAppServerAdapter, StdioJsonRpcClient
 
 
 TEST_THREAD_NAME = "watchdog-integration-test"
+SEND_CONFIRMATION_TIMEOUT_SECONDS = 90.0
 
 
 def uuid_value(value: str) -> str:
@@ -46,6 +48,25 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def wait_for_turn_completion(
+    adapter: CodexAppServerAdapter, thread_id: str, turn_id: str
+) -> str:
+    deadline = time.monotonic() + SEND_CONFIRMATION_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        snapshot = adapter.read_thread(thread_id)
+        turn = snapshot.latest_turn
+        if turn is not None and turn.id == turn_id:
+            if turn.status == "completed":
+                return turn.status
+            if turn.status == "failed":
+                detail = turn.error_message or "unknown App Server error"
+                raise RuntimeError(f"test turn failed: {detail}")
+            if turn.status in {"interrupted", "cancelled"}:
+                raise RuntimeError(f"test turn ended with status {turn.status!r}")
+        time.sleep(0.25)
+    raise TimeoutError("test turn did not complete before the send gate timeout")
+
+
 def main() -> int:
     args = parse_args()
     client = StdioJsonRpcClient(
@@ -72,6 +93,13 @@ def main() -> int:
             )
         turn_id = adapter.start_turn(args.thread_id, args.prompt)
         print(json.dumps({"turnId": turn_id}, ensure_ascii=False))
+        status = wait_for_turn_completion(adapter, args.thread_id, turn_id)
+        print(
+            json.dumps(
+                {"confirmedTurnId": turn_id, "status": status},
+                ensure_ascii=False,
+            )
+        )
         return 0
     finally:
         adapter.close()

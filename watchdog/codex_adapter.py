@@ -126,11 +126,36 @@ class CodexAppServerAdapter:
 
     def start_turn(self, thread_id: str, prompt: str) -> str:
         try:
+            resumed = self._transport.request(
+                "thread/resume", {"threadId": thread_id}
+            )
+        except (DefiniteSendFailure, CodexProtocolError):
+            raise
+        except Exception as error:
+            raise DefiniteSendFailure(
+                "thread/resume failed before turn/start"
+            ) from error
+        resumed_thread = resumed.get("thread") if isinstance(resumed, dict) else None
+        resumed_id = (
+            resumed_thread.get("id") if isinstance(resumed_thread, dict) else None
+        )
+        if resumed_id != thread_id:
+            raise CodexProtocolError(
+                "thread/resume returned a different or invalid thread id"
+            )
+
+        try:
             response = self._transport.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    "input": [{"type": "text", "text": prompt}],
+                    "input": [
+                        {
+                            "type": "text",
+                            "text": prompt,
+                            "text_elements": [],
+                        }
+                    ],
                 },
             )
         except (DefiniteSendFailure, UncertainSendFailure, CodexProtocolError):
