@@ -254,6 +254,12 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertEqual(adapter.read_calls, [])
         self.assertNotIn(cached_secret, repr(run))
         self.assertNotIn(cached_secret, repr(self.store.list_monitor_runs({})))
+        channel = self.store.get_channel(session["channelId"])
+        self.assertIsNotNone(channel)
+        self.assertEqual(
+            channel["lastProbeDetail"], "channel upstream was unavailable"
+        )
+        self.assertNotIn(cached_secret, repr(channel))
 
     def test_due_sessions_share_probe_and_fail_independently(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)

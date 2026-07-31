@@ -29,6 +29,15 @@ CHANNEL_CATEGORIES = frozenset(
         "protocol_error",
     }
 )
+PROBE_DETAILS = {
+    "healthy": "channel responded normally",
+    "auth_error": "channel authentication failed",
+    "rate_limited": "channel was rate limited",
+    "upstream_error": "channel upstream was unavailable",
+    "other_http_error": "channel returned an HTTP error",
+    "network_error": "channel network request failed",
+    "protocol_error": "channel response was invalid",
+}
 SESSION_STATES = frozenset(
     {
         "notLoaded",
@@ -92,6 +101,36 @@ def _channel_status(value: str | None) -> str | None:
     if value is None:
         return None
     return value if value in CHANNEL_CATEGORIES else "protocol_error"
+
+
+def _normalize_probe_result(result: ProbeResult, now: str) -> ProbeResult:
+    category = _channel_status(result.category) or "protocol_error"
+    http_status = (
+        result.http_status
+        if isinstance(result.http_status, int)
+        and not isinstance(result.http_status, bool)
+        and 100 <= result.http_status <= 599
+        else None
+    )
+    duration_ms = (
+        result.duration_ms
+        if isinstance(result.duration_ms, int)
+        and not isinstance(result.duration_ms, bool)
+        and result.duration_ms >= 0
+        else 0
+    )
+    checked_at = result.checked_at
+    try:
+        datetime.strptime(checked_at, "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        checked_at = now
+    return ProbeResult(
+        category,
+        http_status,
+        PROBE_DETAILS[category],
+        duration_ms,
+        checked_at,
+    )
 
 
 def _session_state(value: str | None) -> str:
@@ -198,7 +237,8 @@ class WatchdogService:
         result = cache.get(channel["id"])
         if result is None:
             result = self._probe_channel(channel, now)
-            cache[channel["id"]] = result
+        result = _normalize_probe_result(result, now)
+        cache[channel["id"]] = result
         self._store.record_channel_probe(channel["id"], result)
 
         snapshot: SessionSnapshot | None = None
