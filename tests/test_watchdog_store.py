@@ -95,6 +95,16 @@ class WatchdogStoreTests(unittest.TestCase):
         with self.assertRaises(ChannelInUseError):
             self.store.delete_channel(channel["id"])
 
+    def test_blank_encrypted_key_update_preserves_stored_ciphertext(self) -> None:
+        channel = self.create_channel()
+
+        updated = self.store.update_channel(
+            channel["id"], {"name": "renamed", "encryptedKey": b""}
+        )
+
+        self.assertEqual(updated["name"], "renamed")
+        self.assertEqual(updated["encryptedKey"], b"cipher")
+
     def test_prune_keeps_incident_while_session_is_still_on_same_turn(self) -> None:
         channel = self.create_channel()
         session = self.store.create_session(

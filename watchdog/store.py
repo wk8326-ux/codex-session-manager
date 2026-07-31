@@ -289,7 +289,12 @@ class WatchdogStore:
         return self.get_channel(channel_id)  # type: ignore[return-value]
 
     def update_channel(self, channel_id: str, changes: dict) -> dict | None:
-        return self._update("api_channels", channel_id, changes, self._CHANNEL_COLUMNS, self.get_channel)
+        filtered = dict(changes)
+        if not filtered.get("encryptedKey"):
+            filtered.pop("encryptedKey", None)
+        return self._update(
+            "api_channels", channel_id, filtered, self._CHANNEL_COLUMNS, self.get_channel
+        )
 
     def delete_channel(self, channel_id: str) -> None:
         with self._connect() as connection:
