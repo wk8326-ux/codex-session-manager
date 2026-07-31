@@ -798,6 +798,23 @@ class WatchdogServiceTests(unittest.TestCase):
         stored = self.store.list_monitor_runs({})
         self.assertEqual([run["sessionId"] for run in stored], [active["id"]])
 
+    def test_disabled_scheduler_skips_due_work_but_manual_check_still_runs(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, probe, adapter = make_service(
+            self.store, healthy, failed_snapshot()
+        )
+        session = self.create_session(secrets)
+        self.store.update_settings({"schedulerEnabled": False})
+
+        self.assertEqual(service.run_due(NOW), [])
+        self.assertEqual(probe.calls, [])
+        self.assertEqual(adapter.read_calls, [])
+
+        run = service.check_session(session["id"], NOW)
+        self.assertEqual(run["decision"], "resume_candidate_observed")
+        self.assertEqual(len(probe.calls), 1)
+        self.assertEqual(adapter.read_calls, [THREAD_ID])
+
 
 if __name__ == "__main__":
     unittest.main()

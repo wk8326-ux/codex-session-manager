@@ -322,6 +322,46 @@ class WatchdogStoreTests(unittest.TestCase):
         self.assertEqual(self.store.list_monitor_runs({}), [])
         self.assertIsNotNone(self.store.get_incident("fingerprint-old"))
 
+    def test_session_and_channel_can_be_deleted_after_history_exists(self) -> None:
+        channel = self.create_channel()
+        session = self.store.create_session(
+            {
+                "name": "session",
+                "threadId": THREAD_ID,
+                "channelId": channel["id"],
+                "intervalMinutes": 15,
+                "resumePrompt": "continue current task",
+                "enabled": True,
+            }
+        )
+        self.store.create_monitor_run(
+            {
+                "sessionId": session["id"],
+                "channelId": channel["id"],
+                "startedAt": "2026-07-31T00:00:00Z",
+                "decision": "silent_session_running",
+            }
+        )
+        self.store.get_or_create_incident(
+            {
+                "fingerprint": "delete-history",
+                "sessionId": session["id"],
+                "turnId": "turn-old",
+                "errorSignature": "http_status",
+                "firstSeenAt": "2026-07-31T00:00:00Z",
+            }
+        )
+
+        self.store.delete_session(session["id"])
+        self.store.delete_channel(channel["id"])
+
+        self.assertIsNone(self.store.get_session(session["id"]))
+        self.assertIsNone(self.store.get_channel(channel["id"]))
+        self.assertIsNone(self.store.get_incident("delete-history"))
+        run = self.store.list_monitor_runs({})[0]
+        self.assertIsNone(run["sessionId"])
+        self.assertIsNone(run["channelId"])
+
 
 if __name__ == "__main__":
     unittest.main()

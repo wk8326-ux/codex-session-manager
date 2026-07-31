@@ -411,6 +411,8 @@ class WatchdogService:
         return run
 
     def run_due(self, now: str) -> list[dict]:
+        if not self._store.get_settings()["schedulerEnabled"]:
+            return []
         cache: dict[str, ProbeResult] = {}
         runs: list[dict] = []
         for session in self._store.list_due_sessions(now):

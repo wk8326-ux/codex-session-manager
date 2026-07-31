@@ -306,6 +306,9 @@ class WatchdogStore:
         with self._connect() as connection:
             if connection.execute("SELECT 1 FROM monitored_sessions WHERE channel_id = ? LIMIT 1", (channel_id,)).fetchone():
                 raise ChannelInUseError("channel is still referenced by a monitored session")
+            connection.execute(
+                "UPDATE monitor_runs SET channel_id = NULL WHERE channel_id = ?", (channel_id,)
+            )
             connection.execute("DELETE FROM api_channels WHERE id = ?", (channel_id,))
 
     def list_channels(self) -> list[dict]:
@@ -343,6 +346,12 @@ class WatchdogStore:
 
     def delete_session(self, session_id: str) -> None:
         with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM recovery_incidents WHERE session_id = ?", (session_id,)
+            )
+            connection.execute(
+                "UPDATE monitor_runs SET session_id = NULL WHERE session_id = ?", (session_id,)
+            )
             connection.execute("DELETE FROM monitored_sessions WHERE id = ?", (session_id,))
 
     def list_sessions(self) -> list[dict]:

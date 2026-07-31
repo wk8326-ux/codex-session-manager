@@ -14,13 +14,27 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+
+from watchdog.application import WatchdogApplication
+from watchdog.channels import probe_channel
+from watchdog.codex_adapter import (
+    CodexAdapterError,
+    CodexAppServerAdapter,
+    StdioJsonRpcClient,
+)
+from watchdog.http_api import ApiResponse, WatchdogHttpApi
+from watchdog.scheduler import WatchdogScheduler
+from watchdog.secrets import DpapiSecretStore
+from watchdog.service import WatchdogService
+from watchdog.store import WatchdogStore
 
 
 ROOT = Path(__file__).resolve().parent
@@ -34,6 +48,7 @@ WEBSITE_CACHE: dict[str, dict] = {}
 WEBSITE_CACHE_TTL = 15.0
 WEBSITE_TIMEOUT = 3.0
 WEBSITE_FAILURE_THRESHOLD = 3
+WATCHDOG_API: WatchdogHttpApi | None = None
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -433,6 +448,57 @@ def stop_project(project: dict) -> tuple[bool, str]:
     return True, "已发出关闭命令。"
 
 
+@dataclass
+class ConsoleRuntime:
+    api: WatchdogHttpApi
+    scheduler: WatchdogScheduler
+    adapter: object
+
+
+class UnavailableCodexAdapter:
+    def read_thread(self, thread_id: str):
+        raise CodexAdapterError("Codex App Server is unavailable")
+
+    def list_threads(self, limit: int = 5):
+        raise CodexAdapterError("Codex App Server is unavailable")
+
+    def start_turn(self, thread_id: str, prompt: str) -> str:
+        raise CodexAdapterError("Codex App Server is unavailable")
+
+    def close(self) -> None:
+        return
+
+
+def create_console_runtime(base_path: Path) -> ConsoleRuntime:
+    store = WatchdogStore(base_path / "watchdog.db")
+    store.initialize()
+    secrets = DpapiSecretStore(
+        entropy=b"localhost-project-console/watchdog/v1"
+    )
+    codex_connected = True
+    try:
+        adapter: object = CodexAppServerAdapter(StdioJsonRpcClient())
+    except Exception:
+        adapter = UnavailableCodexAdapter()
+        codex_connected = False
+    monitor_service = WatchdogService(
+        store, secrets, probe_channel, adapter
+    )
+    scheduler = WatchdogScheduler(monitor_service, store=store)
+    application = WatchdogApplication(
+        store,
+        secrets,
+        probe_channel,
+        adapter,
+        monitor_service,
+        scheduler,
+        codex_connected=codex_connected,
+    )
+    return ConsoleRuntime(
+        WatchdogHttpApi(application), scheduler, adapter
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -445,12 +511,53 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def respond_file(self, path: Path, content_type: str) -> None:
+        body = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def respond_api_response(self, response: ApiResponse) -> None:
+        if response.status == HTTPStatus.NO_CONTENT:
+            self.send_response(response.status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.respond_json(response.status, response.body)
+
+    def dispatch_watchdog(
+        self, method: str, parsed: object, payload: object
+    ) -> bool:
+        path = parsed.path
+        if path != "/api/watchdog" and not path.startswith("/api/watchdog/"):
+            return False
+        if WATCHDOG_API is None:
+            self.respond_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"message": "Watchdog runtime is unavailable."},
+            )
+            return True
+        response = WATCHDOG_API.dispatch(
+            method,
+            path,
+            parse_qs(parsed.query, keep_blank_values=True),
+            payload,
+        )
+        if response is None:
+            return False
+        self.respond_api_response(response)
+        return True
+
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if self.dispatch_watchdog("GET", parsed, None):
+            return
         if parsed.path == "/api/projects":
             with LOCK:
                 projects = [dict(project) for project in PROJECTS]
@@ -461,6 +568,9 @@ class Handler(BaseHTTPRequestHandler):
             log_path = LOG_DIR / f"{project_id}.log"
             content = log_path.read_text(encoding="utf-8", errors="replace")[-12000:] if log_path.exists() else "暂无日志。"
             self.respond_json(HTTPStatus.OK, {"content": content})
+            return
+        if parsed.path in {"/watchdog", "/watchdog/"}:
+            self.respond_file(ROOT / "watchdog.html", "text/html; charset=utf-8")
             return
         if parsed.path == "/":
             body = (ROOT / "index.html").read_bytes()
@@ -479,6 +589,8 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.BAD_REQUEST, {"message": "请求格式错误。"})
             return
         parsed = urlparse(self.path)
+        if self.dispatch_watchdog("POST", parsed, payload):
+            return
         with LOCK:
             if parsed.path == "/api/projects/reorder":
                 if not reorder_projects(PROJECTS, payload.get("ids")):
@@ -533,6 +645,19 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT, {"message": message, "project": state_for(project)})
 
     def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/watchdog" or parsed.path.startswith(
+            "/api/watchdog/"
+        ):
+            try:
+                payload = self.read_json()
+            except (json.JSONDecodeError, ValueError):
+                self.respond_json(
+                    HTTPStatus.BAD_REQUEST, {"message": "Invalid JSON request."}
+                )
+                return
+            self.dispatch_watchdog("PUT", parsed, payload)
+            return
         project_id = urlparse(self.path).path.split("/")[-1]
         with LOCK:
             project = find_project(project_id)
@@ -572,6 +697,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.OK, state_for(project))
 
     def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if self.dispatch_watchdog("DELETE", parsed, None):
+            return
         project_id = urlparse(self.path).path.split("/")[-1]
         with LOCK:
             project = find_project(project_id)
@@ -586,7 +714,22 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.NO_CONTENT, {})
 
 
-if __name__ == "__main__":
+def run_console(base_path: Path = ROOT) -> None:
+    global WATCHDOG_API
     LOG_DIR.mkdir(exist_ok=True)
+    runtime = create_console_runtime(base_path)
+    WATCHDOG_API = runtime.api
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    runtime.scheduler.start()
     print(f"Local Project Console is running at http://{HOST}:{PORT}")
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        runtime.scheduler.stop()
+        runtime.adapter.close()
+        server.server_close()
+        WATCHDOG_API = None
+
+
+if __name__ == "__main__":
+    run_console()
