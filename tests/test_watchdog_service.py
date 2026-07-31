@@ -160,7 +160,7 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertIsNotNone(updated)
         self.assertEqual(updated["nextCheckAt"], "2026-07-31T06:20:00Z")
 
-    def test_adapter_error_message_is_sanitized_before_audit_persistence(self) -> None:
+    def test_error_signature_is_reduced_before_audit_persistence(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
         snapshot = SessionSnapshot(
             THREAD_ID,
@@ -184,6 +184,28 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertEqual(run["errorCategory"], "message")
         self.assertNotIn(API_KEY, repr(run))
         self.assertNotIn(API_KEY, repr(self.store.list_monitor_runs({})))
+
+    def test_unknown_turn_status_is_sanitized_at_audit_boundary(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        snapshot = SessionSnapshot(
+            THREAD_ID,
+            "unrecognized session",
+            "idle",
+            (),
+            TurnSnapshot("turn-unknown", API_KEY + "x" * 600),
+        )
+        service, secrets, _probe, _adapter = make_service(
+            self.store, healthy, snapshot
+        )
+        session = self.create_session(secrets)
+
+        run = service.check_session(session["id"], NOW)
+
+        self.assertNotIn(API_KEY, repr(run))
+        self.assertNotIn(API_KEY, run["detailSanitized"])
+        self.assertLessEqual(len(run["detailSanitized"]), 500)
+        stored = self.store.list_monitor_runs({})[0]
+        self.assertEqual(stored["detailSanitized"], run["detailSanitized"])
 
     def test_due_sessions_share_probe_and_fail_independently(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
@@ -259,6 +281,44 @@ class WatchdogServiceTests(unittest.TestCase):
         unchanged = self.store.get_session(session["id"])
         self.assertIsNotNone(unchanged)
         self.assertEqual(unchanged["nextCheckAt"], "2026-07-31T06:00:00Z")
+
+    def test_stale_session_fallback_failure_does_not_stop_due_batch(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        other_thread = "019f73f7-38a9-7ed1-b5c5-5a55913a71dd"
+        snapshots = {other_thread: failed_snapshot(other_thread)}
+        service, secrets, probe, adapter = make_service(
+            self.store, healthy, snapshots
+        )
+        stale = self.create_session(
+            secrets, nextCheckAt="2026-07-31T05:59:00Z"
+        )
+        active = self.store.create_session(
+            {
+                "name": "active",
+                "threadId": other_thread,
+                "channelId": stale["channelId"],
+                "intervalMinutes": 10,
+                "resumePrompt": "continue active task",
+                "enabled": True,
+                "nextCheckAt": "2026-07-31T06:00:00Z",
+            }
+        )
+        list_due = self.store.list_due_sessions
+
+        def list_then_delete(now: str) -> list[dict]:
+            rows = list_due(now)
+            self.store.delete_session(stale["id"])
+            return rows
+
+        self.store.list_due_sessions = list_then_delete  # type: ignore[method-assign]
+
+        runs = service.run_due(NOW)
+
+        self.assertEqual([run["sessionId"] for run in runs], [active["id"]])
+        self.assertEqual(adapter.read_calls, [other_thread])
+        self.assertEqual(len(probe.calls), 1)
+        stored = self.store.list_monitor_runs({})
+        self.assertEqual([run["sessionId"] for run in stored], [active["id"]])
 
 
 if __name__ == "__main__":

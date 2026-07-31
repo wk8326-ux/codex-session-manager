@@ -44,6 +44,37 @@ def _error_category(error_signature: str) -> str:
     return "decision_error"
 
 
+def _run_data(
+    *,
+    session_id: str,
+    channel_id: str,
+    now: str,
+    decision: str,
+    detail: object,
+    api_key: str = "",
+    channel_status: str | None = None,
+    http_status: int | None = None,
+    session_state: str | None = None,
+    turn_id: str | None = None,
+    error_category: str = "",
+    duration_ms: int | None = None,
+) -> dict:
+    return {
+        "sessionId": session_id,
+        "channelId": channel_id,
+        "startedAt": now,
+        "finishedAt": now,
+        "channelStatus": _safe_detail(channel_status, api_key),
+        "httpStatus": http_status,
+        "sessionState": _safe_detail(session_state, api_key),
+        "turnId": _safe_detail(turn_id, api_key) if turn_id else None,
+        "errorCategory": error_category,
+        "decision": decision,
+        "durationMs": duration_ms,
+        "detailSanitized": _safe_detail(detail, api_key),
+    }
+
+
 class WatchdogService:
     """Orchestrate channel probes and read-only session decisions."""
 
@@ -59,7 +90,8 @@ class WatchdogService:
         self._probe = probe
         self._adapter = adapter
 
-    def _probe_channel(self, channel: dict, now: str) -> ProbeResult:
+    def _probe_channel(self, channel: dict, now: str) -> tuple[ProbeResult, str]:
+        api_key = ""
         try:
             api_key = self._secret_store.unprotect(channel["encryptedKey"])
             result = self._probe(
@@ -72,19 +104,25 @@ class WatchdogService:
                 )
             )
         except Exception as error:
-            return ProbeResult(
-                "network_error",
-                None,
-                f"channel probe failed ({type(error).__name__})",
-                0,
-                now,
+            return (
+                ProbeResult(
+                    "network_error",
+                    None,
+                    f"channel probe failed ({type(error).__name__})",
+                    0,
+                    now,
+                ),
+                api_key,
             )
-        return ProbeResult(
-            result.category,
-            result.http_status,
-            _safe_detail(result.detail, api_key),
-            result.duration_ms,
-            result.checked_at or now,
+        return (
+            ProbeResult(
+                result.category,
+                result.http_status,
+                _safe_detail(result.detail, api_key),
+                result.duration_ms,
+                result.checked_at or now,
+            ),
+            api_key,
         )
 
     def check_session(
@@ -93,6 +131,16 @@ class WatchdogService:
         now: str,
         probe_cache: dict[str, ProbeResult] | None = None,
     ) -> dict:
+        cache = probe_cache if probe_cache is not None else {}
+        return self._check_session(session_id, now, cache, {})
+
+    def _check_session(
+        self,
+        session_id: str,
+        now: str,
+        probe_cache: dict[str, ProbeResult],
+        api_keys: dict[str, str],
+    ) -> dict:
         session = self._store.get_session(session_id)
         if session is None or not session["enabled"]:
             raise ValueError("monitored session is missing or disabled")
@@ -100,11 +148,12 @@ class WatchdogService:
         if channel is None or not channel["enabled"]:
             raise ValueError("API channel is missing or disabled")
 
-        cache = probe_cache if probe_cache is not None else {}
-        result = cache.get(channel["id"])
+        result = probe_cache.get(channel["id"])
         if result is None:
-            result = self._probe_channel(channel, now)
-            cache[channel["id"]] = result
+            result, api_key = self._probe_channel(channel, now)
+            probe_cache[channel["id"]] = result
+            api_keys[channel["id"]] = api_key
+        api_key = api_keys.get(channel["id"], "")
         self._store.record_channel_probe(channel["id"], result)
 
         snapshot: SessionSnapshot | None = None
@@ -132,30 +181,33 @@ class WatchdogService:
         interval = session["intervalMinutes"] or settings["defaultIntervalMinutes"]
         next_check_at = _add_minutes(now, int(interval))
         run = self._store.record_monitor_result(
-            {
-                "sessionId": session["id"],
-                "channelId": channel["id"],
-                "startedAt": now,
-                "finishedAt": now,
-                "channelStatus": result.category,
-                "httpStatus": result.http_status,
-                "sessionState": state,
-                "turnId": turn.id if turn is not None else None,
-                "errorCategory": _error_category(decision.error_signature),
-                "decision": decision.code,
-                "durationMs": result.duration_ms,
-                "detailSanitized": decision.detail or result.detail,
-            },
+            _run_data(
+                session_id=session["id"],
+                channel_id=channel["id"],
+                now=now,
+                channel_status=result.category,
+                http_status=result.http_status,
+                session_state=state,
+                turn_id=turn.id if turn is not None else None,
+                error_category=_error_category(decision.error_signature),
+                decision=decision.code,
+                duration_ms=result.duration_ms,
+                detail=decision.detail or result.detail,
+                api_key=api_key,
+            ),
             next_check_at,
         )
         return run
 
     def run_due(self, now: str) -> list[dict]:
         cache: dict[str, ProbeResult] = {}
+        api_keys: dict[str, str] = {}
         runs: list[dict] = []
         for session in self._store.list_due_sessions(now):
             try:
-                runs.append(self.check_session(session["id"], now, cache))
+                runs.append(
+                    self._check_session(session["id"], now, cache, api_keys)
+                )
             except Exception as error:
                 decision = "silent_monitor_error"
                 settings = self._store.get_settings()
@@ -163,18 +215,20 @@ class WatchdogService:
                     session["intervalMinutes"]
                     or settings["defaultIntervalMinutes"]
                 )
-                runs.append(self._store.record_monitor_result(
-                    {
-                        "sessionId": session["id"],
-                        "channelId": session["channelId"],
-                        "startedAt": now,
-                        "finishedAt": now,
-                        "sessionState": "monitor_error",
-                        "decision": decision,
-                        "detailSanitized": (
-                            f"monitoring failed ({type(error).__name__})"
+                try:
+                    fallback_run = self._store.record_monitor_result(
+                        _run_data(
+                            session_id=session["id"],
+                            channel_id=session["channelId"],
+                            now=now,
+                            session_state="monitor_error",
+                            decision=decision,
+                            detail=f"monitoring failed ({type(error).__name__})",
+                            api_key=api_keys.get(session["channelId"], ""),
                         ),
-                    },
-                    _add_minutes(now, int(interval)),
-                ))
+                        _add_minutes(now, int(interval)),
+                    )
+                except Exception:
+                    continue
+                runs.append(fallback_run)
         return runs
