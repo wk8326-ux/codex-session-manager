@@ -104,6 +104,7 @@
     .rail-step:not(:last-child)::after { content: ""; position: absolute; top: 50%; right: 16px; left: 30px; z-index: -1; height: 1px; background: var(--n-200); }
     .rail-node { z-index: 1; width: 14px; height: 14px; flex: none; background: var(--surface-canvas); border: 2px solid var(--n-300); border-radius: 50%; }
     .rail-step:first-child .rail-node { border-color: var(--accent-600); }
+    .rail-step[data-state="done"] .rail-node { background: var(--accent-50); border-color: var(--accent-600); }
 
     .status-strip { display: grid; grid-template-columns: 1.15fr repeat(3, 1fr); margin: 0 0 24px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
     .status-item { min-width: 0; padding: 17px 18px; }
@@ -146,8 +147,75 @@
 
     .button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; box-shadow: 0 1px 1px rgba(24, 34, 31, 0.03); transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, transform 100ms ease-out, box-shadow 140ms ease-out; }
     .button.primary { color: var(--n-0); background: var(--accent-700); border-color: var(--accent-700); box-shadow: 0 5px 12px rgba(36, 94, 76, 0.14), 0 1px 2px rgba(36, 94, 76, 0.18); }
+    .button.ghost { background: transparent; border-color: transparent; box-shadow: none; }
+    .button.danger { color: var(--danger); background: transparent; border-color: transparent; box-shadow: none; }
+    .button.small { min-height: 34px; padding: 0 10px; font-size: 12px; }
+    .button[disabled] { cursor: wait; opacity: 0.58; transform: none; }
     .button:active { transform: scale(0.98); }
-    .nav-link:focus-visible, .watchdog-tab:focus-visible, .button:focus-visible, .text-action:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+    .nav-link:focus-visible, .watchdog-tab:focus-visible, .button:focus-visible, .text-action:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+
+    .toolbar-actions, .row-actions, .filter-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .resume-control { min-width: 132px; justify-content: flex-start; }
+    .resume-control .status-dot { background: var(--warning); }
+    .resume-control[data-enabled="true"] .status-dot { background: var(--running); }
+    .resume-control strong { font-weight: 700; }
+
+    .table-wrap { min-height: 280px; overflow: auto; scrollbar-width: thin; }
+    .data-table { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; }
+    .data-table.sessions-table { min-width: 1080px; }
+    .data-table.runs-table { min-width: 1180px; }
+    .data-table th { height: 40px; padding: 0 14px; color: var(--text-tertiary); background: var(--n-25); border-bottom: 1px solid var(--border-subtle); font-size: 11px; font-weight: 500; text-align: left; }
+    .data-table td { height: 62px; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 12px; line-height: 1.45; vertical-align: middle; }
+    .data-table tbody tr:last-child td { border-bottom: 0; }
+    .data-table strong { display: block; overflow: hidden; color: var(--text-primary); font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .data-table code, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .data-table code { display: block; margin-top: 3px; overflow: hidden; color: var(--text-tertiary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .data-table .row-actions { justify-content: flex-end; flex-wrap: nowrap; }
+    .status-label { display: inline-flex; align-items: center; gap: 7px; color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+    .status-label .status-dot { width: 7px; height: 7px; }
+    .status-label[data-tone="success"] .status-dot { background: var(--running); }
+    .status-label[data-tone="warning"] .status-dot { background: var(--warning); }
+    .status-label[data-tone="danger"] .status-dot { background: var(--danger); }
+    .status-label[data-tone="neutral"] .status-dot { background: var(--n-300); }
+    .decision-label { color: var(--text-primary); font-weight: 700; }
+    .decision-label[data-tone="success"] { color: var(--running); }
+    .decision-label[data-tone="danger"] { color: var(--danger); }
+    .decision-label[data-tone="warning"] { color: #7e4a0e; }
+    .row-detail { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+
+    .filters-row { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; padding: 14px 18px; background: var(--n-25); border-bottom: 1px solid var(--border-subtle); }
+    .compact-field { display: grid; gap: 5px; min-width: 150px; }
+    .compact-field label { color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+    .compact-field select, .compact-field input { min-height: 38px; padding: 0 10px; }
+
+    input, select, textarea { width: 100%; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-input); font: 13px var(--font-body); letter-spacing: 0; }
+    input, select { min-height: 42px; padding: 0 12px; }
+    textarea { min-height: 92px; padding: 10px 12px; line-height: 1.55; resize: vertical; }
+    input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
+
+    dialog { width: min(560px, calc(100vw - 32px)); max-height: min(760px, calc(100dvh - 32px)); padding: 0; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: 0 24px 60px rgba(24, 34, 31, 0.18), 0 4px 12px rgba(24, 34, 31, 0.12); overflow: auto; }
+    dialog::backdrop { background: rgba(24, 34, 31, 0.38); }
+    .dialog-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 62px; padding: 0 18px 0 22px; background: var(--surface-raised); border-bottom: 1px solid var(--border-subtle); }
+    .dialog-head h2 { margin: 0; font: 600 18px/1.2 var(--font-display); }
+    .dialog-close { width: 40px; height: 40px; display: grid; place-items: center; padding: 0; color: var(--text-secondary); background: transparent; border: 0; border-radius: var(--radius-button); font-size: 22px; }
+    .dialog-body { display: grid; gap: 17px; padding: 20px 22px 22px; }
+    .field { display: grid; gap: 7px; }
+    .field label, .field legend { color: var(--text-primary); font-size: 12px; font-weight: 700; }
+    .field-help { margin: 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+    .field-error, .form-error { margin: 0; color: var(--danger); font-size: 11px; line-height: 1.5; }
+    .form-error:empty { display: none; }
+    .field-pair { display: grid; grid-template-columns: 1fr 130px; gap: 12px; }
+    .checkbox-field { display: flex; align-items: flex-start; gap: 10px; }
+    .checkbox-field input { width: 18px; min-height: 18px; margin: 1px 0 0; }
+    .checkbox-field label { font-size: 12px; line-height: 1.5; }
+    .local-picker { display: grid; gap: 8px; padding: 12px; background: var(--n-25); border: 1px solid var(--border-subtle); border-radius: var(--radius-input); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+    .confirm-copy { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+    .confirm-note { margin: 0; padding: 12px 14px; color: #7e4a0e; background: #fffaf2; border: 1px solid rgba(173, 107, 29, 0.2); border-radius: var(--radius-input); font-size: 12px; line-height: 1.6; }
+
+    .live-region { position: fixed; right: 20px; bottom: 20px; z-index: 50; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+    .toast { padding: 13px 15px; color: var(--n-0); background: var(--n-900); border-radius: var(--radius-input); box-shadow: 0 12px 28px rgba(24, 34, 31, 0.18), 0 2px 5px rgba(24, 34, 31, 0.12); font-size: 12px; line-height: 1.55; }
+    .toast.error { background: #7f3027; }
 
     @keyframes skeleton-pulse { from { opacity: 0.48; } to { opacity: 0.92; } }
 
@@ -156,7 +224,11 @@
       .watchdog-tab:hover { color: var(--text-primary); }
       .button:hover { border-color: var(--n-300); box-shadow: 0 4px 10px rgba(48, 64, 57, 0.08), 0 1px 2px rgba(48, 64, 57, 0.07); }
       .button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
+      .button.ghost:hover { background: var(--n-50); border-color: transparent; box-shadow: none; }
+      .button.danger:hover { background: #fff0ed; border-color: transparent; box-shadow: none; }
       .text-action:hover { color: var(--accent-600); }
+      .data-table tbody tr:hover { background: var(--n-25); }
+      .dialog-close:hover { color: var(--text-primary); background: var(--n-50); }
     }
 
     @media (max-width: 820px) {
@@ -179,6 +251,8 @@
       .column-head { display: none; }
       .empty-state { min-height: 260px; }
       .recovery-rail { margin-right: 8px; margin-left: 8px; }
+      .filters-row { align-items: stretch; }
+      .compact-field { min-width: min(210px, 100%); flex: 1; }
     }
 
     @media (max-width: 520px) {
@@ -205,6 +279,20 @@
       .skeleton-list { padding: 8px 14px; }
       .skeleton-row { grid-template-columns: 18px minmax(120px, 1fr) 76px; gap: 14px; }
       .skeleton-row span:nth-child(3), .skeleton-row span:nth-child(5) { display: none; }
+      .board-toolbar { min-height: 62px; }
+      .board-title { display: grid; gap: 3px; }
+      .filters-row { padding: 12px; }
+      .compact-field { min-width: 100%; }
+      .filter-actions { width: 100%; }
+      .filter-actions .button { flex: 1; }
+      .field-pair { grid-template-columns: 1fr; }
+      .dialog-head { padding: 0 12px 0 16px; }
+      .dialog-body { padding: 18px 16px 20px; }
+      input, select, textarea { font-size: 16px; }
+      .dialog-actions .button { flex: 1; }
+      .resume-control { min-width: 0; max-width: 154px; }
+      .table-wrap { min-height: 250px; }
+      .live-region { right: 16px; bottom: 16px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -255,7 +343,11 @@
             <h1>会话监控</h1>
             <p class="page-description">集中查看指定本地 Codex 会话的渠道健康、运行状态和安全续跑记录。</p>
           </div>
-          <div class="head-state" aria-label="当前主机"><span class="status-dot running" aria-hidden="true"></span><span><strong>本机</strong> · 已连接</span></div>
+          <button class="button resume-control" id="resume-control" type="button" data-enabled="false" aria-describedby="resume-control-help">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span><strong>续跑关闭</strong> · 只读</span>
+          </button>
+          <span id="resume-control-help" hidden>自动续跑总开关。开启前必须使用专用测试会话完成验证。</span>
         </header>
 
         <div class="watchdog-tabs" role="tablist" aria-label="会话监控视图">
@@ -272,36 +364,44 @@
           </div>
 
           <dl class="status-strip" aria-label="监控概览">
-            <div class="status-item"><dt>已启用会话</dt><dd>0 <small>个</small></dd></div>
-            <div class="status-item"><dt>正在运行</dt><dd>0 <small>个</small></dd></div>
-            <div class="status-item"><dt>需要关注</dt><dd>0 <small>个</small></dd></div>
-            <div class="status-item"><dt>下次检查</dt><dd>--:--</dd></div>
+            <div class="status-item"><dt>已启用会话</dt><dd><span id="metric-enabled">0</span> <small>个</small></dd></div>
+            <div class="status-item"><dt>正在运行 / 正常空闲</dt><dd><span id="metric-running">0</span> <small>/</small> <span id="metric-idle">0</span></dd></div>
+            <div class="status-item"><dt>需要关注</dt><dd><span id="metric-attention">0</span> <small>个</small></dd></div>
+            <div class="status-item"><dt>下次检查</dt><dd id="metric-next-check">--:--</dd></div>
           </dl>
 
-          <div class="view-notice disabled" data-view-state="disabled">
+          <div class="view-notice disabled" id="resume-disabled-notice" data-view-state="disabled">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M9 12l2 2 4-4"/></svg>
             <div><strong>自动续跑已关闭</strong><p>当前只执行渠道和会话检查，不会发送续跑提示词。</p></div>
           </div>
 
-          <div class="view-notice unavailable" data-view-state="unavailable" role="status" hidden>
+          <div class="view-notice disabled" id="scheduler-disabled-notice" data-view-state="disabled" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
+            <div><strong>定时监控已暂停</strong><p>会话和渠道配置仍可管理，也可以手动立即检查。</p></div>
+          </div>
+
+          <div class="view-notice unavailable" id="codex-unavailable-notice" data-view-state="unavailable" role="status" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
             <div><strong>Codex 连接不可用</strong><p>保留现有配置和记录；恢复连接前不会读取或续跑会话。</p></div>
           </div>
 
           <section class="board" aria-labelledby="sessions-heading">
             <div class="board-toolbar">
-              <div class="board-title"><h2 id="sessions-heading">监控目录</h2><span>0 个会话</span></div>
-              <span class="board-meta">按检查时间排序</span>
+              <div class="board-title"><h2 id="sessions-heading">监控目录</h2><span id="sessions-count">0 个会话</span></div>
+              <div class="toolbar-actions"><button class="button primary" id="add-session" type="button">添加会话</button></div>
             </div>
-            <div class="column-head" aria-hidden="true"><span>链路</span><span>会话</span><span>监控渠道</span><span>检查周期</span><span>最后结果</span><span>操作</span></div>
-
-            <div class="skeleton-list" data-view-state="loading" aria-label="正在读取监控会话" aria-busy="true" hidden>
+            <div class="skeleton-list" id="sessions-loading" data-view-state="loading" aria-label="正在读取监控会话" aria-busy="true">
               <div class="skeleton-row"><span></span><span></span><span></span><span></span><span></span></div>
               <div class="skeleton-row"><span></span><span></span><span></span><span></span><span></span></div>
               <div class="skeleton-row"><span></span><span></span><span></span><span></span><span></span></div>
             </div>
-
-            <div class="empty-state" data-view-state="empty">
+            <div class="table-wrap" id="sessions-table-wrap" hidden>
+              <table class="data-table sessions-table">
+                <thead><tr><th style="width: 9%">状态</th><th style="width: 20%">会话</th><th style="width: 15%">监控渠道</th><th style="width: 10%">检查周期</th><th style="width: 20%">最后结果</th><th style="width: 26%; text-align: right">操作</th></tr></thead>
+                <tbody id="sessions-body"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="sessions-empty" data-view-state="empty" hidden>
               <div class="empty-state-inner">
                 <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
                 <h3>还没有监控会话</h3>
@@ -315,11 +415,24 @@
         <section class="tab-panel" id="panel-runs" role="tabpanel" aria-labelledby="tab-runs" tabindex="0" hidden>
           <section class="board" aria-labelledby="runs-heading">
             <div class="board-toolbar">
-              <div class="board-title"><h2 id="runs-heading">任务执行记录</h2><span>最近 100 条</span></div>
-              <span class="board-meta">时间倒序</span>
+              <div class="board-title"><h2 id="runs-heading">任务执行记录</h2><span id="runs-count">最近 0 条</span></div>
+              <span class="board-meta">不展示完整提示词和 API 响应正文</span>
             </div>
-            <div class="column-head record-columns" aria-hidden="true"><span>时间</span><span>会话</span><span>渠道状态</span><span>HTTP</span><span>处理结果</span><span>原因</span></div>
-            <div class="empty-state" data-view-state="empty">
+            <form class="filters-row" id="runs-filter-form">
+              <div class="compact-field"><label for="run-filter-session">会话</label><select id="run-filter-session" name="sessionId"><option value="">全部会话</option></select></div>
+              <div class="compact-field"><label for="run-filter-channel">渠道</label><select id="run-filter-channel" name="channelId"><option value="">全部渠道</option></select></div>
+              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">静默：仅观察续跑候选</option><option value="resume_sent">已续跑</option><option value="resume_action_failed">续跑失败</option><option value="silent_manual_attention">需要关注</option></select></div>
+              <div class="compact-field"><label for="run-filter-from">开始时间</label><input id="run-filter-from" name="from" type="datetime-local"></div>
+              <div class="compact-field"><label for="run-filter-to">结束时间</label><input id="run-filter-to" name="to" type="datetime-local"></div>
+              <div class="filter-actions"><button class="button" type="submit">筛选记录</button><button class="button ghost" id="reset-run-filters" type="button">重置</button></div>
+            </form>
+            <div class="table-wrap" id="runs-table-wrap" hidden>
+              <table class="data-table runs-table">
+                <thead><tr><th style="width: 13%">时间</th><th style="width: 14%">会话</th><th style="width: 11%">渠道状态</th><th style="width: 7%">HTTP</th><th style="width: 11%">会话状态</th><th style="width: 10%">处理结果</th><th style="width: 8%">尝试 / 耗时</th><th style="width: 26%">原因</th></tr></thead>
+                <tbody id="runs-body"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="runs-empty" data-view-state="empty">
               <div class="empty-state-inner">
                 <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg></span>
                 <h3>还没有执行记录</h3>
@@ -332,15 +445,21 @@
         <section class="tab-panel" id="panel-channels" role="tabpanel" aria-labelledby="tab-channels" tabindex="0" hidden>
           <section class="board" aria-labelledby="channels-heading">
             <div class="board-toolbar">
-              <div class="board-title"><h2 id="channels-heading">监控渠道</h2><span>0 个渠道</span></div>
-              <span class="board-meta">密钥仅保存在本机</span>
+              <div class="board-title"><h2 id="channels-heading">监控渠道</h2><span id="channels-count">0 个渠道</span></div>
+              <div class="toolbar-actions"><span class="board-meta">密钥仅保存在本机</span><button class="button primary" id="add-channel" type="button">添加渠道</button></div>
             </div>
-            <div class="column-head channel-columns" aria-hidden="true"><span>渠道</span><span>Base URL</span><span>模型</span><span>状态</span><span>最后测试</span><span>操作</span></div>
-            <div class="empty-state" data-view-state="empty">
+            <div class="table-wrap" id="channels-table-wrap" hidden>
+              <table class="data-table">
+                <thead><tr><th style="width: 16%">渠道</th><th style="width: 23%">Base URL</th><th style="width: 13%">模型</th><th style="width: 12%">状态</th><th style="width: 16%">最后测试</th><th style="width: 20%; text-align: right">操作</th></tr></thead>
+                <tbody id="channels-body"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="channels-empty" data-view-state="empty">
               <div class="empty-state-inner">
                 <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1v.1h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4h-.1v-4H3A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1v-.1h4V3a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.3.72.6 1 .3.25.65.38 1 .4h.1v4H21a1.7 1.7 0 0 0-1.6.6Z"/></svg></span>
                 <h3>还没有监控渠道</h3>
                 <p>渠道用于确认兼容 API 是否可用；保存后才能为会话选择对应的健康检查入口。</p>
+                <button class="text-action" type="button" id="empty-add-channel">添加第一个监控渠道</button>
               </div>
             </div>
           </section>
@@ -349,9 +468,93 @@
     </main>
   </div>
 
+  <dialog id="session-dialog" aria-labelledby="session-dialog-title">
+    <form id="session-form" novalidate>
+      <div class="dialog-head"><h2 id="session-dialog-title">添加监控会话</h2><button class="dialog-close" type="button" data-close-dialog="session-dialog" aria-label="关闭会话编辑">×</button></div>
+      <div class="dialog-body">
+        <input id="session-id" name="id" type="hidden">
+        <div class="field"><label for="session-name">会话名称</label><p class="field-help">使用你能快速识别的任务名称。</p><input id="session-name" name="name" maxlength="120" autocomplete="off" required></div>
+        <div class="local-picker">
+          <div><strong>从本机 Codex 选择</strong><p class="field-help">仅在点击后读取本机最近会话，选择不会自动加入监控。</p></div>
+          <button class="button" id="load-local-sessions" type="button">读取本地会话</button>
+          <div class="field" id="local-session-field" hidden><label for="local-session-select">本地会话</label><select id="local-session-select"><option value="">请选择</option></select></div>
+        </div>
+        <div class="field"><label for="session-thread-id">会话 ID</label><p class="field-help">Codex 会话 UUID，也可以手动粘贴。</p><input class="mono" id="session-thread-id" name="threadId" autocomplete="off" required aria-describedby="session-thread-error"><p class="field-error" id="session-thread-error"></p></div>
+        <div class="field"><label for="session-channel-id">监控渠道</label><select id="session-channel-id" name="channelId" required aria-describedby="session-channel-error"><option value="">请选择监控渠道</option></select><p class="field-error" id="session-channel-error"></p></div>
+        <div class="field-pair">
+          <div class="field"><label for="session-interval">检查周期（分钟）</label><p class="field-help" id="interval-help">留空使用全局默认值。</p><input id="session-interval" name="intervalMinutes" type="number" min="5" step="1" inputmode="numeric"></div>
+          <div class="field"><label for="session-enabled">监控状态</label><div class="checkbox-field"><input id="session-enabled" name="enabled" type="checkbox" checked><label for="session-enabled">启用该会话</label></div></div>
+        </div>
+        <div class="field"><label for="session-prompt">续跑提示词</label><p class="field-help">仅在渠道可用且确认异常中断时发送。</p><textarea id="session-prompt" name="resumePrompt" maxlength="4000" required>继续当前开发任务</textarea></div>
+        <p class="form-error" id="session-form-error" role="alert"></p>
+        <div class="dialog-actions"><button class="button" type="button" data-close-dialog="session-dialog">取消</button><button class="button primary" id="save-session" type="submit">保存会话</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="channel-dialog" aria-labelledby="channel-dialog-title">
+    <form id="channel-form" novalidate>
+      <div class="dialog-head"><h2 id="channel-dialog-title">添加监控渠道</h2><button class="dialog-close" type="button" data-close-dialog="channel-dialog" aria-label="关闭渠道编辑">×</button></div>
+      <div class="dialog-body">
+        <input id="channel-id" name="id" type="hidden">
+        <div class="field"><label for="channel-name">渠道名称</label><input id="channel-name" name="name" maxlength="120" autocomplete="off" required></div>
+        <div class="field"><label for="channel-base-url">Base URL</label><p class="field-help">填写 OpenAI 兼容渠道地址，例如 https://api.example.com/v1。</p><input id="channel-base-url" name="baseUrl" type="url" autocomplete="url" required></div>
+        <div class="field"><label for="channel-model">测试模型</label><input id="channel-model" name="model" autocomplete="off" required></div>
+        <div class="field"><label for="channel-api-key">API Key</label><p class="field-help" id="channel-key-help">仅加密保存在本机，不会在页面中回显。</p><input id="channel-api-key" name="apiKey" type="password" autocomplete="new-password" required></div>
+        <div class="field"><label for="channel-probe-url">高级探测 URL（可选）</label><p class="field-help">留空时自动使用 Base URL 下的 /chat/completions。</p><input id="channel-probe-url" name="probeUrlOverride" type="url" autocomplete="off"></div>
+        <div class="field-pair">
+          <div class="field"><label for="channel-timeout">超时（秒）</label><input id="channel-timeout" name="timeoutSeconds" type="number" min="1" max="120" step="1" value="15" inputmode="numeric" required></div>
+          <div class="field"><label for="channel-enabled">渠道状态</label><div class="checkbox-field"><input id="channel-enabled" name="enabled" type="checkbox" checked><label for="channel-enabled">启用该渠道</label></div></div>
+        </div>
+        <p class="form-error" id="channel-form-error" role="alert"></p>
+        <div class="dialog-actions"><button class="button" type="button" data-close-dialog="channel-dialog">取消</button><button class="button primary" id="save-channel" type="submit">保存渠道</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="resume-dialog" aria-labelledby="resume-dialog-title">
+    <div class="dialog-head"><h2 id="resume-dialog-title">开启自动续跑</h2><button class="dialog-close" type="button" data-close-dialog="resume-dialog" aria-label="关闭续跑确认">×</button></div>
+    <div class="dialog-body">
+      <p class="confirm-copy">开启后，只有在监控渠道可用、会话因可恢复异常中断，并且该会话已加入监控目录时，控制台才会发送该会话自己的续跑提示词。</p>
+      <p class="confirm-note">请先使用标题为 watchdog-integration-test 的专用测试会话验证完整链路。不要用正在开发的重要会话做首次发送测试。</p>
+      <p class="form-error" id="resume-form-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button" type="button" data-close-dialog="resume-dialog">保持关闭</button><button class="button primary" id="confirm-resume" type="button">确认开启</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+    <div class="dialog-head"><h2 id="confirm-dialog-title">确认操作</h2><button class="dialog-close" type="button" data-close-dialog="confirm-dialog" aria-label="关闭确认对话框">×</button></div>
+    <div class="dialog-body">
+      <p class="confirm-copy" id="confirm-dialog-copy"></p>
+      <p class="form-error" id="confirm-dialog-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button" type="button" data-close-dialog="confirm-dialog">取消</button><button class="button danger" id="confirm-dialog-action" type="button">确认删除</button></div>
+    </div>
+  </dialog>
+
+  <div class="live-region" id="live-region" aria-live="polite" aria-atomic="true"></div>
+
   <script>
     const tabs = [...document.querySelectorAll('[role="tab"]')];
     const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+    const WATCHDOG_POLL_INTERVAL_MS = 15_000;
+    const WATCHDOG_ENDPOINTS = Object.freeze({
+      status: '/api/watchdog/status',
+      settings: '/api/watchdog/settings',
+      sessions: '/api/watchdog/sessions',
+      channels: '/api/watchdog/channels',
+      runs: '/api/watchdog/runs',
+      localSessions: '/api/watchdog/local-codex-sessions',
+    });
+    const appState = {
+      status: { schedulerRunning: false, schedulerEnabled: true, codexConnected: false, resumeActionsEnabled: false, nextCheckAt: null },
+      settings: { defaultIntervalMinutes: 15, minimumIntervalMinutes: 5 },
+      sessions: [],
+      channels: [],
+      runs: [],
+      localSessions: [],
+      confirmAction: null,
+      toastTimer: null,
+    };
 
     function activateTab(tab, { focus = false } = {}) {
       tabs.forEach(item => {
@@ -361,6 +564,386 @@
       });
       panels.forEach(panel => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
       if (focus) tab.focus();
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    async function apiRequest(path, options = {}) {
+      const response = await fetch(path, {
+        method: options.method || 'GET',
+        headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+      let payload = null;
+      if (response.status !== 204) {
+        const text = await response.text();
+        try { payload = text ? JSON.parse(text) : null; }
+        catch { payload = { message: '服务器返回了无法识别的响应。' }; }
+      }
+      if (!response.ok) {
+        const error = new Error(payload?.message || `请求失败（HTTP ${response.status}）`);
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    }
+
+    function withPendingAction(button, pending, pendingLabel = '处理中…') {
+      if (!button) return;
+      button.setAttribute('aria-busy', String(pending));
+      if (pending) {
+        button.dataset.idleLabel = button.textContent;
+        button.textContent = pendingLabel;
+        button.disabled = true;
+      } else {
+        button.textContent = button.dataset.idleLabel || button.textContent;
+        button.disabled = false;
+        delete button.dataset.idleLabel;
+      }
+    }
+
+    function showToast(message, tone = 'normal') {
+      const region = document.getElementById('live-region');
+      clearTimeout(appState.toastTimer);
+      region.innerHTML = `<div class="toast${tone === 'error' ? ' error' : ''}">${escapeHtml(message)}</div>`;
+      appState.toastTimer = setTimeout(() => { region.innerHTML = ''; }, 4200);
+    }
+
+    function formatDate(value, { compact = false } = {}) {
+      if (!value) return '尚未检查';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return new Intl.DateTimeFormat('zh-CN', compact
+        ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }
+        : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }
+      ).format(date);
+    }
+
+    function sessionStateView(session) {
+      if (!session.enabled) return { label: '已停用', tone: 'neutral' };
+      const views = {
+        running: { label: '运行中', tone: 'success' },
+        idle: { label: '正常空闲', tone: 'neutral' },
+        attention: { label: '需要关注', tone: 'danger' },
+        pending: { label: '等待检查', tone: 'warning' },
+      };
+      return views[session.state] || views.pending;
+    }
+
+    function channelStateView(channel) {
+      if (!channel.enabled) return { label: '已停用', tone: 'neutral' };
+      const views = {
+        healthy: { label: '正常', tone: 'success' },
+        auth_error: { label: '认证异常', tone: 'danger' },
+        rate_limited: { label: '429 限流', tone: 'warning' },
+        upstream_error: { label: channel.lastHttpStatus ? `HTTP ${channel.lastHttpStatus}` : '上游异常', tone: 'warning' },
+        other_http_error: { label: channel.lastHttpStatus ? `HTTP ${channel.lastHttpStatus}` : 'HTTP 异常', tone: 'danger' },
+        network_error: { label: '网络异常', tone: 'danger' },
+        protocol_error: { label: '响应异常', tone: 'danger' },
+      };
+      return views[channel.lastProbeCategory] || { label: '尚未测试', tone: 'neutral' };
+    }
+
+    function decisionView(decision) {
+      if (decision === 'resume_sent') return { label: '已续跑', tone: 'success' };
+      if (decision === 'resume_action_failed') return { label: '续跑失败', tone: 'danger' };
+      if (decision === 'silent_manual_attention') return { label: '需要关注', tone: 'warning' };
+      if (decision === 'resume_candidate_observed') return { label: '静默', tone: 'warning' };
+      if (String(decision || '').startsWith('silent_') || ['retry_waiting', 'sending_in_progress'].includes(decision)) return { label: '静默', tone: 'neutral' };
+      return { label: '需要关注', tone: 'warning' };
+    }
+
+    function sessionName(sessionId) {
+      return appState.sessions.find(item => item.id === sessionId)?.name || '已删除会话';
+    }
+
+    function channelName(channelId) {
+      return appState.channels.find(item => item.id === channelId)?.name || '已删除渠道';
+    }
+
+    function renderStatus() {
+      const enabled = appState.sessions.filter(item => item.enabled).length;
+      const running = appState.sessions.filter(item => item.enabled && item.state === 'running').length;
+      const idle = appState.sessions.filter(item => item.enabled && item.state === 'idle').length;
+      const attention = appState.sessions.filter(item => item.enabled && item.state === 'attention').length;
+      document.getElementById('metric-enabled').textContent = enabled;
+      document.getElementById('metric-running').textContent = running;
+      document.getElementById('metric-idle').textContent = idle;
+      document.getElementById('metric-attention').textContent = attention;
+      document.getElementById('metric-next-check').textContent = appState.status.nextCheckAt ? formatDate(appState.status.nextCheckAt, { compact: true }) : '--:--';
+
+      const resumeEnabled = Boolean(appState.status.resumeActionsEnabled);
+      const resumeControl = document.getElementById('resume-control');
+      resumeControl.dataset.enabled = String(resumeEnabled);
+      resumeControl.setAttribute('aria-pressed', String(resumeEnabled));
+      resumeControl.querySelector('span:last-child').innerHTML = `<strong>${resumeEnabled ? '续跑开启' : '续跑关闭'}</strong> · ${resumeEnabled ? '自动处理' : '只读'}`;
+      document.getElementById('resume-disabled-notice').hidden = resumeEnabled;
+      document.getElementById('scheduler-disabled-notice').hidden = appState.status.schedulerEnabled !== false;
+      document.getElementById('codex-unavailable-notice').hidden = appState.status.codexConnected !== false;
+
+      const sidebarValue = document.querySelector('.sidebar-note-value');
+      sidebarValue.querySelector('.status-dot').className = `status-dot ${resumeEnabled ? 'running' : 'warning'}`;
+      sidebarValue.querySelector('span:last-child').textContent = resumeEnabled ? '已开启' : '安全关闭';
+      const channelHealthy = appState.channels.some(item => item.enabled && item.lastProbeCategory === 'healthy');
+      const sessionKnown = appState.sessions.some(item => item.enabled && ['running', 'idle', 'attention'].includes(item.state));
+      const steps = [...document.querySelectorAll('.rail-step')];
+      steps[0].dataset.state = channelHealthy ? 'done' : 'pending';
+      steps[1].dataset.state = sessionKnown ? 'done' : 'pending';
+      steps[2].dataset.state = appState.runs.length ? 'done' : 'pending';
+    }
+
+    function renderSessionFilters() {
+      const sessionSelect = document.getElementById('run-filter-session');
+      const channelSelect = document.getElementById('run-filter-channel');
+      const sessionValue = sessionSelect.value;
+      const channelValue = channelSelect.value;
+      sessionSelect.innerHTML = '<option value="">全部会话</option>' + appState.sessions.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('');
+      channelSelect.innerHTML = '<option value="">全部渠道</option>' + appState.channels.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('');
+      sessionSelect.value = sessionValue;
+      channelSelect.value = channelValue;
+    }
+
+    function renderSessions() {
+      const loading = document.getElementById('sessions-loading');
+      const empty = document.getElementById('sessions-empty');
+      const wrap = document.getElementById('sessions-table-wrap');
+      loading.hidden = true;
+      document.getElementById('sessions-count').textContent = `${appState.sessions.length} 个会话`;
+      empty.hidden = appState.sessions.length !== 0;
+      wrap.hidden = appState.sessions.length === 0;
+      document.getElementById('sessions-body').innerHTML = appState.sessions.map(session => {
+        const state = sessionStateView(session);
+        const result = session.lastCheckResult ? decisionView(session.lastCheckResult).label : '尚未检查';
+        return `<tr data-session-id="${escapeHtml(session.id)}">
+          <td><span class="status-label" data-tone="${state.tone}"><span class="status-dot" aria-hidden="true"></span>${state.label}</span></td>
+          <td><strong title="${escapeHtml(session.name)}">${escapeHtml(session.name)}</strong><code title="${escapeHtml(session.threadId)}">${escapeHtml(session.threadId)}</code></td>
+          <td><strong>${escapeHtml(channelName(session.channelId))}</strong></td>
+          <td><span class="mono">${escapeHtml(session.effectiveIntervalMinutes)} min</span><code>${session.intervalMinutes ? '单独设置' : '使用全局默认'}</code></td>
+          <td><strong>${escapeHtml(result)}</strong><code>${escapeHtml(formatDate(session.lastCheckedAt, { compact: true }))}</code></td>
+          <td><div class="row-actions"><button class="button small" type="button" data-session-action="check" data-id="${escapeHtml(session.id)}" ${session.enabled ? '' : 'disabled'}>立即检查</button><button class="button small ghost" type="button" data-session-action="toggle" data-id="${escapeHtml(session.id)}">${session.enabled ? '停用' : '启用'}</button><button class="button small ghost" type="button" data-session-action="edit" data-id="${escapeHtml(session.id)}">编辑</button><button class="button small danger" type="button" data-session-action="delete" data-id="${escapeHtml(session.id)}">删除</button></div></td>
+        </tr>`;
+      }).join('');
+      renderSessionFilters();
+      renderStatus();
+    }
+
+    function renderChannels() {
+      const empty = document.getElementById('channels-empty');
+      const wrap = document.getElementById('channels-table-wrap');
+      document.getElementById('channels-count').textContent = `${appState.channels.length} 个渠道`;
+      empty.hidden = appState.channels.length !== 0;
+      wrap.hidden = appState.channels.length === 0;
+      document.getElementById('channels-body').innerHTML = appState.channels.map(channel => {
+        const state = channelStateView(channel);
+        return `<tr data-channel-id="${escapeHtml(channel.id)}">
+          <td><strong title="${escapeHtml(channel.name)}">${escapeHtml(channel.name)}</strong><code>${escapeHtml(channel.apiKeyMasked || '已保存')}</code></td>
+          <td><strong title="${escapeHtml(channel.baseUrl)}">${escapeHtml(channel.baseUrl)}</strong><code title="${escapeHtml(channel.probeUrlOverride || '')}">${escapeHtml(channel.probeUrlOverride || '自动探测地址')}</code></td>
+          <td><strong title="${escapeHtml(channel.model)}">${escapeHtml(channel.model)}</strong><code>${escapeHtml(channel.timeoutSeconds)}s 超时</code></td>
+          <td><span class="status-label" data-tone="${state.tone}"><span class="status-dot" aria-hidden="true"></span>${state.label}</span></td>
+          <td><strong>${escapeHtml(formatDate(channel.lastCheckedAt, { compact: true }))}</strong><code title="${escapeHtml(channel.lastProbeDetail || '')}">${escapeHtml(channel.lastProbeDetail || '等待首次测试')}</code></td>
+          <td><div class="row-actions"><button class="button small" type="button" data-channel-action="probe" data-id="${escapeHtml(channel.id)}" ${channel.enabled ? '' : 'disabled'}>立即测试</button><button class="button small ghost" type="button" data-channel-action="toggle" data-id="${escapeHtml(channel.id)}">${channel.enabled ? '停用' : '启用'}</button><button class="button small ghost" type="button" data-channel-action="edit" data-id="${escapeHtml(channel.id)}">编辑</button><button class="button small danger" type="button" data-channel-action="delete" data-id="${escapeHtml(channel.id)}">删除</button></div></td>
+        </tr>`;
+      }).join('');
+      renderSessionFilters();
+      renderStatus();
+    }
+
+    function renderRuns() {
+      const empty = document.getElementById('runs-empty');
+      const wrap = document.getElementById('runs-table-wrap');
+      document.getElementById('runs-count').textContent = `最近 ${appState.runs.length} 条`;
+      empty.hidden = appState.runs.length !== 0;
+      wrap.hidden = appState.runs.length === 0;
+      document.getElementById('runs-body').innerHTML = appState.runs.map(run => {
+        const channel = channelStateView({ enabled: true, lastProbeCategory: run.channelStatus, lastHttpStatus: run.httpStatus });
+        const decision = decisionView(run.decision);
+        return `<tr>
+          <td class="mono">${escapeHtml(formatDate(run.startedAt))}</td>
+          <td><strong>${escapeHtml(sessionName(run.sessionId))}</strong><code title="${escapeHtml(run.turnId || '')}">${escapeHtml(run.turnId || '无活动 turn')}</code></td>
+          <td><span class="status-label" data-tone="${channel.tone}"><span class="status-dot" aria-hidden="true"></span>${channel.label}</span></td>
+          <td class="mono">${escapeHtml(run.httpStatus ?? '--')}</td>
+          <td>${escapeHtml(run.sessionState || 'unknown')}</td>
+          <td><span class="decision-label" data-tone="${decision.tone}">${decision.label}</span></td>
+          <td><span class="mono">${run.resumeAttempt ? `第 ${escapeHtml(run.resumeAttempt)} 次` : '--'}<br>${run.durationMs != null ? `${escapeHtml(run.durationMs)} ms` : '--'}</span></td>
+          <td><span class="row-detail" title="${escapeHtml(run.detail || '')}">${escapeHtml(run.detail || '未记录详细原因')}</span></td>
+        </tr>`;
+      }).join('');
+      renderStatus();
+    }
+
+    function renderAll() {
+      renderChannels();
+      renderSessions();
+      renderRuns();
+      document.getElementById('interval-help').textContent = `留空使用全局默认值 ${appState.settings.defaultIntervalMinutes} 分钟；最短 ${appState.settings.minimumIntervalMinutes} 分钟。`;
+    }
+
+    function closeDialog(dialogId) {
+      const dialog = document.getElementById(dialogId);
+      if (dialog.open) dialog.close();
+    }
+
+    function openSessionDialog(session = null) {
+      const form = document.getElementById('session-form');
+      form.reset();
+      clearFormErrors(form);
+      document.getElementById('session-dialog-title').textContent = session ? '编辑监控会话' : '添加监控会话';
+      document.getElementById('session-id').value = session?.id || '';
+      document.getElementById('session-name').value = session?.name || '';
+      document.getElementById('session-thread-id').value = session?.threadId || '';
+      document.getElementById('session-interval').value = session?.intervalMinutes ?? '';
+      document.getElementById('session-prompt').value = session?.resumePrompt || '继续当前开发任务';
+      document.getElementById('session-enabled').checked = session?.enabled ?? true;
+      const channelSelect = document.getElementById('session-channel-id');
+      channelSelect.innerHTML = '<option value="">请选择监控渠道</option>' + appState.channels.map(channel => `<option value="${escapeHtml(channel.id)}" ${channel.enabled ? '' : 'disabled'}>${escapeHtml(channel.name)}${channel.enabled ? '' : '（已停用）'}</option>`).join('');
+      channelSelect.value = session?.channelId || '';
+      document.getElementById('local-session-field').hidden = true;
+      document.getElementById('local-session-select').innerHTML = '<option value="">请选择</option>';
+      document.getElementById('session-dialog').showModal();
+      document.getElementById('session-name').focus();
+    }
+
+    function openChannelDialog(channel = null) {
+      const form = document.getElementById('channel-form');
+      form.reset();
+      clearFormErrors(form);
+      document.getElementById('channel-dialog-title').textContent = channel ? '编辑监控渠道' : '添加监控渠道';
+      document.getElementById('channel-id').value = channel?.id || '';
+      document.getElementById('channel-name').value = channel?.name || '';
+      document.getElementById('channel-base-url').value = channel?.baseUrl || '';
+      document.getElementById('channel-model').value = channel?.model || '';
+      document.getElementById('channel-api-key').value = '';
+      document.getElementById('channel-api-key').required = !channel;
+      document.getElementById('channel-key-help').textContent = channel ? '已保存。留空表示继续使用现有密钥。' : '仅加密保存在本机，不会在页面中回显。';
+      document.getElementById('channel-probe-url').value = channel?.probeUrlOverride || '';
+      document.getElementById('channel-timeout').value = channel?.timeoutSeconds || 15;
+      document.getElementById('channel-enabled').checked = channel?.enabled ?? true;
+      document.getElementById('channel-dialog').showModal();
+      document.getElementById('channel-name').focus();
+    }
+
+    function clearFormErrors(form) {
+      form.querySelectorAll('[aria-invalid="true"]').forEach(field => field.removeAttribute('aria-invalid'));
+      form.querySelectorAll('.field-error, .form-error').forEach(node => { node.textContent = ''; });
+    }
+
+    function setFieldError(fieldId, errorId, message) {
+      const field = document.getElementById(fieldId);
+      field.setAttribute('aria-invalid', 'true');
+      document.getElementById(errorId).textContent = message;
+      return field;
+    }
+
+    function validateSessionForm() {
+      const form = document.getElementById('session-form');
+      clearFormErrors(form);
+      const firstCandidates = [];
+      const thread = document.getElementById('session-thread-id').value.trim();
+      const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+      if (!thread || !uuid.test(thread)) firstCandidates.push(setFieldError('session-thread-id', 'session-thread-error', '会话 ID 必须是有效的 UUID。'));
+      if (!document.getElementById('session-channel-id').value) firstCandidates.push(setFieldError('session-channel-id', 'session-channel-error', '请选择一个已启用的监控渠道。'));
+      const interval = document.getElementById('session-interval').value;
+      if (interval && Number(interval) < Number(appState.settings.minimumIntervalMinutes || 5)) {
+        document.getElementById('session-form-error').textContent = `检查周期不能短于 ${appState.settings.minimumIntervalMinutes || 5} 分钟。`;
+        document.getElementById('session-interval').setAttribute('aria-invalid', 'true');
+        firstCandidates.push(document.getElementById('session-interval'));
+      }
+      if (!form.checkValidity()) {
+        const invalid = form.querySelector(':invalid');
+        if (invalid) firstCandidates.push(invalid);
+      }
+      if (firstCandidates.length) {
+        firstCandidates[0].focus();
+        return false;
+      }
+      return true;
+    }
+
+    function channelPayload() {
+      const id = document.getElementById('channel-id').value;
+      const payload = {
+        name: document.getElementById('channel-name').value.trim(),
+        baseUrl: document.getElementById('channel-base-url').value.trim(),
+        model: document.getElementById('channel-model').value.trim(),
+        probeUrlOverride: document.getElementById('channel-probe-url').value.trim() || null,
+        timeoutSeconds: Number(document.getElementById('channel-timeout').value),
+        enabled: document.getElementById('channel-enabled').checked,
+      };
+      const key = document.getElementById('channel-api-key').value.trim();
+      if (!id || key) payload.apiKey = key;
+      return payload;
+    }
+
+    async function refreshSessionsAndStatus() {
+      [appState.status, appState.sessions] = await Promise.all([
+        apiRequest(WATCHDOG_ENDPOINTS.status),
+        apiRequest(WATCHDOG_ENDPOINTS.sessions),
+      ]);
+      renderSessions();
+    }
+
+    async function refreshChannels() {
+      appState.channels = await apiRequest(WATCHDOG_ENDPOINTS.channels);
+      renderChannels();
+    }
+
+    function runFilterQuery() {
+      const params = new URLSearchParams({ limit: '100' });
+      const form = document.getElementById('runs-filter-form');
+      for (const name of ['sessionId', 'channelId', 'decision']) {
+        const value = form.elements[name].value;
+        if (value) params.set(name, value);
+      }
+      for (const name of ['from', 'to']) {
+        const value = form.elements[name].value;
+        if (value) params.set(name, new Date(value).toISOString().replace('.000Z', 'Z'));
+      }
+      return params.toString();
+    }
+
+    async function refreshRuns() {
+      appState.runs = await apiRequest(`${WATCHDOG_ENDPOINTS.runs}?${runFilterQuery()}`);
+      renderRuns();
+    }
+
+    async function loadInitial() {
+      try {
+        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs] = await Promise.all([
+          apiRequest(WATCHDOG_ENDPOINTS.status),
+          apiRequest(WATCHDOG_ENDPOINTS.settings),
+          apiRequest(WATCHDOG_ENDPOINTS.channels),
+          apiRequest(WATCHDOG_ENDPOINTS.sessions),
+          apiRequest(`${WATCHDOG_ENDPOINTS.runs}?limit=100`),
+        ]);
+        renderAll();
+      } catch (error) {
+        document.getElementById('sessions-loading').hidden = true;
+        document.getElementById('sessions-empty').hidden = false;
+        document.getElementById('codex-unavailable-notice').hidden = false;
+        showToast(error.message || '会话监控数据加载失败。', 'error');
+      }
+    }
+
+    async function pollWatchdogOverview() {
+      if (document.hidden) return;
+      try { await refreshSessionsAndStatus(); }
+      catch { /* Background polling stays silent; the next successful poll repairs state. */ }
+    }
+
+    function askForConfirmation({ title, copy, actionLabel, action }) {
+      appState.confirmAction = action;
+      document.getElementById('confirm-dialog-title').textContent = title;
+      document.getElementById('confirm-dialog-copy').textContent = copy;
+      document.getElementById('confirm-dialog-action').textContent = actionLabel;
+      document.getElementById('confirm-dialog-error').textContent = '';
+      document.getElementById('confirm-dialog').showModal();
     }
 
     tabs.forEach((tab, index) => {
@@ -379,6 +962,226 @@
         if (target) activateTab(target, { focus: true });
       });
     });
+
+    document.querySelectorAll('[data-close-dialog]').forEach(button => {
+      button.addEventListener('click', () => closeDialog(button.dataset.closeDialog));
+    });
+
+    document.querySelectorAll('dialog').forEach(dialog => {
+      dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+    });
+
+    document.getElementById('add-session').addEventListener('click', () => openSessionDialog());
+    document.getElementById('add-channel').addEventListener('click', () => openChannelDialog());
+    document.getElementById('empty-add-channel').addEventListener('click', () => openChannelDialog());
+
+    async function loadLocalSessions(event) {
+      const button = event.currentTarget;
+      withPendingAction(button, true, '正在读取…');
+      document.getElementById('session-form-error').textContent = '';
+      try {
+        appState.localSessions = await apiRequest(`${WATCHDOG_ENDPOINTS.localSessions}?limit=50`);
+        const select = document.getElementById('local-session-select');
+        select.innerHTML = '<option value="">请选择</option>' + appState.localSessions.map(item => `<option value="${escapeHtml(item.threadId)}">${escapeHtml(item.name || item.threadId)} · ${escapeHtml(item.threadStatus || 'unknown')}</option>`).join('');
+        document.getElementById('local-session-field').hidden = false;
+        if (!appState.localSessions.length) document.getElementById('session-form-error').textContent = '没有读取到可选择的本地 Codex 会话。';
+        else select.focus();
+      } catch (error) {
+        document.getElementById('session-form-error').textContent = error.message;
+      } finally {
+        withPendingAction(button, false);
+      }
+    }
+
+    document.getElementById('load-local-sessions').addEventListener('click', loadLocalSessions);
+
+    document.getElementById('local-session-select').addEventListener('change', event => {
+      const selected = appState.localSessions.find(item => item.threadId === event.target.value);
+      if (!selected) return;
+      document.getElementById('session-thread-id').value = selected.threadId;
+      const name = document.getElementById('session-name');
+      if (!name.value.trim()) name.value = selected.name || selected.threadId;
+    });
+
+    document.getElementById('session-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!validateSessionForm()) return;
+      const id = document.getElementById('session-id').value;
+      const intervalValue = document.getElementById('session-interval').value;
+      const payload = {
+        name: document.getElementById('session-name').value.trim(),
+        threadId: document.getElementById('session-thread-id').value.trim(),
+        channelId: document.getElementById('session-channel-id').value,
+        intervalMinutes: intervalValue ? Number(intervalValue) : null,
+        resumePrompt: document.getElementById('session-prompt').value.trim(),
+        enabled: document.getElementById('session-enabled').checked,
+      };
+      const button = document.getElementById('save-session');
+      withPendingAction(button, true, '正在保存…');
+      document.getElementById('session-form-error').textContent = '';
+      try {
+        await apiRequest(id ? `${WATCHDOG_ENDPOINTS.sessions}/${encodeURIComponent(id)}` : WATCHDOG_ENDPOINTS.sessions, { method: id ? 'PUT' : 'POST', body: payload });
+        closeDialog('session-dialog');
+        await refreshSessionsAndStatus();
+        showToast(id ? '监控会话已更新。' : '监控会话已添加。');
+      } catch (error) {
+        document.getElementById('session-form-error').textContent = error.message;
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
+    document.getElementById('channel-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      clearFormErrors(form);
+      if (!form.checkValidity()) {
+        form.querySelector(':invalid')?.focus();
+        return;
+      }
+      const id = document.getElementById('channel-id').value;
+      const button = document.getElementById('save-channel');
+      withPendingAction(button, true, '正在保存…');
+      try {
+        await apiRequest(id ? `${WATCHDOG_ENDPOINTS.channels}/${encodeURIComponent(id)}` : WATCHDOG_ENDPOINTS.channels, { method: id ? 'PUT' : 'POST', body: channelPayload() });
+        closeDialog('channel-dialog');
+        await refreshChannels();
+        showToast(id ? '监控渠道已更新。' : '监控渠道已添加。');
+      } catch (error) {
+        document.getElementById('channel-form-error').textContent = error.message;
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
+    document.getElementById('sessions-body').addEventListener('click', async event => {
+      const button = event.target.closest('button[data-session-action]');
+      if (!button) return;
+      const session = appState.sessions.find(item => item.id === button.dataset.id);
+      if (!session) return;
+      if (button.dataset.sessionAction === 'edit') return openSessionDialog(session);
+      if (button.dataset.sessionAction === 'delete') {
+        return askForConfirmation({ title: '删除监控会话', copy: `删除“${session.name}”后将停止后续监控，已有执行记录会保留。`, actionLabel: '删除会话', action: async () => {
+          await apiRequest(`${WATCHDOG_ENDPOINTS.sessions}/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+          await refreshSessionsAndStatus();
+          showToast('监控会话已删除。');
+        }});
+      }
+      withPendingAction(button, true, button.dataset.sessionAction === 'check' ? '检查中…' : '更新中…');
+      try {
+        if (button.dataset.sessionAction === 'check') {
+          const run = await apiRequest(`${WATCHDOG_ENDPOINTS.sessions}/${encodeURIComponent(session.id)}/check`, { method: 'POST', body: {} });
+          await Promise.all([refreshSessionsAndStatus(), refreshRuns()]);
+          showToast(`检查完成：${decisionView(run.decision).label}。`);
+        } else if (button.dataset.sessionAction === 'toggle') {
+          await apiRequest(`${WATCHDOG_ENDPOINTS.sessions}/${encodeURIComponent(session.id)}`, { method: 'PUT', body: { enabled: !session.enabled } });
+          await refreshSessionsAndStatus();
+          showToast(session.enabled ? '会话监控已停用。' : '会话监控已启用。');
+        }
+      } catch (error) {
+        showToast(error.message, 'error');
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
+    document.getElementById('channels-body').addEventListener('click', async event => {
+      const button = event.target.closest('button[data-channel-action]');
+      if (!button) return;
+      const channel = appState.channels.find(item => item.id === button.dataset.id);
+      if (!channel) return;
+      if (button.dataset.channelAction === 'edit') return openChannelDialog(channel);
+      if (button.dataset.channelAction === 'delete') {
+        return askForConfirmation({ title: '删除监控渠道', copy: `删除“${channel.name}”后无法恢复。仍被会话使用的渠道会由服务端拒绝删除。`, actionLabel: '删除渠道', action: async () => {
+          await apiRequest(`${WATCHDOG_ENDPOINTS.channels}/${encodeURIComponent(channel.id)}`, { method: 'DELETE' });
+          await refreshChannels();
+          showToast('监控渠道已删除。');
+        }});
+      }
+      withPendingAction(button, true, button.dataset.channelAction === 'probe' ? '测试中…' : '更新中…');
+      try {
+        if (button.dataset.channelAction === 'probe') {
+          const result = await apiRequest(`${WATCHDOG_ENDPOINTS.channels}/${encodeURIComponent(channel.id)}/probe`, { method: 'POST', body: {} });
+          await refreshChannels();
+          showToast(`渠道测试完成：${channelStateView({ enabled: true, lastProbeCategory: result.category, lastHttpStatus: result.httpStatus }).label}。`);
+        } else if (button.dataset.channelAction === 'toggle') {
+          await apiRequest(`${WATCHDOG_ENDPOINTS.channels}/${encodeURIComponent(channel.id)}`, { method: 'PUT', body: { enabled: !channel.enabled } });
+          await refreshChannels();
+          showToast(channel.enabled ? '监控渠道已停用。' : '监控渠道已启用。');
+        }
+      } catch (error) {
+        showToast(error.message, 'error');
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
+    document.getElementById('runs-filter-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = event.submitter;
+      withPendingAction(button, true, '筛选中…');
+      try { await refreshRuns(); }
+      catch (error) { showToast(error.message, 'error'); }
+      finally { withPendingAction(button, false); }
+    });
+
+    document.getElementById('reset-run-filters').addEventListener('click', async event => {
+      document.getElementById('runs-filter-form').reset();
+      withPendingAction(event.currentTarget, true, '重置中…');
+      try { await refreshRuns(); }
+      catch (error) { showToast(error.message, 'error'); }
+      finally { withPendingAction(event.currentTarget, false); }
+    });
+
+    document.getElementById('resume-control').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      if (!appState.status.resumeActionsEnabled) {
+        document.getElementById('resume-form-error').textContent = '';
+        document.getElementById('resume-dialog').showModal();
+        return;
+      }
+      withPendingAction(button, true, '正在关闭…');
+      try {
+        appState.settings = await apiRequest(WATCHDOG_ENDPOINTS.settings, { method: 'PUT', body: { resumeActionsEnabled: false } });
+        appState.status = await apiRequest(WATCHDOG_ENDPOINTS.status);
+        renderStatus();
+        showToast('自动续跑已关闭，监控仍会继续。');
+      } catch (error) { showToast(error.message, 'error'); }
+      finally { withPendingAction(button, false); }
+    });
+
+    document.getElementById('confirm-resume').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      withPendingAction(button, true, '正在开启…');
+      document.getElementById('resume-form-error').textContent = '';
+      try {
+        appState.settings = await apiRequest(WATCHDOG_ENDPOINTS.settings, { method: 'PUT', body: { resumeActionsEnabled: true } });
+        appState.status = await apiRequest(WATCHDOG_ENDPOINTS.status);
+        closeDialog('resume-dialog');
+        renderStatus();
+        showToast('自动续跑已开启。');
+      } catch (error) { document.getElementById('resume-form-error').textContent = error.message; }
+      finally { withPendingAction(button, false); }
+    });
+
+    document.getElementById('confirm-dialog-action').addEventListener('click', async event => {
+      if (!appState.confirmAction) return;
+      const button = event.currentTarget;
+      withPendingAction(button, true, '正在执行…');
+      document.getElementById('confirm-dialog-error').textContent = '';
+      try {
+        await appState.confirmAction();
+        appState.confirmAction = null;
+        closeDialog('confirm-dialog');
+      } catch (error) {
+        document.getElementById('confirm-dialog-error').textContent = error.message;
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
+    loadInitial();
+    setInterval(pollWatchdogOverview, WATCHDOG_POLL_INTERVAL_MS);
   </script>
 </body>
 </html>
