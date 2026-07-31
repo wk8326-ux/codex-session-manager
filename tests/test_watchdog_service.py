@@ -238,6 +238,23 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertNotIn(cached_secret, repr(run))
         self.assertNotIn(cached_secret, repr(self.store.list_monitor_runs({})))
 
+    def test_cached_probe_detail_is_never_persisted(self) -> None:
+        cached_secret = "sk-prefilled-detail-secret"
+        unavailable = ProbeResult("upstream_error", 503, cached_secret, 8, NOW)
+        service, secrets, probe, adapter = make_service(self.store, unavailable)
+        session = self.create_session(secrets)
+        cache = {session["channelId"]: unavailable}
+
+        run = service.check_session(session["id"], NOW, cache)
+
+        self.assertEqual(run["decision"], "silent_channel_unavailable")
+        self.assertEqual(run["detailSanitized"], "channel was unavailable")
+        self.assertEqual(probe.calls, [])
+        self.assertEqual(secrets.unprotected, [])
+        self.assertEqual(adapter.read_calls, [])
+        self.assertNotIn(cached_secret, repr(run))
+        self.assertNotIn(cached_secret, repr(self.store.list_monitor_runs({})))
+
     def test_due_sessions_share_probe_and_fail_independently(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
         other_thread = "019f73f7-38a9-7ed1-b5c5-5a55913a71dd"

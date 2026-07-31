@@ -51,6 +51,7 @@ DECISION_DETAILS = {
     "resume_candidate": "enabled recovery rule matched",
     "resume_candidate_observed": "enabled recovery rule matched",
     "silent_codex_unavailable": "session data was unavailable",
+    "silent_channel_unavailable": "channel was unavailable",
     "silent_manual_attention": "session requires manual attention",
     "silent_no_turn": "session has no turn",
     "silent_session_running": "session is running",
@@ -103,9 +104,7 @@ def _turn_id(value: str | None) -> str | None:
     return value
 
 
-def _decision_detail(decision: str, probe_result: ProbeResult | None) -> str:
-    if decision == "silent_channel_unavailable" and probe_result is not None:
-        return probe_result.detail
+def _decision_detail(decision: str) -> str:
     return DECISION_DETAILS.get(decision, "monitoring decision recorded")
 
 
@@ -115,7 +114,6 @@ def _run_data(
     channel_id: str,
     now: str,
     decision: str,
-    probe_result: ProbeResult | None = None,
     channel_status: str | None = None,
     http_status: int | None = None,
     session_state: str | None = None,
@@ -135,9 +133,7 @@ def _run_data(
         "errorCategory": error_category,
         "decision": decision,
         "durationMs": duration_ms,
-        "detailSanitized": _safe_detail(
-            _decision_detail(decision, probe_result)
-        ),
+        "detailSanitized": _safe_detail(_decision_detail(decision)),
     }
 
 
@@ -240,7 +236,6 @@ class WatchdogService:
                 error_category=_error_category(decision.error_signature),
                 decision=decision.code,
                 duration_ms=result.duration_ms,
-                probe_result=result,
             ),
             next_check_at,
         )
