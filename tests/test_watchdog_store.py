@@ -29,6 +29,87 @@ class WatchdogStoreTests(unittest.TestCase):
             }
         )
 
+    def create_session(self) -> dict:
+        channel = self.create_channel()
+        return self.store.create_session(
+            {
+                "name": "session",
+                "threadId": THREAD_ID,
+                "channelId": channel["id"],
+                "intervalMinutes": 15,
+                "resumePrompt": "continue current task",
+                "enabled": True,
+            }
+        )
+
+    def incident_data(self, session_id: str) -> dict:
+        return {
+            "fingerprint": "incident-fingerprint",
+            "sessionId": session_id,
+            "turnId": "turn-failed",
+            "errorSignature": "httpConnectionFailed:http:503",
+            "firstSeenAt": "2026-07-31T06:05:00Z",
+        }
+
+    def test_begin_incident_atomically_creates_and_claims_once(self) -> None:
+        session = self.create_session()
+        data = self.incident_data(session["id"])
+
+        first = self.store.begin_incident(data, "2026-07-31T06:05:00Z")
+        second = self.store.begin_incident(data, "2026-07-31T06:05:01Z")
+
+        self.assertEqual(first["claimOutcome"], "claimed")
+        self.assertEqual(first["status"], "sending")
+        self.assertEqual(first["attemptCount"], 1)
+        self.assertEqual(second["claimOutcome"], "sending_in_progress")
+        self.assertEqual(second["attemptCount"], 1)
+
+    def test_definite_failure_retries_after_30_then_120_seconds(self) -> None:
+        session = self.create_session()
+        data = self.incident_data(session["id"])
+        self.store.begin_incident(data, "2026-07-31T06:05:00Z")
+        self.store.mark_incident_failed(data["fingerprint"], "send rejected")
+
+        too_early_second = self.store.begin_incident(
+            data, "2026-07-31T06:05:29Z"
+        )
+        second = self.store.begin_incident(data, "2026-07-31T06:05:30Z")
+        self.store.mark_incident_failed(data["fingerprint"], "send rejected")
+        too_early_third = self.store.begin_incident(
+            data, "2026-07-31T06:07:29Z"
+        )
+        third = self.store.begin_incident(data, "2026-07-31T06:07:30Z")
+        self.store.mark_incident_failed(data["fingerprint"], "send rejected")
+        exhausted = self.store.begin_incident(data, "2026-07-31T07:00:00Z")
+
+        self.assertEqual(too_early_second["claimOutcome"], "retry_waiting")
+        self.assertEqual(too_early_second["attemptCount"], 1)
+        self.assertEqual(second["claimOutcome"], "claimed")
+        self.assertEqual(second["attemptCount"], 2)
+        self.assertEqual(too_early_third["claimOutcome"], "retry_waiting")
+        self.assertEqual(too_early_third["attemptCount"], 2)
+        self.assertEqual(third["claimOutcome"], "claimed")
+        self.assertEqual(third["attemptCount"], 3)
+        self.assertEqual(exhausted["claimOutcome"], "manual_attention")
+        self.assertEqual(exhausted["status"], "manual_attention")
+
+    def test_recover_interrupted_sends_requires_manual_attention(self) -> None:
+        session = self.create_session()
+        data = self.incident_data(session["id"])
+        self.store.begin_incident(data, "2026-07-31T06:05:00Z")
+
+        recovered = self.store.recover_interrupted_sends(
+            "2026-07-31T06:06:00Z"
+        )
+        incident = self.store.get_incident(data["fingerprint"])
+        next_claim = self.store.begin_incident(data, "2026-07-31T07:00:00Z")
+
+        self.assertEqual(recovered, 1)
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "manual_attention")
+        self.assertEqual(incident["resolvedAt"], "2026-07-31T06:06:00Z")
+        self.assertEqual(next_claim["claimOutcome"], "manual_attention")
+
     def test_defaults_and_recovery_rules_are_seeded_once(self) -> None:
         settings = self.store.get_settings()
 

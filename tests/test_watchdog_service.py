@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
 from watchdog.channels import ProbeResult
+from watchdog.codex_adapter import (
+    CodexProtocolError,
+    DefiniteSendFailure,
+    UncertainSendFailure,
+)
 from watchdog.models import SessionSnapshot, TurnSnapshot
 from watchdog.service import WatchdogService
 from watchdog.store import WatchdogStore
@@ -32,18 +39,21 @@ class MemorySecretStore:
 
 
 class FakeProbe:
-    def __init__(self, result: ProbeResult) -> None:
+    def __init__(self, result: ProbeResult | list[ProbeResult]) -> None:
         self.result = result
         self.calls = []
 
     def __call__(self, config):
         self.calls.append(config)
+        if isinstance(self.result, list):
+            return self.result.pop(0)
         return self.result
 
 
 class FakeAdapter:
-    def __init__(self, snapshot: object = None) -> None:
+    def __init__(self, snapshot: object = None, start_results: list[object] | None = None) -> None:
         self.snapshot = snapshot
+        self.start_results = list(start_results or [])
         self.read_calls: list[str] = []
         self.start_calls: list[tuple[str, str]] = []
 
@@ -60,7 +70,28 @@ class FakeAdapter:
 
     def start_turn(self, thread_id: str, prompt: str) -> str:
         self.start_calls.append((thread_id, prompt))
-        raise AssertionError("Task 6 must never start a turn")
+        if not self.start_results:
+            raise AssertionError("start_turn was not expected")
+        result = self.start_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        if not isinstance(result, str):
+            raise AssertionError("fake start result must be a turn id or exception")
+        return result
+
+
+class BlockingAdapter(FakeAdapter):
+    def __init__(self, snapshot: SessionSnapshot) -> None:
+        super().__init__(snapshot)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def start_turn(self, thread_id: str, prompt: str) -> str:
+        self.start_calls.append((thread_id, prompt))
+        self.entered.set()
+        if not self.release.wait(timeout=2):
+            raise AssertionError("test did not release blocked start_turn")
+        return "turn-new"
 
 
 def failed_snapshot(thread_id: str = THREAD_ID) -> SessionSnapshot:
@@ -83,10 +114,11 @@ def make_service(
     store: WatchdogStore,
     probe_result: ProbeResult,
     snapshot: object = None,
+    start_results: list[object] | None = None,
 ) -> tuple[WatchdogService, MemorySecretStore, FakeProbe, FakeAdapter]:
     secrets = MemorySecretStore()
     probe = FakeProbe(probe_result)
-    adapter = FakeAdapter(snapshot)
+    adapter = FakeAdapter(snapshot, start_results)
     service = WatchdogService(store, secrets, probe, adapter)
     return service, secrets, probe, adapter
 
@@ -165,6 +197,228 @@ class WatchdogServiceTests(unittest.TestCase):
         updated = self.store.get_session(session["id"])
         self.assertIsNotNone(updated)
         self.assertEqual(updated["nextCheckAt"], "2026-07-31T06:20:00Z")
+
+    def test_same_incident_is_sent_once_then_silent_already_handled(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-new"]
+        )
+        session = self.create_session(secrets)
+
+        first = service.check_session(session["id"], NOW)
+        second = service.check_session(session["id"], "2026-07-31T06:05:01Z")
+
+        self.assertEqual(first["decision"], "resume_sent")
+        self.assertEqual(first["resumeAttempt"], 1)
+        self.assertEqual(second["decision"], "silent_already_handled")
+        self.assertEqual(adapter.start_calls, [(THREAD_ID, "continue current task")])
+
+    def test_start_turn_result_is_not_persisted_in_incident_or_run_detail(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        sensitive_turn_id = f"turn-new-{API_KEY}"
+        service, secrets, _probe, _adapter = make_service(
+            self.store, healthy, failed_snapshot(), [sensitive_turn_id]
+        )
+        session = self.create_session(secrets)
+
+        run = service.check_session(session["id"], NOW)
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertEqual(run["decision"], "resume_sent")
+        self.assertNotIn(API_KEY, repr(run))
+        self.assertNotIn(API_KEY, repr(incident))
+
+    def test_definite_send_failures_retry_at_most_three_times(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [
+                DefiniteSendFailure("rejected one"),
+                DefiniteSendFailure("rejected two"),
+                DefiniteSendFailure("rejected three"),
+            ],
+        )
+        session = self.create_session(secrets)
+
+        runs = [
+            service.check_session(session["id"], "2026-07-31T06:05:00Z"),
+            service.check_session(session["id"], "2026-07-31T06:05:29Z"),
+            service.check_session(session["id"], "2026-07-31T06:05:30Z"),
+            service.check_session(session["id"], "2026-07-31T06:07:29Z"),
+            service.check_session(session["id"], "2026-07-31T06:07:30Z"),
+            service.check_session(session["id"], "2026-07-31T07:00:00Z"),
+        ]
+
+        self.assertEqual(
+            [run["decision"] for run in runs],
+            [
+                "resume_action_failed",
+                "retry_waiting",
+                "resume_action_failed",
+                "retry_waiting",
+                "resume_action_failed",
+                "silent_manual_attention",
+            ],
+        )
+        self.assertEqual([run["resumeAttempt"] for run in runs], [1, 1, 2, 2, 3, 3])
+        self.assertEqual(len(adapter.start_calls), 3)
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "manual_attention")
+
+    def test_uncertain_send_failure_is_never_retried(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [UncertainSendFailure(f"unknown outcome {API_KEY}")],
+        )
+        session = self.create_session(secrets)
+
+        first = service.check_session(session["id"], NOW)
+        second = service.check_session(session["id"], "2026-07-31T07:00:00Z")
+
+        self.assertEqual(first["decision"], "resume_action_failed")
+        self.assertEqual(second["decision"], "silent_manual_attention")
+        self.assertEqual(len(adapter.start_calls), 1)
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "manual_attention")
+        self.assertNotIn(API_KEY, repr(incident))
+        self.assertNotIn(API_KEY, repr(self.store.list_monitor_runs({})))
+
+    def test_protocol_error_requires_manual_attention_without_retry(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [CodexProtocolError("malformed turn/start response")],
+        )
+        session = self.create_session(secrets)
+
+        first = service.check_session(session["id"], NOW)
+        second = service.check_session(session["id"], "2026-07-31T07:00:00Z")
+
+        self.assertEqual(first["decision"], "resume_action_failed")
+        self.assertEqual(second["decision"], "silent_manual_attention")
+        self.assertEqual(len(adapter.start_calls), 1)
+
+    def test_service_startup_recovers_stale_sending_incident(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        secrets = MemorySecretStore()
+        session = self.create_session(secrets)
+        signature = "httpConnectionFailed:http:503"
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0{signature}".encode()
+        ).hexdigest()
+        self.store.begin_incident(
+            {
+                "fingerprint": fingerprint,
+                "sessionId": session["id"],
+                "turnId": "turn-failed",
+                "errorSignature": "http_status",
+                "firstSeenAt": NOW,
+            },
+            NOW,
+        )
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        adapter = FakeAdapter(failed_snapshot(), ["turn-must-not-start"])
+
+        service = WatchdogService(
+            self.store,
+            secrets,
+            FakeProbe(healthy),
+            adapter,
+            now_provider=lambda: "2026-07-31T06:06:00Z",
+        )
+        run = service.check_session(session["id"], "2026-07-31T07:00:00Z")
+
+        self.assertEqual(run["decision"], "silent_manual_attention")
+        self.assertEqual(adapter.start_calls, [])
+        incident = self.store.get_incident(fingerprint)
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "manual_attention")
+        self.assertEqual(incident["resolvedAt"], "2026-07-31T06:06:00Z")
+
+    def test_retry_reprobes_when_cached_health_is_older_than_60_seconds(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult(
+            "healthy", 200, "channel responded normally", 8, "2026-07-31T06:05:00Z"
+        )
+        unavailable = ProbeResult(
+            "upstream_error", 503, "upstream unavailable", 9, "2026-07-31T06:07:30Z"
+        )
+        secrets = MemorySecretStore()
+        probe = FakeProbe([healthy, unavailable])
+        adapter = FakeAdapter(
+            failed_snapshot(),
+            [DefiniteSendFailure("first"), DefiniteSendFailure("second")],
+        )
+        service = WatchdogService(self.store, secrets, probe, adapter)
+        session = self.create_session(secrets)
+        cache: dict[str, ProbeResult] = {}
+
+        first = service.check_session(session["id"], "2026-07-31T06:05:00Z", cache)
+        second = service.check_session(session["id"], "2026-07-31T06:05:30Z", cache)
+        third = service.check_session(session["id"], "2026-07-31T06:07:30Z", cache)
+
+        self.assertEqual(first["decision"], "resume_action_failed")
+        self.assertEqual(second["decision"], "resume_action_failed")
+        self.assertEqual(third["decision"], "silent_channel_unavailable")
+        self.assertEqual(len(probe.calls), 2)
+        self.assertEqual(len(adapter.start_calls), 2)
+
+    def test_concurrent_checks_start_the_same_incident_once(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        secrets = MemorySecretStore()
+        adapter = BlockingAdapter(failed_snapshot())
+        service = WatchdogService(self.store, secrets, FakeProbe(healthy), adapter)
+        session = self.create_session(secrets)
+        runs: list[dict] = []
+        errors: list[BaseException] = []
+
+        def check() -> None:
+            try:
+                runs.append(service.check_session(session["id"], NOW))
+            except BaseException as error:
+                errors.append(error)
+
+        first = threading.Thread(target=check)
+        second = threading.Thread(target=check)
+        first.start()
+        self.assertTrue(adapter.entered.wait(timeout=1))
+        second.start()
+        second.join(timeout=2)
+        adapter.release.set()
+        first.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertCountEqual(
+            [run["decision"] for run in runs],
+            ["resume_sent", "sending_in_progress"],
+        )
+        self.assertEqual(adapter.start_calls, [(THREAD_ID, "continue current task")])
 
     def test_error_signature_is_reduced_before_audit_persistence(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)

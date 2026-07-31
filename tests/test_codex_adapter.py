@@ -11,10 +11,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from watchdog.codex_adapter import (
+    CodexAdapterError,
     CodexAppServerAdapter,
     CodexProtocolError,
+    DefiniteSendFailure,
     RpcTransport,
     StdioJsonRpcClient,
+    UncertainSendFailure,
     _codex_executable,
 )
 
@@ -161,6 +164,34 @@ class CodexAdapterTests(unittest.TestCase):
         params = transport.calls[0][1]
         self.assertNotIn("approvalPolicy", params)
         self.assertNotIn("approvalsReviewer", params)
+
+    def test_start_turn_timeout_or_eof_is_an_uncertain_send_failure(self) -> None:
+        class FailingTransport:
+            def __init__(self, error: BaseException) -> None:
+                self.error = error
+
+            def request(self, method: str, params: dict) -> dict:
+                raise self.error
+
+            def close(self) -> None:
+                return
+
+        for error in (TimeoutError("late"), EOFError("closed")):
+            with self.subTest(error=type(error).__name__):
+                with self.assertRaises(UncertainSendFailure):
+                    CodexAppServerAdapter(FailingTransport(error)).start_turn(
+                        THREAD_ID, "continue"
+                    )
+
+    def test_malformed_turn_start_response_is_a_protocol_error(self) -> None:
+        adapter = CodexAppServerAdapter(FakeTransport({"turn/start": {}}))
+
+        with self.assertRaises(CodexProtocolError) as raised:
+            adapter.start_turn(THREAD_ID, "continue")
+
+        self.assertIsInstance(raised.exception, CodexAdapterError)
+        self.assertNotIsInstance(raised.exception, DefiniteSendFailure)
+        self.assertNotIsInstance(raised.exception, UncertainSendFailure)
 
     def test_read_thread_rejects_malformed_protocol_responses(self) -> None:
         malformed = (
@@ -400,7 +431,7 @@ class StdioJsonRpcClientTests(unittest.TestCase):
         self.assertNotIn("acceptForSession", repr(responses))
 
     def test_request_times_out_and_close_terminates_only_owned_child(self) -> None:
-        with self.assertRaises(TimeoutError):
+        with self.assertRaises(UncertainSendFailure):
             self.client.request("thread/read", {"threadId": THREAD_ID}, timeout=0.02)
 
         self.client.close()
@@ -408,6 +439,31 @@ class StdioJsonRpcClientTests(unittest.TestCase):
         self.assertTrue(self.process.stdin.closed)
         self.assertTrue(self.process.terminated)
         self.assertFalse(self.process.killed)
+
+    def test_explicit_json_rpc_error_is_a_definite_failure(self) -> None:
+        errors: list[BaseException] = []
+
+        def request() -> None:
+            try:
+                self.client.request("turn/start", {"threadId": THREAD_ID})
+            except BaseException as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=request)
+        worker.start()
+        self.wait_for_messages(3)
+        request_id = self.process.stdin.messages[2]["id"]
+        self.process.stdout.push(
+            {
+                "id": request_id,
+                "error": {"code": -32602, "message": "invalid params"},
+            }
+        )
+        worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], DefiniteSendFailure)
 
 
 class WindowsCommandResolutionTests(unittest.TestCase):

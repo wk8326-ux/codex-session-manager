@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 
 from .channels import ChannelConfig, ProbeResult
+from .codex_adapter import CodexAdapterError, DefiniteSendFailure
 from .decision import Decision, DecisionInput, decide
 from .models import SessionSnapshot
 from .secrets import SecretStore
@@ -13,6 +15,9 @@ from .store import WatchdogStore
 
 class SessionAdapter(Protocol):
     def read_thread(self, thread_id: str) -> SessionSnapshot:
+        raise NotImplementedError
+
+    def start_turn(self, thread_id: str, prompt: str) -> str:
         raise NotImplementedError
 
 
@@ -59,6 +64,11 @@ TURN_ID = re.compile(
 DECISION_DETAILS = {
     "resume_candidate": "enabled recovery rule matched",
     "resume_candidate_observed": "enabled recovery rule matched",
+    "resume_sent": "resume request was accepted",
+    "resume_action_failed": "resume request was rejected",
+    "silent_already_handled": "incident was already handled",
+    "sending_in_progress": "incident send is already in progress",
+    "retry_waiting": "incident retry is waiting",
     "silent_codex_unavailable": "session data was unavailable",
     "silent_channel_unavailable": "channel was unavailable",
     "silent_manual_attention": "session requires manual attention",
@@ -76,6 +86,10 @@ def _add_minutes(value: str, minutes: int) -> str:
         tzinfo=timezone.utc
     )
     return (current + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _safe_detail(detail: object, api_key: str = "") -> str:
@@ -133,6 +147,18 @@ def _normalize_probe_result(result: ProbeResult, now: str) -> ProbeResult:
     )
 
 
+def _healthy_probe_is_fresh(result: ProbeResult, now: str) -> bool:
+    if result.category != "healthy":
+        return True
+    try:
+        checked = datetime.strptime(result.checked_at, "%Y-%m-%dT%H:%M:%SZ")
+        current = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return False
+    age = (current - checked).total_seconds()
+    return 0 <= age <= 60
+
+
 def _session_state(value: str | None) -> str:
     return value if value in SESSION_STATES else "unknown"
 
@@ -147,6 +173,13 @@ def _decision_detail(decision: str) -> str:
     return DECISION_DETAILS.get(decision, "monitoring decision recorded")
 
 
+def _incident_fingerprint(
+    session_id: str, turn_id: str, error_signature: str
+) -> str:
+    value = f"{session_id}\0{turn_id}\0{error_signature}".encode("utf-8")
+    return hashlib.sha256(value).hexdigest()
+
+
 def _run_data(
     *,
     session_id: str,
@@ -159,6 +192,7 @@ def _run_data(
     turn_id: str | None = None,
     error_category: str = "",
     duration_ms: int | None = None,
+    resume_attempt: int | None = None,
 ) -> dict:
     return {
         "sessionId": session_id,
@@ -171,6 +205,7 @@ def _run_data(
         "turnId": _turn_id(turn_id),
         "errorCategory": error_category,
         "decision": decision,
+        "resumeAttempt": resume_attempt,
         "durationMs": duration_ms,
         "detailSanitized": _safe_detail(_decision_detail(decision)),
     }
@@ -185,11 +220,14 @@ class WatchdogService:
         secret_store: SecretStore,
         probe: Probe,
         adapter: SessionAdapter,
+        *,
+        now_provider: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
         self._secret_store = secret_store
         self._probe = probe
         self._adapter = adapter
+        self._store.recover_interrupted_sends((now_provider or _utc_now)())
 
     def _probe_channel(self, channel: dict, now: str) -> ProbeResult:
         api_key = ""
@@ -235,7 +273,7 @@ class WatchdogService:
             raise ValueError("API channel is missing or disabled")
 
         result = cache.get(channel["id"])
-        if result is None:
+        if result is None or not _healthy_probe_is_fresh(result, now):
             result = self._probe_channel(channel, now)
         result = _normalize_probe_result(result, now)
         cache[channel["id"]] = result
@@ -259,6 +297,57 @@ class WatchdogService:
             )
 
         turn = snapshot.latest_turn if snapshot is not None else None
+        resume_attempt: int | None = None
+        if (
+            decision.code == "resume_candidate"
+            and settings["resumeActionsEnabled"]
+            and turn is not None
+        ):
+            fingerprint = _incident_fingerprint(
+                session["id"], turn.id, decision.error_signature
+            )
+            incident = self._store.begin_incident(
+                {
+                    "fingerprint": fingerprint,
+                    "sessionId": session["id"],
+                    "turnId": turn.id,
+                    "errorSignature": _error_category(decision.error_signature),
+                    "firstSeenAt": now,
+                },
+                now,
+            )
+            resume_attempt = incident["attemptCount"] or None
+            claim_outcome = incident["claimOutcome"]
+            if claim_outcome == "claimed":
+                try:
+                    new_turn_id = self._adapter.start_turn(
+                        session["threadId"], session["resumePrompt"]
+                    )
+                except DefiniteSendFailure:
+                    self._store.mark_incident_failed(
+                        fingerprint, "resume request was rejected"
+                    )
+                    decision = Decision(
+                        "resume_action_failed", decision.error_signature
+                    )
+                except CodexAdapterError:
+                    self._store.mark_incident_manual_attention(fingerprint, now)
+                    decision = Decision(
+                        "resume_action_failed", decision.error_signature
+                    )
+                else:
+                    self._store.mark_incident_sent(fingerprint, new_turn_id, now)
+                    decision = Decision("resume_sent", decision.error_signature)
+            else:
+                outcome_decisions = {
+                    "already_handled": "silent_already_handled",
+                    "sending_in_progress": "sending_in_progress",
+                    "manual_attention": "silent_manual_attention",
+                    "retry_waiting": "retry_waiting",
+                }
+                decision = Decision(
+                    outcome_decisions[claim_outcome], decision.error_signature
+                )
         state = turn.status if turn is not None else (
             snapshot.thread_status if snapshot is not None else "unavailable"
         )
@@ -276,6 +365,7 @@ class WatchdogService:
                 error_category=_error_category(decision.error_signature),
                 decision=decision.code,
                 duration_ms=result.duration_ms,
+                resume_attempt=resume_attempt,
             ),
             next_check_at,
         )

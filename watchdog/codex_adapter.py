@@ -20,7 +20,19 @@ class RpcTransport(Protocol):
         raise NotImplementedError
 
 
-class CodexProtocolError(RuntimeError):
+class CodexAdapterError(RuntimeError):
+    """Base error for Codex App Server adapter failures."""
+
+
+class DefiniteSendFailure(CodexAdapterError):
+    """The App Server explicitly rejected the request."""
+
+
+class UncertainSendFailure(CodexAdapterError):
+    """The request was written but its outcome could not be confirmed."""
+
+
+class CodexProtocolError(CodexAdapterError):
     """Raised when the App Server returns an incompatible response."""
 
 
@@ -113,13 +125,22 @@ class CodexAppServerAdapter:
         ]
 
     def start_turn(self, thread_id: str, prompt: str) -> str:
-        response = self._transport.request(
-            "turn/start",
-            {
-                "threadId": thread_id,
-                "input": [{"type": "text", "text": prompt}],
-            },
-        )
+        try:
+            response = self._transport.request(
+                "turn/start",
+                {
+                    "threadId": thread_id,
+                    "input": [{"type": "text", "text": prompt}],
+                },
+            )
+        except (DefiniteSendFailure, UncertainSendFailure, CodexProtocolError):
+            raise
+        except (TimeoutError, EOFError, ChildProcessError, ConnectionError, OSError) as error:
+            raise UncertainSendFailure(
+                "turn/start outcome could not be confirmed"
+            ) from error
+        except Exception as error:
+            raise CodexAdapterError("turn/start failed before confirmation") from error
         turn = response.get("turn") if isinstance(response, dict) else None
         turn_id = turn.get("id") if isinstance(turn, dict) else None
         if not isinstance(turn_id, str):
@@ -217,7 +238,7 @@ class StdioJsonRpcClient:
         self, method: str, params: dict, *, timeout: float | None = None
     ) -> dict:
         if self._closed:
-            raise RuntimeError("Codex App Server transport is closed")
+            raise CodexAdapterError("Codex App Server transport is closed")
         with self._pending_lock:
             request_id = self._next_id
             self._next_id += 1
@@ -227,16 +248,20 @@ class StdioJsonRpcClient:
             self._write_message(
                 {"id": request_id, "method": method, "params": params}
             )
-        except BaseException:
+        except BaseException as error:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
-            raise
+            raise UncertainSendFailure(
+                f"Codex App Server request write was not confirmed: {method}"
+            ) from error
 
         wait_seconds = self._request_timeout if timeout is None else timeout
         if not pending.event.wait(wait_seconds):
             with self._pending_lock:
                 self._pending.pop(request_id, None)
-            raise TimeoutError(f"Codex App Server request timed out: {method}")
+            raise UncertainSendFailure(
+                f"Codex App Server request timed out: {method}"
+            )
         if pending.error is not None:
             raise pending.error
         if not isinstance(pending.result, dict):
@@ -260,7 +285,7 @@ class StdioJsonRpcClient:
             except subprocess.TimeoutExpired:
                 self._process.kill()
                 self._process.wait(timeout=2)
-        self._fail_pending(RuntimeError("Codex App Server transport closed"))
+        self._fail_pending(UncertainSendFailure("Codex App Server transport closed"))
         if self._reader is not threading.current_thread():
             self._reader.join(timeout=2)
 
@@ -276,7 +301,9 @@ class StdioJsonRpcClient:
     def _read_loop(self) -> None:
         stdout = self._process.stdout
         if stdout is None:
-            self._fail_pending(RuntimeError("Codex App Server stdout is unavailable"))
+            self._fail_pending(
+                UncertainSendFailure("Codex App Server stdout is unavailable")
+            )
             return
         try:
             for line in stdout:
@@ -295,9 +322,7 @@ class StdioJsonRpcClient:
             self._fail_pending(error)
             return
         self._fail_pending(
-            ChildProcessError(
-                f"Codex App Server exited with code {self._process.poll()}"
-            )
+            UncertainSendFailure("Codex App Server exited before replying")
         )
 
     def _drain_stderr(self) -> None:
@@ -322,7 +347,9 @@ class StdioJsonRpcClient:
             return
         error = message.get("error")
         if error is not None:
-            pending.error = CodexProtocolError(f"App Server JSON-RPC error: {error!r}")
+            pending.error = DefiniteSendFailure(
+                "App Server explicitly rejected the JSON-RPC request"
+            )
         else:
             pending.result = message.get("result")
         pending.event.set()

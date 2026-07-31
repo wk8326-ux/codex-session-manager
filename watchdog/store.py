@@ -439,6 +439,97 @@ class WatchdogStore:
     def get_incident(self, fingerprint: str) -> dict | None:
         return self._one("SELECT * FROM recovery_incidents WHERE fingerprint = ?", (fingerprint,))
 
+    def begin_incident(self, data: dict, attempted_at: str) -> dict:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT OR IGNORE INTO recovery_incidents(
+                       id, fingerprint, session_id, turn_id, error_signature,
+                       first_seen_at
+                   ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    str(data.get("id") or uuid4()),
+                    data["fingerprint"],
+                    data["sessionId"],
+                    data["turnId"],
+                    data["errorSignature"],
+                    data["firstSeenAt"],
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM recovery_incidents WHERE fingerprint = ?",
+                (data["fingerprint"],),
+            ).fetchone()
+            status = row["status"]
+            attempt_count = row["attempt_count"]
+            if status == "sent":
+                outcome = "already_handled"
+            elif status == "sending":
+                outcome = "sending_in_progress"
+            elif status == "manual_attention" or attempt_count >= 3:
+                if status != "manual_attention":
+                    connection.execute(
+                        """UPDATE recovery_incidents
+                           SET status = 'manual_attention'
+                           WHERE fingerprint = ?""",
+                        (data["fingerprint"],),
+                    )
+                    row = connection.execute(
+                        "SELECT * FROM recovery_incidents WHERE fingerprint = ?",
+                        (data["fingerprint"],),
+                    ).fetchone()
+                outcome = "manual_attention"
+            elif status == "failed" and not self._retry_is_due(
+                row["last_attempt_at"], attempted_at, attempt_count
+            ):
+                outcome = "retry_waiting"
+            elif status in {"candidate", "failed"}:
+                connection.execute(
+                    """UPDATE recovery_incidents
+                       SET status = 'sending',
+                           attempt_count = attempt_count + 1,
+                           last_attempt_at = ?
+                       WHERE fingerprint = ?""",
+                    (attempted_at, data["fingerprint"]),
+                )
+                row = connection.execute(
+                    "SELECT * FROM recovery_incidents WHERE fingerprint = ?",
+                    (data["fingerprint"],),
+                ).fetchone()
+                outcome = "claimed"
+            else:
+                connection.execute(
+                    """UPDATE recovery_incidents
+                       SET status = 'manual_attention'
+                       WHERE fingerprint = ?""",
+                    (data["fingerprint"],),
+                )
+                row = connection.execute(
+                    "SELECT * FROM recovery_incidents WHERE fingerprint = ?",
+                    (data["fingerprint"],),
+                ).fetchone()
+                outcome = "manual_attention"
+            result = self._row(row)
+            assert result is not None
+            result["claimOutcome"] = outcome
+            return result
+
+    @staticmethod
+    def _retry_is_due(last_attempt_at: str | None, now: str, attempt_count: int) -> bool:
+        delay_seconds = {1: 30, 2: 120}.get(attempt_count)
+        if delay_seconds is None or not last_attempt_at:
+            return False
+        try:
+            previous = datetime.strptime(
+                last_attempt_at, "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+            current = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except (TypeError, ValueError):
+            return False
+        return current >= previous + timedelta(seconds=delay_seconds)
+
     def begin_resume_attempt(self, fingerprint: str, attempted_at: str = "") -> dict | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -450,11 +541,40 @@ class WatchdogStore:
 
     def mark_incident_sent(self, fingerprint: str, turn_id: str, resolved_at: str) -> None:
         with self._connect() as connection:
-            connection.execute("UPDATE recovery_incidents SET status = 'sent', resolved_at = ?, detail = ? WHERE fingerprint = ?", (resolved_at, f"new turn: {turn_id}", fingerprint))
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = 'sent', resolved_at = ?,
+                       detail = 'resume request accepted'
+                   WHERE fingerprint = ?""",
+                (resolved_at, fingerprint),
+            )
 
     def mark_incident_failed(self, fingerprint: str, detail: str) -> None:
         with self._connect() as connection:
             connection.execute("UPDATE recovery_incidents SET status = CASE WHEN attempt_count >= 3 THEN 'manual_attention' ELSE 'failed' END, detail = ? WHERE fingerprint = ?", (detail, fingerprint))
+
+    def mark_incident_manual_attention(self, fingerprint: str, resolved_at: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = 'manual_attention',
+                       resolved_at = ?,
+                       detail = 'send outcome requires manual confirmation'
+                   WHERE fingerprint = ?""",
+                (resolved_at, fingerprint),
+            )
+
+    def recover_interrupted_sends(self, recovered_at: str) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = 'manual_attention',
+                       resolved_at = ?,
+                       detail = 'interrupted send requires manual confirmation'
+                   WHERE status = 'sending'""",
+                (recovered_at,),
+            )
+            return cursor.rowcount
 
     def prune_records(self, now_utc: str) -> None:
         settings = self.get_settings()
