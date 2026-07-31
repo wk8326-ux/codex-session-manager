@@ -10,7 +10,7 @@ from .codex_adapter import CodexAdapterError, DefiniteSendFailure
 from .decision import Decision, DecisionInput, decide
 from .models import SessionSnapshot
 from .secrets import SecretStore
-from .store import WatchdogStore
+from .store import ResumeOutcomePersistenceError, WatchdogStore
 
 
 class SessionAdapter(Protocol):
@@ -86,6 +86,13 @@ def _add_minutes(value: str, minutes: int) -> str:
         tzinfo=timezone.utc
     )
     return (current + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _add_seconds(value: str, seconds: int) -> str:
+    current = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    return (current + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _utc_now() -> str:
@@ -193,6 +200,7 @@ def _run_data(
     error_category: str = "",
     duration_ms: int | None = None,
     resume_attempt: int | None = None,
+    detail: str | None = None,
 ) -> dict:
     return {
         "sessionId": session_id,
@@ -207,7 +215,7 @@ def _run_data(
         "decision": decision,
         "resumeAttempt": resume_attempt,
         "durationMs": duration_ms,
-        "detailSanitized": _safe_detail(_decision_detail(decision)),
+        "detailSanitized": _safe_detail(detail or _decision_detail(decision)),
     }
 
 
@@ -298,6 +306,10 @@ class WatchdogService:
 
         turn = snapshot.latest_turn if snapshot is not None else None
         resume_attempt: int | None = None
+        retry_delay_seconds: int | None = None
+        retry_next_check_at: str | None = None
+        resume_outcome: str | None = None
+        resume_audit_detail: str | None = None
         if (
             decision.code == "resume_candidate"
             and settings["resumeActionsEnabled"]
@@ -320,23 +332,28 @@ class WatchdogService:
             claim_outcome = incident["claimOutcome"]
             if claim_outcome == "claimed":
                 try:
-                    new_turn_id = self._adapter.start_turn(
+                    _new_turn_id = self._adapter.start_turn(
                         session["threadId"], session["resumePrompt"]
                     )
                 except DefiniteSendFailure:
-                    self._store.mark_incident_failed(
-                        fingerprint, "resume request was rejected"
+                    resume_outcome = "definite_failure"
+                    resume_audit_detail = "resume request was rejected"
+                    retry_delay_seconds = {1: 30, 2: 120}.get(
+                        incident["attemptCount"]
                     )
                     decision = Decision(
                         "resume_action_failed", decision.error_signature
                     )
                 except CodexAdapterError:
-                    self._store.mark_incident_manual_attention(fingerprint, now)
+                    resume_outcome = "manual_attention"
+                    resume_audit_detail = (
+                        "send outcome requires manual confirmation"
+                    )
                     decision = Decision(
                         "resume_action_failed", decision.error_signature
                     )
                 else:
-                    self._store.mark_incident_sent(fingerprint, new_turn_id, now)
+                    resume_outcome = "sent"
                     decision = Decision("resume_sent", decision.error_signature)
             else:
                 outcome_decisions = {
@@ -348,27 +365,49 @@ class WatchdogService:
                 decision = Decision(
                     outcome_decisions[claim_outcome], decision.error_signature
                 )
+                if claim_outcome == "retry_waiting":
+                    retry_delay = {1: 30, 2: 120}.get(
+                        incident["attemptCount"]
+                    )
+                    if retry_delay is not None and incident["lastAttemptAt"]:
+                        try:
+                            retry_next_check_at = _add_seconds(
+                                incident["lastAttemptAt"], retry_delay
+                            )
+                        except ValueError:
+                            retry_next_check_at = None
         state = turn.status if turn is not None else (
             snapshot.thread_status if snapshot is not None else "unavailable"
         )
         interval = session["intervalMinutes"] or settings["defaultIntervalMinutes"]
-        next_check_at = _add_minutes(now, int(interval))
-        run = self._store.record_monitor_result(
-            _run_data(
-                session_id=session["id"],
-                channel_id=channel["id"],
-                now=now,
-                channel_status=result.category,
-                http_status=result.http_status,
-                session_state=state,
-                turn_id=turn.id if turn is not None else None,
-                error_category=_error_category(decision.error_signature),
-                decision=decision.code,
-                duration_ms=result.duration_ms,
-                resume_attempt=resume_attempt,
-            ),
-            next_check_at,
+        next_check_at = (
+            retry_next_check_at
+            or (
+                _add_seconds(now, retry_delay_seconds)
+                if retry_delay_seconds is not None
+                else _add_minutes(now, int(interval))
+            )
         )
+        run_data = _run_data(
+            session_id=session["id"],
+            channel_id=channel["id"],
+            now=now,
+            channel_status=result.category,
+            http_status=result.http_status,
+            session_state=state,
+            turn_id=turn.id if turn is not None else None,
+            error_category=_error_category(decision.error_signature),
+            decision=decision.code,
+            duration_ms=result.duration_ms,
+            resume_attempt=resume_attempt,
+            detail=resume_audit_detail,
+        )
+        if resume_outcome is not None:
+            run = self._store.finalize_resume_outcome(
+                fingerprint, resume_outcome, now, run_data, next_check_at
+            )
+        else:
+            run = self._store.record_monitor_result(run_data, next_check_at)
         return run
 
     def run_due(self, now: str) -> list[dict]:
@@ -377,6 +416,8 @@ class WatchdogService:
         for session in self._store.list_due_sessions(now):
             try:
                 runs.append(self.check_session(session["id"], now, cache))
+            except ResumeOutcomePersistenceError:
+                continue
             except Exception:
                 decision = "silent_monitor_error"
                 settings = self._store.get_settings()

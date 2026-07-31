@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from watchdog.store import ChannelInUseError, WatchdogStore
+from watchdog.store import (
+    ChannelInUseError,
+    ResumeOutcomePersistenceError,
+    WatchdogStore,
+)
 
 
 THREAD_ID = "019fa619-0c95-76c3-a151-9289b7510e09"
@@ -13,7 +18,8 @@ THREAD_ID = "019fa619-0c95-76c3-a151-9289b7510e09"
 class WatchdogStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.store = WatchdogStore(Path(self.temp.name) / "watchdog.db")
+        self.database_path = Path(self.temp.name) / "watchdog.db"
+        self.store = WatchdogStore(self.database_path)
         self.store.initialize()
 
     def tearDown(self) -> None:
@@ -109,6 +115,86 @@ class WatchdogStoreTests(unittest.TestCase):
         self.assertEqual(incident["status"], "manual_attention")
         self.assertEqual(incident["resolvedAt"], "2026-07-31T06:06:00Z")
         self.assertEqual(next_claim["claimOutcome"], "manual_attention")
+
+    def test_resume_finalization_rolls_back_incident_run_and_schedule_together(self) -> None:
+        session = self.create_session()
+        data = self.incident_data(session["id"])
+        self.store.begin_incident(data, "2026-07-31T06:05:00Z")
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """CREATE TRIGGER fail_resume_run
+                   BEFORE INSERT ON monitor_runs
+                   BEGIN
+                       SELECT RAISE(ABORT, 'forced resume run failure');
+                   END"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(ResumeOutcomePersistenceError):
+            self.store.finalize_resume_outcome(
+                data["fingerprint"],
+                "sent",
+                "2026-07-31T06:05:01Z",
+                {
+                    "sessionId": session["id"],
+                    "channelId": session["channelId"],
+                    "startedAt": "2026-07-31T06:05:01Z",
+                    "finishedAt": "2026-07-31T06:05:01Z",
+                    "decision": "resume_sent",
+                    "turnId": "turn-failed",
+                    "resumeAttempt": 1,
+                },
+                "2026-07-31T06:20:01Z",
+            )
+
+        incident = self.store.get_incident(data["fingerprint"])
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "sending")
+        self.assertEqual(self.store.list_monitor_runs({}), [])
+        self.assertEqual(self.store.get_session(session["id"])["nextCheckAt"], None)
+
+    def test_definite_failure_finalization_rolls_back_when_schedule_write_fails(self) -> None:
+        session = self.create_session()
+        data = self.incident_data(session["id"])
+        self.store.begin_incident(data, "2026-07-31T06:05:00Z")
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """CREATE TRIGGER fail_resume_schedule
+                   BEFORE UPDATE OF next_check_at ON monitored_sessions
+                   BEGIN
+                       SELECT RAISE(ABORT, 'forced resume schedule failure');
+                   END"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(ResumeOutcomePersistenceError):
+            self.store.finalize_resume_outcome(
+                data["fingerprint"],
+                "definite_failure",
+                "2026-07-31T06:05:01Z",
+                {
+                    "sessionId": session["id"],
+                    "channelId": session["channelId"],
+                    "startedAt": "2026-07-31T06:05:01Z",
+                    "finishedAt": "2026-07-31T06:05:01Z",
+                    "decision": "resume_action_failed",
+                    "turnId": "turn-failed",
+                    "resumeAttempt": 1,
+                },
+                "2026-07-31T06:05:31Z",
+            )
+
+        incident = self.store.get_incident(data["fingerprint"])
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "sending")
+        self.assertEqual(self.store.list_monitor_runs({}), [])
+        self.assertEqual(self.store.get_session(session["id"])["nextCheckAt"], None)
 
     def test_defaults_and_recovery_rules_are_seeded_once(self) -> None:
         settings = self.store.get_settings()

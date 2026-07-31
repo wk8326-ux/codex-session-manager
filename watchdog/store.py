@@ -13,6 +13,10 @@ class WatchdogStoreError(RuntimeError):
     """Base error for watchdog persistence failures."""
 
 
+class ResumeOutcomePersistenceError(WatchdogStoreError):
+    """Raised after an atomic resume finalization has been rolled back."""
+
+
 class ChannelInUseError(WatchdogStoreError):
     """Raised when deleting a channel referenced by a monitored session."""
 
@@ -389,31 +393,39 @@ class WatchdogStore:
         )  # type: ignore[return-value]
 
     def record_monitor_result(self, data: dict, next_check_at: str) -> dict:
+        with self._connect() as connection:
+            return self._record_monitor_result(connection, data, next_check_at)
+
+    def _record_monitor_result(
+        self,
+        connection: sqlite3.Connection,
+        data: dict,
+        next_check_at: str,
+    ) -> dict:
         session_id = data.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise WatchdogStoreError("monitor result requires a session id")
         checked_at = data.get("finishedAt") or data["startedAt"]
         state = data.get("sessionState") or "unknown"
-        with self._connect() as connection:
-            run = self._insert_monitor_run(connection, data)
-            updated = connection.execute(
-                """UPDATE monitored_sessions
-                   SET last_checked_at = ?, next_check_at = ?,
-                       last_session_state = ?, last_check_result = ?,
-                       last_turn_id = ?
-                   WHERE id = ?""",
-                (
-                    checked_at,
-                    next_check_at,
-                    state,
-                    data["decision"],
-                    data.get("turnId"),
-                    session_id,
-                ),
-            )
-            if updated.rowcount != 1:
-                raise WatchdogStoreError("monitored session no longer exists")
-            return run
+        run = self._insert_monitor_run(connection, data)
+        updated = connection.execute(
+            """UPDATE monitored_sessions
+               SET last_checked_at = ?, next_check_at = ?,
+                   last_session_state = ?, last_check_result = ?,
+                   last_turn_id = ?
+               WHERE id = ?""",
+            (
+                checked_at,
+                next_check_at,
+                state,
+                data["decision"],
+                data.get("turnId"),
+                session_id,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise WatchdogStoreError("monitored session no longer exists")
+        return run
 
     def list_monitor_runs(self, filters: dict) -> list[dict]:
         clauses, params = [], []
@@ -563,6 +575,56 @@ class WatchdogStore:
                    WHERE fingerprint = ?""",
                 (resolved_at, fingerprint),
             )
+
+    def finalize_resume_outcome(
+        self,
+        fingerprint: str,
+        outcome: str,
+        resolved_at: str,
+        run_data: dict,
+        next_check_at: str,
+    ) -> dict:
+        updates = {
+            "sent": (
+                "status = 'sent', resolved_at = ?, "
+                "detail = 'resume request accepted'",
+                (resolved_at,),
+            ),
+            "definite_failure": (
+                "status = CASE WHEN attempt_count >= 3 "
+                "THEN 'manual_attention' ELSE 'failed' END, "
+                "resolved_at = CASE WHEN attempt_count >= 3 THEN ? ELSE NULL END, "
+                "detail = 'resume request was rejected'",
+                (resolved_at,),
+            ),
+            "manual_attention": (
+                "status = 'manual_attention', resolved_at = ?, "
+                "detail = 'send outcome requires manual confirmation'",
+                (resolved_at,),
+            ),
+        }
+        update = updates.get(outcome)
+        if update is None:
+            raise WatchdogStoreError("unsupported resume outcome")
+        assignment, values = update
+        try:
+            with self._connect() as connection:
+                cursor = connection.execute(
+                    f"UPDATE recovery_incidents SET {assignment} "
+                    "WHERE fingerprint = ? AND status = 'sending'",
+                    (*values, fingerprint),
+                )
+                if cursor.rowcount != 1:
+                    raise WatchdogStoreError(
+                        "resume incident is not awaiting finalization"
+                    )
+                return self._record_monitor_result(
+                    connection, run_data, next_check_at
+                )
+        except Exception as error:
+            raise ResumeOutcomePersistenceError(
+                "resume outcome transaction was rolled back"
+            ) from error
 
     def recover_interrupted_sends(self, recovered_at: str) -> int:
         with self._connect() as connection:

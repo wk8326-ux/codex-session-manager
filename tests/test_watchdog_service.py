@@ -15,7 +15,7 @@ from watchdog.codex_adapter import (
 )
 from watchdog.models import SessionSnapshot, TurnSnapshot
 from watchdog.service import WatchdogService
-from watchdog.store import WatchdogStore
+from watchdog.store import ResumeOutcomePersistenceError, WatchdogStore
 
 
 THREAD_ID = "019fa619-0c95-76c3-a151-9289b7510e09"
@@ -233,6 +233,42 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertNotIn(API_KEY, repr(run))
         self.assertNotIn(API_KEY, repr(incident))
 
+    def test_success_outcome_rolls_back_with_failed_run_persistence(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-new"]
+        )
+        session = self.create_session(secrets)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """CREATE TRIGGER fail_resume_run
+                   BEFORE INSERT ON monitor_runs
+                   BEGIN
+                       SELECT RAISE(ABORT, 'forced resume run failure');
+                   END"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(ResumeOutcomePersistenceError):
+            service.check_session(session["id"], NOW)
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "sending")
+        self.assertEqual(self.store.list_monitor_runs({}), [])
+        self.assertEqual(
+            self.store.get_session(session["id"])["nextCheckAt"],
+            "2026-07-31T06:00:00Z",
+        )
+        self.assertEqual(len(adapter.start_calls), 1)
+
     def test_definite_send_failures_retry_at_most_three_times(self) -> None:
         self.store.update_settings({"resumeActionsEnabled": True})
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
@@ -277,6 +313,136 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertIsNotNone(incident)
         self.assertEqual(incident["status"], "manual_attention")
 
+    def test_definite_failure_outcome_rolls_back_with_failed_schedule_write(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [DefiniteSendFailure("rejected")],
+        )
+        session = self.create_session(secrets)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """CREATE TRIGGER fail_resume_schedule
+                   BEFORE UPDATE OF next_check_at ON monitored_sessions
+                   BEGIN
+                       SELECT RAISE(ABORT, 'forced resume schedule failure');
+                   END"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaises(ResumeOutcomePersistenceError):
+            service.check_session(session["id"], NOW)
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "sending")
+        self.assertEqual(self.store.list_monitor_runs({}), [])
+        self.assertEqual(
+            self.store.get_session(session["id"])["nextCheckAt"],
+            "2026-07-31T06:00:00Z",
+        )
+        self.assertEqual(len(adapter.start_calls), 1)
+
+    def test_run_due_does_not_fallback_after_resume_finalization_failure(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [DefiniteSendFailure("rejected")],
+        )
+        session = self.create_session(secrets)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """CREATE TRIGGER fail_incident_finalization
+                   BEFORE UPDATE OF status ON recovery_incidents
+                   WHEN NEW.status = 'failed'
+                   BEGIN
+                       SELECT RAISE(ABORT, 'forced incident finalization failure');
+                   END"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        runs = service.run_due(NOW)
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertEqual(runs, [])
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "sending")
+        self.assertEqual(self.store.list_monitor_runs({}), [])
+        self.assertEqual(
+            self.store.get_session(session["id"])["nextCheckAt"],
+            "2026-07-31T06:00:00Z",
+        )
+        self.assertEqual(len(adapter.start_calls), 1)
+
+    def test_run_due_schedules_definite_retries_at_30_then_120_seconds(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [
+                DefiniteSendFailure("first"),
+                DefiniteSendFailure("second"),
+                DefiniteSendFailure("third"),
+            ],
+        )
+        session = self.create_session(secrets)
+
+        first = service.run_due("2026-07-31T06:05:00Z")
+        before_second = service.run_due("2026-07-31T06:05:29Z")
+        second = service.run_due("2026-07-31T06:05:30Z")
+        before_third = service.run_due("2026-07-31T06:07:29Z")
+        third = service.run_due("2026-07-31T06:07:30Z")
+
+        self.assertEqual([run["decision"] for run in first], ["resume_action_failed"])
+        self.assertEqual(before_second, [])
+        self.assertEqual([run["decision"] for run in second], ["resume_action_failed"])
+        self.assertEqual(before_third, [])
+        self.assertEqual([run["decision"] for run in third], ["resume_action_failed"])
+        self.assertEqual(len(adapter.start_calls), 3)
+        updated = self.store.get_session(session["id"])
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["nextCheckAt"], "2026-07-31T06:22:30Z")
+
+    def test_early_manual_check_preserves_scheduled_retry_time(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store,
+            healthy,
+            failed_snapshot(),
+            [DefiniteSendFailure("first")],
+        )
+        session = self.create_session(secrets)
+
+        first = service.check_session(session["id"], "2026-07-31T06:05:00Z")
+        waiting = service.check_session(session["id"], "2026-07-31T06:05:29Z")
+
+        self.assertEqual(first["decision"], "resume_action_failed")
+        self.assertEqual(waiting["decision"], "retry_waiting")
+        updated = self.store.get_session(session["id"])
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["nextCheckAt"], "2026-07-31T06:05:30Z")
+
     def test_uncertain_send_failure_is_never_retried(self) -> None:
         self.store.update_settings({"resumeActionsEnabled": True})
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
@@ -292,6 +458,10 @@ class WatchdogServiceTests(unittest.TestCase):
         second = service.check_session(session["id"], "2026-07-31T07:00:00Z")
 
         self.assertEqual(first["decision"], "resume_action_failed")
+        self.assertEqual(
+            first["detailSanitized"],
+            "send outcome requires manual confirmation",
+        )
         self.assertEqual(second["decision"], "silent_manual_attention")
         self.assertEqual(len(adapter.start_calls), 1)
         fingerprint = hashlib.sha256(
