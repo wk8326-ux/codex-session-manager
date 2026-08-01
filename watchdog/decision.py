@@ -78,7 +78,10 @@ def decide(value: DecisionInput) -> Decision:
         return Decision("silent_unknown", detail=turn.status)
     signature = _error_signature(turn)
     if not signature:
-        return Decision("silent_unknown", detail="interrupted without a reliable error")
+        return Decision(
+            "silent_interrupted_without_error",
+            detail="latest turn was interrupted without a recoverable API error",
+        )
     if any(_matches(turn, rule) for rule in value.recovery_rules):
         return Decision("resume_candidate", signature, "enabled recovery rule matched")
     return Decision("silent_unrecoverable_error", signature, "no enabled recovery rule matched")

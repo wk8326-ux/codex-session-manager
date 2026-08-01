@@ -75,6 +75,9 @@ DECISION_DETAILS = {
     "silent_no_turn": "session has no turn",
     "silent_session_running": "session is running",
     "silent_session_completed": "session is completed",
+    "silent_interrupted_without_error": (
+        "latest turn was interrupted without a recoverable API error"
+    ),
     "silent_unknown": "session state was not recognized",
     "silent_unrecoverable_error": "no enabled recovery rule matched",
     "silent_monitor_error": "monitoring failed",

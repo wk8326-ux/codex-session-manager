@@ -179,6 +179,30 @@ class WatchdogServiceTests(unittest.TestCase):
             any("api_key" in name for name in vars(service))
         )
 
+    def test_interrupted_turn_without_api_error_is_recorded_explicitly(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        interrupted = SessionSnapshot(
+            THREAD_ID,
+            "interrupted session",
+            "notLoaded",
+            (),
+            TurnSnapshot("turn-interrupted", "interrupted"),
+        )
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, interrupted
+        )
+        session = self.create_session(secrets)
+
+        run = service.check_session(session["id"], NOW)
+
+        self.assertEqual(run["decision"], "silent_interrupted_without_error")
+        self.assertEqual(run["sessionState"], "interrupted")
+        self.assertEqual(
+            run["detailSanitized"],
+            "latest turn was interrupted without a recoverable API error",
+        )
+        self.assertEqual(adapter.start_calls, [])
+
     def test_resume_candidate_is_only_observed_when_actions_are_disabled(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
         service, secrets, _probe, adapter = make_service(

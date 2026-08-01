@@ -24,8 +24,14 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(result.code, "resume_candidate")
         self.assertEqual(result.error_signature, "httpConnectionFailed:http:503")
 
-    def test_interrupted_without_error_and_manual_wait_are_never_resumed(self) -> None:
-        self.assertEqual(decide(DecisionInput("healthy", snapshot("interrupted"), [])).code, "silent_unknown")
+    def test_interrupted_without_error_is_explicit_and_never_resumed(self) -> None:
+        result = decide(DecisionInput("healthy", snapshot("interrupted"), []))
+        self.assertEqual(result.code, "silent_interrupted_without_error")
+        self.assertEqual(
+            result.detail, "latest turn was interrupted without a recoverable API error"
+        )
+
+    def test_manual_wait_is_never_resumed(self) -> None:
         for flag in ("waitingOnUserInput", "waitingOnApproval"):
             with self.subTest(flag=flag):
                 waiting = snapshot("inProgress", flags=(flag,))
