@@ -234,10 +234,130 @@ class WatchdogServiceTests(unittest.TestCase):
         first = service.check_session(session["id"], NOW)
         second = service.check_session(session["id"], "2026-07-31T06:05:01Z")
 
-        self.assertEqual(first["decision"], "resume_sent")
+        self.assertEqual(first["decision"], "resume_started")
         self.assertEqual(first["resumeAttempt"], 1)
         self.assertEqual(second["decision"], "silent_already_handled")
         self.assertEqual(adapter.start_calls, [(THREAD_ID, "continue current task")])
+
+    def test_resume_is_only_successful_after_completed_turn_event(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-new"]
+        )
+        session = self.create_session(
+            secrets, unattendedApprovalsEnabled=True
+        )
+
+        started = service.check_session(session["id"], NOW)
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        self.assertEqual(started["decision"], "resume_started")
+        self.assertEqual(started["resumedTurnId"], "turn-new")
+        self.assertEqual(incident["status"], "started")
+        self.assertEqual(incident["resumedTurnId"], "turn-new")
+
+        service.handle_app_server_event(
+            "turn/completed",
+            {
+                "threadId": THREAD_ID,
+                "turn": {"id": "turn-new", "status": "completed"},
+            },
+            "2026-07-31T06:06:00Z",
+        )
+
+        completed = self.store.get_incident(fingerprint)
+        run = self.store.list_monitor_runs({})[0]
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["resolvedAt"], "2026-07-31T06:06:00Z")
+        self.assertEqual(run["decision"], "resume_completed")
+        self.assertEqual(run["sessionState"], "completed")
+
+    def test_declined_resume_approval_is_recorded_as_manual_attention(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-new"]
+        )
+        session = self.create_session(secrets)
+        service.check_session(session["id"], NOW)
+
+        service.handle_app_server_event(
+            "item/fileChange/requestApproval",
+            {
+                "threadId": THREAD_ID,
+                "turnId": "turn-new",
+                "watchdogDecision": "decline",
+            },
+            "2026-07-31T06:06:00Z",
+        )
+
+        run = self.store.list_monitor_runs({})[0]
+        self.assertEqual(run["decision"], "resume_manual_attention")
+        self.assertIn("file change approval", run["detailSanitized"])
+
+    def test_turn_completion_arriving_before_start_persistence_is_not_lost(self) -> None:
+        class EventBeforeReturnAdapter(FakeAdapter):
+            on_start = None
+
+            def start_turn(self, thread_id: str, prompt: str) -> str:
+                self.start_calls.append((thread_id, prompt))
+                assert self.on_start is not None
+                self.on_start()
+                return "turn-racing"
+
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        secrets = MemorySecretStore()
+        adapter = EventBeforeReturnAdapter(failed_snapshot())
+        service = WatchdogService(self.store, secrets, FakeProbe(healthy), adapter)
+        adapter.on_start = lambda: service.handle_app_server_event(
+            "turn/completed",
+            {"turn": {"id": "turn-racing", "status": "completed"}},
+            "2026-07-31T06:05:01Z",
+        )
+        session = self.create_session(
+            secrets, unattendedApprovalsEnabled=True
+        )
+
+        run = service.check_session(session["id"], NOW)
+
+        stored = self.store.list_monitor_runs({})[0]
+        self.assertEqual(run["resumedTurnId"], "turn-racing")
+        self.assertEqual(stored["decision"], "resume_completed")
+        self.assertEqual(stored["sessionState"], "completed")
+
+    def test_newer_turn_makes_unresolved_resume_require_attention(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-resumed"]
+        )
+        session = self.create_session(
+            secrets, unattendedApprovalsEnabled=True
+        )
+        service.check_session(session["id"], NOW)
+        adapter.snapshot = SessionSnapshot(
+            THREAD_ID,
+            "newer turn",
+            "idle",
+            (),
+            TurnSnapshot("turn-newer", "completed"),
+        )
+
+        service.check_session(session["id"], "2026-07-31T06:20:00Z")
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        runs = self.store.list_monitor_runs({})
+        resumed_run = next(run for run in runs if run.get("resumedTurnId"))
+        self.assertEqual(incident["status"], "manual_attention")
+        self.assertEqual(resumed_run["decision"], "resume_manual_attention")
 
     def test_healthy_local_channel_resumes_one_503_incident_once(self) -> None:
         class HealthyChannelHandler(BaseHTTPRequestHandler):
@@ -289,7 +409,7 @@ class WatchdogServiceTests(unittest.TestCase):
                 session["id"], "2026-07-31T06:05:01Z"
             )
 
-            self.assertEqual(first["decision"], "resume_sent")
+            self.assertEqual(first["decision"], "resume_started")
             self.assertEqual(first["resumeAttempt"], 1)
             self.assertEqual(second["decision"], "silent_already_handled")
             self.assertEqual(
@@ -301,12 +421,12 @@ class WatchdogServiceTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def test_start_turn_result_is_not_persisted_in_incident_or_run_detail(self) -> None:
+    def test_start_turn_id_is_persisted_without_leaking_into_detail(self) -> None:
         self.store.update_settings({"resumeActionsEnabled": True})
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
-        sensitive_turn_id = f"turn-new-{API_KEY}"
+        resumed_turn_id = "11111111-1111-4111-8111-111111111111"
         service, secrets, _probe, _adapter = make_service(
-            self.store, healthy, failed_snapshot(), [sensitive_turn_id]
+            self.store, healthy, failed_snapshot(), [resumed_turn_id]
         )
         session = self.create_session(secrets)
 
@@ -316,7 +436,8 @@ class WatchdogServiceTests(unittest.TestCase):
             f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
         ).hexdigest()
         incident = self.store.get_incident(fingerprint)
-        self.assertEqual(run["decision"], "resume_sent")
+        self.assertEqual(run["decision"], "resume_started")
+        self.assertEqual(run["resumedTurnId"], resumed_turn_id)
         self.assertNotIn(API_KEY, repr(run))
         self.assertNotIn(API_KEY, repr(incident))
 
@@ -673,7 +794,7 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertCountEqual(
             [run["decision"] for run in runs],
-            ["resume_sent", "sending_in_progress"],
+            ["resume_started", "sending_in_progress"],
         )
         self.assertEqual(adapter.start_calls, [(THREAD_ID, "continue current task")])
 

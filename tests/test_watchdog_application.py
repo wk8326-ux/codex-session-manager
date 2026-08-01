@@ -103,6 +103,20 @@ class WatchdogApplicationApiTests(unittest.TestCase):
             self.assertEqual(session_response.status, 201)
             self.assertEqual(session_response.body["effectiveIntervalMinutes"], 15)
             self.assertEqual(session_response.body["nextCheckAt"], now)
+            self.assertFalse(
+                session_response.body["unattendedApprovalsEnabled"]
+            )
+
+            updated_session = api.dispatch(
+                "PUT",
+                f"/api/watchdog/sessions/{session_response.body['id']}",
+                {},
+                {"unattendedApprovalsEnabled": True},
+            )
+            self.assertEqual(updated_session.status, 200)
+            self.assertTrue(
+                updated_session.body["unattendedApprovalsEnabled"]
+            )
 
             status = api.dispatch("GET", "/api/watchdog/status", {}, None)
             self.assertTrue(status.body["schedulerRunning"])

@@ -62,6 +62,7 @@ class WatchdogStore:
         "channelId": "channel_id",
         "intervalMinutes": "interval_minutes",
         "resumePrompt": "resume_prompt",
+        "unattendedApprovalsEnabled": "unattended_approvals_enabled",
         "enabled": "enabled",
         "lastSessionState": "last_session_state",
         "lastTurnId": "last_turn_id",
@@ -123,6 +124,7 @@ class WatchdogStore:
                     channel_id TEXT NOT NULL,
                     interval_minutes INTEGER CHECK (interval_minutes IS NULL OR interval_minutes >= 5),
                     resume_prompt TEXT NOT NULL,
+                    unattended_approvals_enabled INTEGER NOT NULL DEFAULT 0,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     last_session_state TEXT,
                     last_turn_id TEXT,
@@ -154,6 +156,7 @@ class WatchdogStore:
                     last_attempt_at TEXT,
                     resolved_at TEXT,
                     detail TEXT NOT NULL DEFAULT '',
+                    resumed_turn_id TEXT,
                     FOREIGN KEY (session_id) REFERENCES monitored_sessions(id)
                 );
                 CREATE TABLE IF NOT EXISTS monitor_runs (
@@ -166,6 +169,7 @@ class WatchdogStore:
                     http_status INTEGER,
                     session_state TEXT,
                     turn_id TEXT,
+                    resumed_turn_id TEXT,
                     error_category TEXT,
                     decision TEXT NOT NULL,
                     resume_attempt INTEGER,
@@ -179,6 +183,24 @@ class WatchdogStore:
                 CREATE INDEX IF NOT EXISTS monitor_runs_started
                     ON monitor_runs(started_at);
                 """
+            )
+            self._ensure_column(
+                connection,
+                "monitored_sessions",
+                "unattended_approvals_enabled",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "recovery_incidents",
+                "resumed_turn_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "monitor_runs",
+                "resumed_turn_id",
+                "TEXT",
             )
             if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
                 connection.execute("INSERT INTO schema_version(version) VALUES (1)")
@@ -208,6 +230,21 @@ class WatchdogStore:
                 )
 
     @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        existing = {
+            row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in existing:
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
+
+    @staticmethod
     def _bool(value: object) -> int:
         return 1 if bool(value) else 0
 
@@ -224,6 +261,7 @@ class WatchdogStore:
             "created_at": "createdAt", "updated_at": "updatedAt", "thread_id": "threadId",
             "host_kind": "hostKind", "channel_id": "channelId",
             "interval_minutes": "intervalMinutes", "resume_prompt": "resumePrompt",
+            "unattended_approvals_enabled": "unattendedApprovalsEnabled",
             "last_session_state": "lastSessionState", "last_turn_id": "lastTurnId",
             "last_check_result": "lastCheckResult", "next_check_at": "nextCheckAt",
             "match_type": "matchType", "first_seen_at": "firstSeenAt",
@@ -232,6 +270,7 @@ class WatchdogStore:
             "session_id": "sessionId", "started_at": "startedAt", "finished_at": "finishedAt",
             "channel_status": "channelStatus", "http_status": "httpStatus",
             "session_state": "sessionState", "turn_id": "turnId", "error_category": "errorCategory",
+            "resumed_turn_id": "resumedTurnId",
             "resume_attempt": "resumeAttempt", "duration_ms": "durationMs",
             "detail_sanitized": "detailSanitized", "default_interval_minutes": "defaultIntervalMinutes",
             "minimum_interval_minutes": "minimumIntervalMinutes", "record_retention_days": "recordRetentionDays",
@@ -241,7 +280,12 @@ class WatchdogStore:
         for source, target in aliases.items():
             if source in values:
                 values[target] = values.pop(source)
-        for key in ("enabled", "schedulerEnabled", "resumeActionsEnabled"):
+        for key in (
+            "enabled",
+            "schedulerEnabled",
+            "resumeActionsEnabled",
+            "unattendedApprovalsEnabled",
+        ):
             if key in values:
                 values[key] = bool(values[key])
         return values
@@ -336,9 +380,9 @@ class WatchdogStore:
 
     def create_session(self, data: dict) -> dict:
         session_id = str(data.get("id") or uuid4())
-        values = (session_id, data["name"], data["threadId"], data.get("hostKind", "local"), data["channelId"], data.get("intervalMinutes"), data["resumePrompt"], self._bool(data.get("enabled", True)), data.get("nextCheckAt"), data.get("createdAt", ""), data.get("updatedAt", ""))
+        values = (session_id, data["name"], data["threadId"], data.get("hostKind", "local"), data["channelId"], data.get("intervalMinutes"), data["resumePrompt"], self._bool(data.get("unattendedApprovalsEnabled", False)), self._bool(data.get("enabled", True)), data.get("nextCheckAt"), data.get("createdAt", ""), data.get("updatedAt", ""))
         with self._connect() as connection:
-            connection.execute("""INSERT INTO monitored_sessions(id, name, thread_id, host_kind, channel_id, interval_minutes, resume_prompt, enabled, next_check_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", values)
+            connection.execute("""INSERT INTO monitored_sessions(id, name, thread_id, host_kind, channel_id, interval_minutes, resume_prompt, unattended_approvals_enabled, enabled, next_check_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", values)
         return self.get_session(session_id)  # type: ignore[return-value]
 
     def update_session(self, session_id: str, changes: dict) -> dict | None:
@@ -361,6 +405,15 @@ class WatchdogStore:
     def get_session(self, session_id: str) -> dict | None:
         return self._one("SELECT * FROM monitored_sessions WHERE id = ?", (session_id,))
 
+    def unattended_approvals_enabled(self, thread_id: str) -> bool:
+        session = self._one(
+            """SELECT unattended_approvals_enabled AS enabled
+               FROM monitored_sessions
+               WHERE thread_id = ? AND enabled = 1""",
+            (thread_id,),
+        )
+        return bool(session and session["enabled"])
+
     def _update(self, table: str, record_id: str, changes: dict, allowed: dict[str, str], getter) -> dict | None:
         assignments, values = [], []
         for key, value in changes.items():
@@ -368,7 +421,11 @@ class WatchdogStore:
             if column is None:
                 continue
             assignments.append(f"{column} = ?")
-            values.append(self._bool(value) if key == "enabled" else value)
+            values.append(
+                self._bool(value)
+                if key in {"enabled", "unattendedApprovalsEnabled"}
+                else value
+            )
         if not assignments:
             return getter(record_id)
         values.append(record_id)
@@ -393,7 +450,7 @@ class WatchdogStore:
         self, connection: sqlite3.Connection, data: dict
     ) -> dict:
         run_id = str(data.get("id") or uuid4())
-        columns = {"id": run_id, "session_id": data.get("sessionId"), "channel_id": data.get("channelId"), "started_at": data["startedAt"], "finished_at": data.get("finishedAt"), "channel_status": data.get("channelStatus"), "http_status": data.get("httpStatus"), "session_state": data.get("sessionState"), "turn_id": data.get("turnId"), "error_category": data.get("errorCategory"), "decision": data["decision"], "resume_attempt": data.get("resumeAttempt"), "duration_ms": data.get("durationMs"), "detail_sanitized": data.get("detailSanitized", "")}
+        columns = {"id": run_id, "session_id": data.get("sessionId"), "channel_id": data.get("channelId"), "started_at": data["startedAt"], "finished_at": data.get("finishedAt"), "channel_status": data.get("channelStatus"), "http_status": data.get("httpStatus"), "session_state": data.get("sessionState"), "turn_id": data.get("turnId"), "resumed_turn_id": data.get("resumedTurnId"), "error_category": data.get("errorCategory"), "decision": data["decision"], "resume_attempt": data.get("resumeAttempt"), "duration_ms": data.get("durationMs"), "detail_sanitized": data.get("detailSanitized", "")}
         connection.execute(f"INSERT INTO monitor_runs({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", tuple(columns.values()))
         return self._row(
             connection.execute(
@@ -428,7 +485,7 @@ class WatchdogStore:
                 next_check_at,
                 state,
                 data["decision"],
-                data.get("turnId"),
+                data.get("resumedTurnId") or data.get("turnId"),
                 session_id,
             ),
         )
@@ -483,7 +540,7 @@ class WatchdogStore:
             ).fetchone()
             status = row["status"]
             attempt_count = row["attempt_count"]
-            if status == "sent":
+            if status in {"sent", "started", "completed"}:
                 outcome = "already_handled"
             elif status == "sending":
                 outcome = "sending_in_progress"
@@ -592,8 +649,14 @@ class WatchdogStore:
         resolved_at: str,
         run_data: dict,
         next_check_at: str,
+        resumed_turn_id: str | None = None,
     ) -> dict:
         updates = {
+            "started": (
+                "status = 'started', resolved_at = NULL, resumed_turn_id = ?, "
+                "detail = 'resumed turn started'",
+                (resumed_turn_id,),
+            ),
             "sent": (
                 "status = 'sent', resolved_at = ?, "
                 "detail = 'resume request accepted'",
@@ -634,6 +697,116 @@ class WatchdogStore:
             raise ResumeOutcomePersistenceError(
                 "resume outcome transaction was rolled back"
             ) from error
+
+    def finalize_resumed_turn(
+        self, resumed_turn_id: str, status: str, resolved_at: str
+    ) -> bool:
+        outcomes = {
+            "completed": ("completed", "resume_completed", "resumed turn completed"),
+            "failed": ("resumed_failed", "resume_failed", "resumed turn failed"),
+            "interrupted": (
+                "resumed_interrupted",
+                "resume_interrupted",
+                "resumed turn was interrupted",
+            ),
+        }
+        outcome = outcomes.get(status)
+        if outcome is None:
+            return False
+        incident_status, decision, detail = outcome
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT fingerprint, session_id FROM recovery_incidents
+                   WHERE resumed_turn_id = ? AND status = 'started'""",
+                (resumed_turn_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = ?, resolved_at = ?, detail = ?
+                   WHERE fingerprint = ?""",
+                (incident_status, resolved_at, detail, row["fingerprint"]),
+            )
+            connection.execute(
+                """UPDATE monitor_runs
+                   SET decision = ?, session_state = ?, finished_at = ?,
+                       detail_sanitized = ?
+                   WHERE resumed_turn_id = ? AND decision IN ('resume_started', 'resume_running')""",
+                (decision, status, resolved_at, detail, resumed_turn_id),
+            )
+            connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_session_state = ?, last_check_result = ?,
+                       last_turn_id = ?, last_checked_at = ?
+                   WHERE id = ?""",
+                (status, decision, resumed_turn_id, resolved_at, row["session_id"]),
+            )
+        return True
+
+    def mark_resumed_turn_manual_attention(
+        self, resumed_turn_id: str, detail: str, resolved_at: str
+    ) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT fingerprint, session_id FROM recovery_incidents
+                   WHERE resumed_turn_id = ? AND status = 'started'""",
+                (resumed_turn_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = 'manual_attention', resolved_at = ?, detail = ?
+                   WHERE fingerprint = ?""",
+                (resolved_at, detail, row["fingerprint"]),
+            )
+            connection.execute(
+                """UPDATE monitor_runs
+                   SET decision = 'resume_manual_attention', finished_at = ?,
+                       detail_sanitized = ?
+                   WHERE resumed_turn_id = ? AND decision IN ('resume_started', 'resume_running')""",
+                (resolved_at, detail, resumed_turn_id),
+            )
+            connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_check_result = 'resume_manual_attention',
+                       last_checked_at = ?
+                   WHERE id = ?""",
+                (resolved_at, row["session_id"]),
+            )
+        return True
+
+    def mark_stale_resumed_turns_manual_attention(
+        self, session_id: str, latest_turn_id: str, resolved_at: str
+    ) -> int:
+        detail = "resumed turn outcome was not observed before a newer turn"
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT fingerprint, resumed_turn_id
+                   FROM recovery_incidents
+                   WHERE session_id = ? AND status = 'started'
+                     AND resumed_turn_id IS NOT NULL
+                     AND resumed_turn_id != ?
+                     AND turn_id != ?""",
+                (session_id, latest_turn_id, latest_turn_id),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """UPDATE recovery_incidents
+                       SET status = 'manual_attention', resolved_at = ?, detail = ?
+                       WHERE fingerprint = ?""",
+                    (resolved_at, detail, row["fingerprint"]),
+                )
+                connection.execute(
+                    """UPDATE monitor_runs
+                       SET decision = 'resume_manual_attention', finished_at = ?,
+                           detail_sanitized = ?
+                       WHERE resumed_turn_id = ?
+                         AND decision IN ('resume_started', 'resume_running')""",
+                    (resolved_at, detail, row["resumed_turn_id"]),
+                )
+            return len(rows)
 
     def recover_interrupted_sends(self, recovered_at: str) -> int:
         with self._connect() as connection:

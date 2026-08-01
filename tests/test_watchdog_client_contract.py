@@ -78,6 +78,15 @@ class WatchdogClientContractTests(unittest.TestCase):
         self.assertIn("专用测试会话", html)
         self.assertIn("/api/watchdog/settings", html)
 
+    def test_unattended_approval_is_an_explicit_per_session_setting(self) -> None:
+        html = self.read_html()
+
+        self.assertIn('id="session-unattended-approvals"', html)
+        self.assertIn('name="unattendedApprovalsEnabled"', html)
+        self.assertIn("命令执行和文件修改", html)
+        self.assertIn("权限扩展和模型提问仍会停下", html)
+        self.assertIn("unattendedApprovalsEnabled", html)
+
     def test_run_history_provides_all_supported_filters(self) -> None:
         html = self.read_html()
 

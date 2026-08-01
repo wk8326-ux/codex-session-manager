@@ -217,6 +217,61 @@ class WatchdogStoreTests(unittest.TestCase):
             {"429", "502", "503", "504"},
         )
 
+    def test_unattended_approval_is_opt_in_per_session(self) -> None:
+        session = self.create_session()
+
+        self.assertFalse(session["unattendedApprovalsEnabled"])
+        self.assertFalse(self.store.unattended_approvals_enabled(THREAD_ID))
+
+        updated = self.store.update_session(
+            session["id"], {"unattendedApprovalsEnabled": True}
+        )
+
+        self.assertTrue(updated["unattendedApprovalsEnabled"])
+        self.assertTrue(self.store.unattended_approvals_enabled(THREAD_ID))
+
+    def test_initialize_migrates_existing_session_schema(self) -> None:
+        legacy_path = Path(self.temp.name) / "legacy.db"
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                """CREATE TABLE monitored_sessions (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    thread_id TEXT NOT NULL UNIQUE,
+                    host_kind TEXT NOT NULL DEFAULT 'local',
+                    channel_id TEXT NOT NULL,
+                    interval_minutes INTEGER,
+                    resume_prompt TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_session_state TEXT,
+                    last_turn_id TEXT,
+                    last_check_result TEXT,
+                    last_checked_at TEXT,
+                    next_check_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                )"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        legacy_store = WatchdogStore(legacy_path)
+        legacy_store.initialize()
+        connection = sqlite3.connect(legacy_path)
+        try:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(monitored_sessions)"
+                )
+            }
+        finally:
+            connection.close()
+
+        self.assertIn("unattended_approvals_enabled", columns)
+
     def test_due_sessions_returns_only_enabled_due_rows(self) -> None:
         channel = self.create_channel()
         self.store.create_session(

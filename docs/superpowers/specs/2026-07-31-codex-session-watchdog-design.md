@@ -96,7 +96,11 @@
 - `silent_manual_attention`
 - `silent_unknown`
 - `resume_candidate`
-- `resume_sent`
+- `resume_started`
+- `resume_completed`
+- `resume_failed`
+- `resume_interrupted`
+- `resume_manual_attention`
 - `resume_action_failed`
 - `silent_already_handled`
 
@@ -149,6 +153,7 @@ Base URL、模型和 API Key 是必填项。默认探测地址按 OpenAI 兼容 
 - `channel_id`
 - `interval_minutes`：空值表示使用全局默认值
 - `resume_prompt`
+- `unattended_approvals_enabled`：单会话显式授权，默认关闭
 - `enabled`
 - `last_session_state`
 - `last_turn_id`
@@ -303,7 +308,7 @@ thread 的 `active/idle/notLoaded` 只作为概要，最终决策以最新 turn 
 - 上次和下次检查时间
 - 启停、立即检查、编辑和删除操作
 
-添加/编辑字段包括名称、thread ID、绑定渠道、检查周期覆盖值、续跑提示词和启用状态。
+添加/编辑字段包括名称、thread ID、绑定渠道、检查周期覆盖值、续跑提示词、单会话无人值守审批和启用状态。
 
 ### 11.2 执行记录
 
@@ -329,7 +334,7 @@ thread 的 `active/idle/notLoaded` 只作为概要，最终决策以最新 turn 
 5. 用户填写的 Base URL 只允许 HTTP/HTTPS，拒绝带用户名或密码的 URL。
 6. 续跑提示词作为会话配置保存，但执行记录只保存其哈希或版本标识。
 7. CodexAdapter 启动时验证 App Server 初始化协议；读取能力由只读诊断和目标会话检查验证，发送能力必须通过专用测试会话闸门。不兼容时禁止发送或转为人工确认，不能盲目重试。
-8. 自动续跑不会覆盖会话原有审批策略，也不会自动批准命令、文件修改、网络升级或用户输入请求。App Server 向 watchdog 客户端发起此类请求时，适配器安全拒绝并把会话标记为需要人工关注。
+8. 命令执行和文件修改默认拒绝；只有全局续跑开启、会话启用且用户对该会话显式开启无人值守审批时才自动批准。协议提供 `acceptForSession` 时优先使用，否则降级为 `accept`。额外权限扩展和用户输入请求始终保持人工处理，并把会话标记为需要关注。
 
 ## 13. 记录保留与维护
 

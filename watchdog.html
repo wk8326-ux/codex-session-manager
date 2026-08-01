@@ -209,6 +209,8 @@
     .checkbox-field input { width: 18px; min-height: 18px; margin: 1px 0 0; }
     .checkbox-field label { font-size: 12px; line-height: 1.5; }
     .local-picker { display: grid; gap: 8px; padding: 12px; background: var(--n-25); border: 1px solid var(--border-subtle); border-radius: var(--radius-input); }
+    .approval-policy { display: grid; gap: 8px; padding: 12px 14px; background: #fffaf2; border: 1px solid rgba(173, 107, 29, 0.22); border-radius: var(--radius-input); }
+    .approval-policy .field-help { color: #7e4a0e; }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
     .confirm-copy { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
     .confirm-note { margin: 0; padding: 12px 14px; color: #7e4a0e; background: #fffaf2; border: 1px solid rgba(173, 107, 29, 0.2); border-radius: var(--radius-input); font-size: 12px; line-height: 1.6; }
@@ -326,7 +328,7 @@
       <section class="sidebar-note" aria-labelledby="resume-state-label">
         <p class="sidebar-note-label" id="resume-state-label">自动续跑</p>
         <p class="sidebar-note-value"><span class="status-dot warning" aria-hidden="true"></span><span>安全关闭</span></p>
-        <p class="sidebar-note-copy">只读监控保持可用，续跑动作等待专用测试会话验证。</p>
+        <p class="sidebar-note-copy">全局续跑与会话级无人值守审批分别控制，未授权会话保持手动模式。</p>
       </section>
 
       <div class="host-status">
@@ -421,7 +423,7 @@
             <form class="filters-row" id="runs-filter-form">
               <div class="compact-field"><label for="run-filter-session">会话</label><select id="run-filter-session" name="sessionId"><option value="">全部会话</option></select></div>
               <div class="compact-field"><label for="run-filter-channel">渠道</label><select id="run-filter-channel" name="channelId"><option value="">全部渠道</option></select></div>
-              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">静默：仅观察续跑候选</option><option value="resume_sent">已续跑</option><option value="resume_action_failed">续跑失败</option><option value="silent_manual_attention">需要关注</option></select></div>
+              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">静默：仅观察续跑候选</option><option value="resume_started">续跑已启动</option><option value="resume_completed">续跑已完成</option><option value="resume_failed">续跑后失败</option><option value="resume_interrupted">续跑被中断</option><option value="resume_manual_attention">续跑需要关注</option><option value="resume_sent">旧记录：已续跑</option><option value="resume_action_failed">续跑请求失败</option><option value="silent_manual_attention">需要关注</option></select></div>
               <div class="compact-field"><label for="run-filter-from">开始时间</label><input id="run-filter-from" name="from" type="datetime-local"></div>
               <div class="compact-field"><label for="run-filter-to">结束时间</label><input id="run-filter-to" name="to" type="datetime-local"></div>
               <div class="filter-actions"><button class="button" type="submit">筛选记录</button><button class="button ghost" id="reset-run-filters" type="button">重置</button></div>
@@ -484,6 +486,10 @@
         <div class="field-pair">
           <div class="field"><label for="session-interval">检查周期（分钟）</label><p class="field-help" id="interval-help">留空使用全局默认值。</p><input id="session-interval" name="intervalMinutes" type="number" min="5" step="1" inputmode="numeric"></div>
           <div class="field"><label for="session-enabled">监控状态</label><div class="checkbox-field"><input id="session-enabled" name="enabled" type="checkbox" checked><label for="session-enabled">启用该会话</label></div></div>
+        </div>
+        <div class="approval-policy">
+          <div class="checkbox-field"><input id="session-unattended-approvals" name="unattendedApprovalsEnabled" type="checkbox" aria-describedby="session-unattended-help"><label for="session-unattended-approvals">允许该会话无人值守执行</label></div>
+          <p class="field-help" id="session-unattended-help">开启后，监控器会自动批准该会话的命令执行和文件修改；协议支持时优先使用“本会话批准”，否则仅批准当前请求。权限扩展和模型提问仍会停下并标记为需要关注。</p>
         </div>
         <div class="field"><label for="session-prompt">续跑提示词</label><p class="field-help">仅在渠道可用且确认异常中断时发送。</p><textarea id="session-prompt" name="resumePrompt" maxlength="4000" required>继续当前开发任务</textarea></div>
         <p class="form-error" id="session-form-error" role="alert"></p>
@@ -652,7 +658,11 @@
     }
 
     function decisionView(decision) {
+      if (decision === 'resume_started') return { label: '续跑中', tone: 'warning' };
+      if (decision === 'resume_completed') return { label: '续跑完成', tone: 'success' };
       if (decision === 'resume_sent') return { label: '已续跑', tone: 'success' };
+      if (['resume_failed', 'resume_interrupted'].includes(decision)) return { label: '续跑中断', tone: 'danger' };
+      if (decision === 'resume_manual_attention') return { label: '需要关注', tone: 'warning' };
       if (decision === 'resume_action_failed') return { label: '续跑失败', tone: 'danger' };
       if (decision === 'silent_manual_attention') return { label: '需要关注', tone: 'warning' };
       if (decision === 'resume_candidate_observed') return { label: '静默', tone: 'warning' };
@@ -723,7 +733,7 @@
         const result = session.lastCheckResult ? decisionView(session.lastCheckResult).label : '尚未检查';
         return `<tr data-session-id="${escapeHtml(session.id)}">
           <td><span class="status-label" data-tone="${state.tone}"><span class="status-dot" aria-hidden="true"></span>${state.label}</span></td>
-          <td><strong title="${escapeHtml(session.name)}">${escapeHtml(session.name)}</strong><code title="${escapeHtml(session.threadId)}">${escapeHtml(session.threadId)}</code></td>
+          <td><strong title="${escapeHtml(session.name)}">${escapeHtml(session.name)}</strong><code title="${escapeHtml(session.threadId)}">${escapeHtml(session.threadId)}</code><code>${session.unattendedApprovalsEnabled ? '无人值守已授权' : '手动审批'}</code></td>
           <td><strong>${escapeHtml(channelName(session.channelId))}</strong></td>
           <td><span class="mono">${escapeHtml(session.effectiveIntervalMinutes)} min</span><code>${session.intervalMinutes ? '单独设置' : '使用全局默认'}</code></td>
           <td><strong>${escapeHtml(result)}</strong><code>${escapeHtml(formatDate(session.lastCheckedAt, { compact: true }))}</code></td>
@@ -766,7 +776,7 @@
         const decision = decisionView(run.decision);
         return `<tr>
           <td class="mono">${escapeHtml(formatDate(run.startedAt))}</td>
-          <td><strong>${escapeHtml(sessionName(run.sessionId))}</strong><code title="${escapeHtml(run.turnId || '')}">${escapeHtml(run.turnId || '无活动 turn')}</code></td>
+          <td><strong>${escapeHtml(sessionName(run.sessionId))}</strong><code title="${escapeHtml(run.resumedTurnId || run.turnId || '')}">${escapeHtml(run.resumedTurnId || run.turnId || '无活动 turn')}</code></td>
           <td><span class="status-label" data-tone="${channel.tone}"><span class="status-dot" aria-hidden="true"></span>${channel.label}</span></td>
           <td class="mono">${escapeHtml(run.httpStatus ?? '--')}</td>
           <td>${escapeHtml(run.sessionState || 'unknown')}</td>
@@ -801,6 +811,7 @@
       document.getElementById('session-interval').value = session?.intervalMinutes ?? '';
       document.getElementById('session-prompt').value = session?.resumePrompt || '继续当前开发任务';
       document.getElementById('session-enabled').checked = session?.enabled ?? true;
+      document.getElementById('session-unattended-approvals').checked = session?.unattendedApprovalsEnabled ?? false;
       const channelSelect = document.getElementById('session-channel-id');
       channelSelect.innerHTML = '<option value="">请选择监控渠道</option>' + appState.channels.map(channel => `<option value="${escapeHtml(channel.id)}" ${channel.enabled ? '' : 'disabled'}>${escapeHtml(channel.name)}${channel.enabled ? '' : '（已停用）'}</option>`).join('');
       channelSelect.value = session?.channelId || '';
@@ -1014,6 +1025,7 @@
         channelId: document.getElementById('session-channel-id').value,
         intervalMinutes: intervalValue ? Number(intervalValue) : null,
         resumePrompt: document.getElementById('session-prompt').value.trim(),
+        unattendedApprovalsEnabled: document.getElementById('session-unattended-approvals').checked,
         enabled: document.getElementById('session-enabled').checked,
       };
       const button = document.getElementById('save-session');

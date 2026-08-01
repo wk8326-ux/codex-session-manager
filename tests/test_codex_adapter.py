@@ -377,6 +377,7 @@ class StdioJsonRpcClientTests(unittest.TestCase):
     def setUp(self) -> None:
         self.process = FakeProcess()
         self.attention: list[tuple[str, str]] = []
+        self.auto_approve = False
         self.command_patch = patch(
             "watchdog.codex_adapter._codex_executable", return_value="codex"
         )
@@ -388,7 +389,8 @@ class StdioJsonRpcClientTests(unittest.TestCase):
         self.client = StdioJsonRpcClient(
             on_attention=lambda thread_id, method: self.attention.append(
                 (thread_id, method)
-            )
+            ),
+            approval_policy=lambda _thread_id, _turn_id: self.auto_approve,
         )
 
     def tearDown(self) -> None:
@@ -453,6 +455,82 @@ class StdioJsonRpcClientTests(unittest.TestCase):
             [(THREAD_ID, "item/commandExecution/requestApproval")],
         )
 
+    def test_explicit_unattended_policy_accepts_command_and_file_for_session(self) -> None:
+        self.auto_approve = True
+        self.process.stdout.push(
+            {
+                "id": 95,
+                "method": "item/commandExecution/requestApproval",
+                "params": {"threadId": THREAD_ID, "turnId": "turn-new"},
+            }
+        )
+        self.process.stdout.push(
+            {
+                "id": 96,
+                "method": "item/fileChange/requestApproval",
+                "params": {"threadId": THREAD_ID, "turnId": "turn-new"},
+            }
+        )
+
+        self.wait_for_messages(4)
+
+        self.assertEqual(
+            self.process.stdin.messages[2:],
+            [
+                {"id": 95, "result": {"decision": "acceptForSession"}},
+                {"id": 96, "result": {"decision": "acceptForSession"}},
+            ],
+        )
+
+    def test_unattended_policy_falls_back_to_single_accept_when_required(self) -> None:
+        self.auto_approve = True
+        self.process.stdout.push(
+            {
+                "id": 98,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turnId": "turn-new",
+                    "availableDecisions": [
+                        "accept",
+                        {
+                            "acceptWithExecpolicyAmendment": {
+                                "execpolicy_amendment": ["Get-Location"]
+                            }
+                        },
+                        "cancel",
+                    ],
+                },
+            }
+        )
+
+        self.wait_for_messages(3)
+
+        self.assertEqual(
+            self.process.stdin.messages[2],
+            {"id": 98, "result": {"decision": "accept"}},
+        )
+
+    def test_notifications_are_forwarded_to_event_handler(self) -> None:
+        events: list[tuple[str, dict]] = []
+        self.client.set_event_handler(
+            lambda method, params: events.append((method, params))
+        )
+        notification = {
+            "method": "turn/completed",
+            "params": {
+                "threadId": THREAD_ID,
+                "turn": {"id": "turn-new", "status": "completed"},
+            },
+        }
+
+        self.process.stdout.push(notification)
+        deadline = time.monotonic() + 1
+        while not events and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+        self.assertEqual(events, [("turn/completed", notification["params"])])
+
     def test_other_server_requests_never_approve_work(self) -> None:
         requests = [
             {
@@ -473,11 +551,20 @@ class StdioJsonRpcClientTests(unittest.TestCase):
                 "method": "unknown/request",
                 "params": {"threadId": THREAD_ID},
             },
+            {
+                "id": 97,
+                "method": "item/permissions/requestApproval",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turnId": "turn-new",
+                    "permissions": {"network": {"enabled": True}},
+                },
+            },
         ]
         for message in requests:
             self.process.stdout.push(message)
 
-        self.wait_for_messages(5)
+        self.wait_for_messages(6)
 
         responses = self.process.stdin.messages[2:]
         self.assertEqual(
@@ -497,6 +584,7 @@ class StdioJsonRpcClientTests(unittest.TestCase):
                     "id": 94,
                     "error": {"code": -32601, "message": "Method not found"},
                 },
+                {"id": 97, "result": {"permissions": {}}},
             ],
         )
         self.assertNotIn("accept", repr(responses))

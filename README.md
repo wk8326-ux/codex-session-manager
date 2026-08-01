@@ -39,10 +39,11 @@ There is no hard-coded Codex CLI version. If the read-only probe fails after an 
 ### Safe defaults
 
 - Monitoring is enabled, but `resumeActionsEnabled` is `false` by default.
+- Unattended command/file approvals are disabled by default for every session. They must be enabled explicitly on each monitored session and only take effect while the global resume switch is on.
 - The global check interval is 15 minutes; a session can override it, with a five-minute minimum.
 - The built-in prompt means "continue the current development task" and can be customized per session.
 - Running, completed, waiting-for-user, unknown, unmatched, and channel-unavailable states stay silent.
-- A recoverable incident is deduplicated. Definite send failures stop after three total attempts; uncertain outcomes require manual confirmation and are not blindly retried.
+- A recoverable incident is deduplicated. `turn/start` is recorded as started, not completed; the final result comes from the App Server `turn/completed` event. Definite send failures stop after three total attempts, while uncertain outcomes require manual confirmation and are not blindly retried.
 - Execution records default to 90 days and 10,000 rows, with daily cleanup while the scheduler runs.
 
 Before turning on automatic resume, use a disposable Codex session titled exactly `watchdog-integration-test` and follow the gated send procedure in the operator guide. Do not use an active development session for the first send test.

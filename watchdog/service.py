@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 
@@ -64,7 +65,11 @@ TURN_ID = re.compile(
 DECISION_DETAILS = {
     "resume_candidate": "enabled recovery rule matched",
     "resume_candidate_observed": "enabled recovery rule matched",
-    "resume_sent": "resume request was accepted",
+    "resume_started": "resumed turn started; waiting for final outcome",
+    "resume_completed": "resumed turn completed",
+    "resume_failed": "resumed turn failed",
+    "resume_interrupted": "resumed turn was interrupted",
+    "resume_manual_attention": "resumed turn requires manual attention",
     "resume_action_failed": "resume request was rejected",
     "silent_already_handled": "incident was already handled",
     "sending_in_progress": "incident send is already in progress",
@@ -238,6 +243,8 @@ class WatchdogService:
         self._secret_store = secret_store
         self._probe = probe
         self._adapter = adapter
+        self._event_lock = threading.Lock()
+        self._pending_turn_events: dict[str, tuple[int, str, str, str]] = {}
         self._store.recover_interrupted_sends((now_provider or _utc_now)())
 
     def _probe_channel(self, channel: dict, now: str) -> ProbeResult:
@@ -269,6 +276,86 @@ class WatchdogService:
             result.checked_at or now,
         )
 
+    def handle_app_server_event(
+        self, method: str, params: dict, now: str | None = None
+    ) -> None:
+        event_time = now or _utc_now()
+        if method == "turn/completed":
+            turn = params.get("turn")
+            if not isinstance(turn, dict):
+                return
+            turn_id = turn.get("id")
+            status = turn.get("status")
+            if isinstance(turn_id, str) and isinstance(status, str):
+                handled = self._store.finalize_resumed_turn(
+                    turn_id, status, event_time
+                )
+                if not handled and status in {"completed", "failed", "interrupted"}:
+                    self._remember_turn_event(
+                        turn_id, 1, "terminal", status, event_time
+                    )
+            return
+        if method not in {
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+            "item/permissions/requestApproval",
+            "item/tool/requestUserInput",
+        }:
+            return
+        if params.get("watchdogDecision") in {"accept", "acceptForSession"}:
+            return
+        turn_id = params.get("turnId")
+        if not isinstance(turn_id, str):
+            return
+        approval_labels = {
+            "item/commandExecution/requestApproval": "command approval",
+            "item/fileChange/requestApproval": "file change approval",
+            "item/permissions/requestApproval": "permission expansion approval",
+            "item/tool/requestUserInput": "user input",
+        }
+        detail = f"resumed turn stopped for manual {approval_labels[method]}"
+        handled = self._store.mark_resumed_turn_manual_attention(
+            turn_id, detail, event_time
+        )
+        if not handled:
+            self._remember_turn_event(
+                turn_id, 2, "manual", detail, event_time
+            )
+
+    def _remember_turn_event(
+        self,
+        turn_id: str,
+        priority: int,
+        kind: str,
+        value: str,
+        event_time: str,
+    ) -> None:
+        with self._event_lock:
+            previous = self._pending_turn_events.get(turn_id)
+            if previous is None or priority > previous[0]:
+                self._pending_turn_events[turn_id] = (
+                    priority,
+                    kind,
+                    value,
+                    event_time,
+                )
+            while len(self._pending_turn_events) > 100:
+                oldest = next(iter(self._pending_turn_events))
+                self._pending_turn_events.pop(oldest, None)
+
+    def _replay_pending_turn_event(self, turn_id: str) -> None:
+        with self._event_lock:
+            pending = self._pending_turn_events.pop(turn_id, None)
+        if pending is None:
+            return
+        _priority, kind, value, event_time = pending
+        if kind == "manual":
+            self._store.mark_resumed_turn_manual_attention(
+                turn_id, value, event_time
+            )
+        else:
+            self._store.finalize_resumed_turn(turn_id, value, event_time)
+
     def check_session(
         self,
         session_id: str,
@@ -296,6 +383,13 @@ class WatchdogService:
                 snapshot = self._adapter.read_thread(session["threadId"])
             except Exception:
                 snapshot = None
+        latest = snapshot.latest_turn if snapshot is not None else None
+        if latest is not None:
+            if latest.status in {"completed", "failed", "interrupted"}:
+                self._store.finalize_resumed_turn(latest.id, latest.status, now)
+            self._store.mark_stale_resumed_turns_manual_attention(
+                session["id"], latest.id, now
+            )
 
         decision = decide(
             DecisionInput(result.category, snapshot, self._store.list_recovery_rules())
@@ -335,7 +429,7 @@ class WatchdogService:
             claim_outcome = incident["claimOutcome"]
             if claim_outcome == "claimed":
                 try:
-                    _new_turn_id = self._adapter.start_turn(
+                    new_turn_id = self._adapter.start_turn(
                         session["threadId"], session["resumePrompt"]
                     )
                 except DefiniteSendFailure:
@@ -356,8 +450,8 @@ class WatchdogService:
                         "resume_action_failed", decision.error_signature
                     )
                 else:
-                    resume_outcome = "sent"
-                    decision = Decision("resume_sent", decision.error_signature)
+                    resume_outcome = "started"
+                    decision = Decision("resume_started", decision.error_signature)
             else:
                 outcome_decisions = {
                     "already_handled": "silent_already_handled",
@@ -405,10 +499,21 @@ class WatchdogService:
             resume_attempt=resume_attempt,
             detail=resume_audit_detail,
         )
+        if resume_outcome == "started":
+            run_data["resumedTurnId"] = new_turn_id
+            run_data["sessionState"] = "inProgress"
+            run_data["finishedAt"] = None
         if resume_outcome is not None:
             run = self._store.finalize_resume_outcome(
-                fingerprint, resume_outcome, now, run_data, next_check_at
+                fingerprint,
+                resume_outcome,
+                now,
+                run_data,
+                next_check_at,
+                new_turn_id if resume_outcome == "started" else None,
             )
+            if resume_outcome == "started":
+                self._replay_pending_turn_event(new_turn_id)
         else:
             run = self._store.record_monitor_result(run_data, next_check_at)
         return run

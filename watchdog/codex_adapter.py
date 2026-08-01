@@ -212,6 +212,9 @@ SAFE_SERVER_REQUEST_RESULTS = {
     "item/fileChange/requestApproval": {"decision": "decline"},
 }
 
+ApprovalPolicy = Callable[[str, str], bool]
+EventHandler = Callable[[str, dict], None]
+
 
 def _codex_executable() -> str:
     if os.name == "nt":
@@ -235,6 +238,8 @@ class StdioJsonRpcClient:
         *,
         request_timeout: float = 10.0,
         on_attention: Callable[[str, str], None] | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+        on_event: EventHandler | None = None,
     ) -> None:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self._process = subprocess.Popen(
@@ -249,6 +254,10 @@ class StdioJsonRpcClient:
         )
         self._request_timeout = request_timeout
         self._on_attention = on_attention or (lambda _thread_id, _method: None)
+        self._approval_policy = approval_policy or (
+            lambda _thread_id, _turn_id: False
+        )
+        self._on_event = on_event or (lambda _method, _params: None)
         self._write_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._pending: dict[int, _PendingRequest] = {}
@@ -338,6 +347,9 @@ class StdioJsonRpcClient:
         if self._reader is not threading.current_thread():
             self._reader.join(timeout=2)
 
+    def set_event_handler(self, handler: EventHandler) -> None:
+        self._on_event = handler
+
     def _write_message(self, message: dict) -> None:
         stdin = self._process.stdin
         if stdin is None:
@@ -367,6 +379,8 @@ class StdioJsonRpcClient:
                     self._handle_server_request(message)
                 elif self._numeric_id(message_id):
                     self._handle_response(message)
+                elif "method" in message:
+                    self._handle_notification(message)
         except BaseException as error:
             self._fail_pending(error)
             return
@@ -418,9 +432,28 @@ class StdioJsonRpcClient:
         except Exception:
             pass
 
+        turn_id = params.get("turnId")
+        normalized_turn_id = turn_id if isinstance(turn_id, str) else ""
+
         if method in SAFE_SERVER_REQUEST_RESULTS:
-            result = dict(SAFE_SERVER_REQUEST_RESULTS[method])
+            auto_approve = False
+            try:
+                auto_approve = self._approval_policy(
+                    thread_id if isinstance(thread_id, str) else "",
+                    normalized_turn_id,
+                )
+            except Exception:
+                auto_approve = False
+            decision = self._approval_decision(params) if auto_approve else "decline"
+            result = {"decision": decision}
             self._write_message({"id": request_id, "result": result})
+            self._emit_event(method, params, watchdog_decision=decision)
+            return
+        if method == "item/permissions/requestApproval":
+            self._write_message(
+                {"id": request_id, "result": {"permissions": {}}}
+            )
+            self._emit_event(method, params, watchdog_decision="decline")
             return
         if method == "item/tool/requestUserInput":
             questions = params.get("questions")
@@ -435,6 +468,7 @@ class StdioJsonRpcClient:
             self._write_message(
                 {"id": request_id, "result": {"answers": answers}}
             )
+            self._emit_event(method, params, watchdog_decision="manual")
             return
         self._write_message(
             {
@@ -442,6 +476,36 @@ class StdioJsonRpcClient:
                 "error": {"code": -32601, "message": "Method not found"},
             }
         )
+
+    @staticmethod
+    def _approval_decision(params: dict) -> str:
+        raw = params.get("availableDecisions")
+        if not isinstance(raw, list):
+            return "acceptForSession"
+        available = {item for item in raw if isinstance(item, str)}
+        if "acceptForSession" in available:
+            return "acceptForSession"
+        if "accept" in available:
+            return "accept"
+        return "decline"
+
+    def _handle_notification(self, message: dict) -> None:
+        method = message.get("method")
+        if not isinstance(method, str):
+            return
+        params = message.get("params")
+        self._emit_event(method, params if isinstance(params, dict) else {})
+
+    def _emit_event(
+        self, method: str, params: dict, *, watchdog_decision: str | None = None
+    ) -> None:
+        event_params = dict(params)
+        if watchdog_decision is not None:
+            event_params["watchdogDecision"] = watchdog_decision
+        try:
+            self._on_event(method, event_params)
+        except Exception:
+            pass
 
     def _fail_pending(self, error: BaseException) -> None:
         with self._pending_lock:

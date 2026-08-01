@@ -424,13 +424,21 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     )
     codex_connected = True
     try:
-        adapter: object = CodexAppServerAdapter(StdioJsonRpcClient())
+        client = StdioJsonRpcClient(
+            approval_policy=lambda thread_id, _turn_id: bool(
+                store.get_settings()["resumeActionsEnabled"]
+                and store.unattended_approvals_enabled(thread_id)
+            )
+        )
+        adapter: object = CodexAppServerAdapter(client)
     except Exception:
         adapter = UnavailableCodexAdapter()
         codex_connected = False
     monitor_service = WatchdogService(
         store, secrets, probe_channel, adapter
     )
+    if codex_connected:
+        client.set_event_handler(monitor_service.handle_app_server_event)
     scheduler = WatchdogScheduler(monitor_service, store=store)
     application = WatchdogApplication(
         store,

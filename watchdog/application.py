@@ -272,7 +272,13 @@ class WatchdogApplication:
     def _session_state(session: dict) -> str:
         state = session.get("lastSessionState")
         decision = session.get("lastCheckResult")
-        if decision in {"silent_manual_attention", "resume_action_failed"}:
+        if decision in {
+            "silent_manual_attention",
+            "resume_action_failed",
+            "resume_manual_attention",
+            "resume_failed",
+            "resume_interrupted",
+        }:
             return "attention"
         if state in {"active", "inProgress"}:
             return "running"
@@ -313,6 +319,7 @@ class WatchdogApplication:
             "channelId",
             "intervalMinutes",
             "resumePrompt",
+            "unattendedApprovalsEnabled",
             "enabled",
         }
         self._reject_unknown(payload, allowed)
@@ -331,6 +338,9 @@ class WatchdogApplication:
             "channelId": self._validated_channel_id(payload.get("channelId")),
             "intervalMinutes": interval,
             "resumePrompt": prompt,
+            "unattendedApprovalsEnabled": self._optional_bool(
+                payload, "unattendedApprovalsEnabled", False
+            ),
             "enabled": enabled,
             "nextCheckAt": now if enabled else None,
             "createdAt": now,
@@ -351,6 +361,7 @@ class WatchdogApplication:
             "channelId",
             "intervalMinutes",
             "resumePrompt",
+            "unattendedApprovalsEnabled",
             "enabled",
         }
         self._reject_unknown(payload, allowed)
@@ -365,6 +376,11 @@ class WatchdogApplication:
             changes["intervalMinutes"] = self._optional_interval(payload)
         if "resumePrompt" in payload:
             changes["resumePrompt"] = validate_resume_prompt(payload["resumePrompt"])
+        if "unattendedApprovalsEnabled" in payload:
+            changes["unattendedApprovalsEnabled"] = _strict_bool(
+                payload["unattendedApprovalsEnabled"],
+                "unattendedApprovalsEnabled",
+            )
         if "enabled" in payload:
             enabled = _strict_bool(payload["enabled"], "enabled")
             changes["enabled"] = enabled
