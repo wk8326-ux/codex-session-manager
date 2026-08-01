@@ -6,7 +6,7 @@ from typing import Any
 from .application import ResourceConflictError, ResourceNotFoundError
 from .codex_adapter import CodexAdapterError
 from .http_api import ApiResponse
-from .store import ChannelInUseError
+from .store import ChannelInUseError, WatchdogStoreError
 from .validation import ValidationError
 
 
@@ -31,7 +31,7 @@ class WatchdogRouter:
             return self._dispatch(method.upper(), path, query, payload)
         except ResourceNotFoundError as error:
             return ApiResponse(404, {"message": str(error)})
-        except (ResourceConflictError, ChannelInUseError) as error:
+        except (ResourceConflictError, ChannelInUseError, WatchdogStoreError) as error:
             return ApiResponse(409, {"message": str(error)})
         except (ValidationError, TypeError, ValueError) as error:
             return ApiResponse(400, {"message": str(error)})
@@ -86,6 +86,20 @@ class WatchdogRouter:
             return self._method(
                 method, {"GET": lambda: self._service.list_runs(filters)}
             )
+        if path == "/api/watchdog/bridge/status":
+            return self._method(
+                method,
+                {"GET": lambda: self._service.get_desktop_bridge_status()},
+            )
+        if path == "/api/watchdog/bridge/jobs/claim":
+            return self._method(
+                method,
+                {
+                    "POST": lambda: self._service.claim_desktop_bridge_job(
+                        self._body(payload)
+                    )
+                },
+            )
 
         parts = path.strip("/").split("/")
         if len(parts) >= 4 and parts[:3] == ["api", "watchdog", "channels"]:
@@ -123,6 +137,29 @@ class WatchdogRouter:
                 return self._method(
                     method,
                     {"POST": lambda: self._service.check_session(session_id)},
+                )
+        if (
+            len(parts) == 6
+            and parts[:4] == ["api", "watchdog", "bridge", "jobs"]
+        ):
+            job_id = parts[4]
+            if parts[5] == "started":
+                return self._method(
+                    method,
+                    {
+                        "POST": lambda: self._service.mark_desktop_bridge_started(
+                            job_id, self._body(payload)
+                        )
+                    },
+                )
+            if parts[5] == "finish":
+                return self._method(
+                    method,
+                    {
+                        "POST": lambda: self._service.finish_desktop_bridge_job(
+                            job_id, self._body(payload)
+                        )
+                    },
                 )
         return ApiResponse(404, {"message": "Watchdog route not found."})
 

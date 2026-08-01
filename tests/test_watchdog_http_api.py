@@ -63,6 +63,18 @@ class FakeService:
     def list_runs(self, filters: dict) -> list[dict]:
         return [{"decision": filters.get("decision", "silent")}]
 
+    def get_desktop_bridge_status(self) -> dict:
+        return {"pending": 1}
+
+    def claim_desktop_bridge_job(self, payload: dict) -> dict:
+        return {"id": "job-1", "runnerId": payload["runnerId"]}
+
+    def mark_desktop_bridge_started(self, job_id: str, payload: dict) -> dict:
+        return {"id": job_id, "decision": "resume_started", **payload}
+
+    def finish_desktop_bridge_job(self, job_id: str, payload: dict) -> dict:
+        return {"id": job_id, "decision": "resume_completed", **payload}
+
 
 class WatchdogApiTests(unittest.TestCase):
     def test_channel_create_never_returns_plaintext_key(self) -> None:
@@ -117,6 +129,28 @@ class WatchdogApiTests(unittest.TestCase):
             ("DELETE", "/api/watchdog/sessions/session-1", {}, None, 204),
             ("GET", "/api/watchdog/local-codex-sessions", {"limit": ["20"]}, None, 200),
             ("GET", "/api/watchdog/runs", {"decision": ["silent"]}, None, 200),
+            ("GET", "/api/watchdog/bridge/status", {}, None, 200),
+            (
+                "POST",
+                "/api/watchdog/bridge/jobs/claim",
+                {},
+                {"runnerId": "desktop-test"},
+                200,
+            ),
+            (
+                "POST",
+                "/api/watchdog/bridge/jobs/job-1/started",
+                {},
+                {"leaseToken": "lease-1", "resumedTurnId": "turn-1"},
+                200,
+            ),
+            (
+                "POST",
+                "/api/watchdog/bridge/jobs/job-1/finish",
+                {},
+                {"leaseToken": "lease-1", "outcome": "completed"},
+                200,
+            ),
         ]
         for method, path, query, payload, expected in routes:
             with self.subTest(method=method, path=path):

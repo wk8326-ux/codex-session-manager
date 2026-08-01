@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .channels import ChannelConfig, ProbeResult
-from .codex_adapter import CodexAdapterError
 from .secrets import SecretStore
 from .service import CHANNEL_CATEGORIES, PROBE_DETAILS
 from .store import ChannelInUseError, WatchdogStore
@@ -110,6 +109,8 @@ class WatchdogApplication:
             "schedulerEnabled": settings["schedulerEnabled"],
             "codexConnected": bool(connected),
             "resumeActionsEnabled": settings["resumeActionsEnabled"],
+            "resumeDispatchMode": settings["resumeDispatchMode"],
+            "desktopBridge": self._store.get_desktop_bridge_status(),
             "nextCheckAt": min(due) if due else None,
         }
 
@@ -123,6 +124,7 @@ class WatchdogApplication:
             "recordLimit",
             "schedulerEnabled",
             "resumeActionsEnabled",
+            "resumeDispatchMode",
         }
         self._reject_unknown(payload, allowed)
         changes: dict = {}
@@ -138,6 +140,13 @@ class WatchdogApplication:
         for field in ("schedulerEnabled", "resumeActionsEnabled"):
             if field in payload:
                 changes[field] = _strict_bool(payload[field], field)
+        if "resumeDispatchMode" in payload:
+            mode = payload["resumeDispatchMode"]
+            if mode not in {"direct_app_server", "desktop_bridge"}:
+                raise ValidationError(
+                    "resumeDispatchMode must be direct_app_server or desktop_bridge"
+                )
+            changes["resumeDispatchMode"] = mode
         return self._store.update_settings(changes)
 
     @staticmethod
@@ -280,7 +289,7 @@ class WatchdogApplication:
             "resume_interrupted",
         }:
             return "attention"
-        if state in {"active", "inProgress"}:
+        if state in {"active", "inProgress", "queued"}:
             return "running"
         if state in {"idle", "completed"}:
             return "idle"
@@ -426,6 +435,66 @@ class WatchdogApplication:
             self._safe_run(run)
             for run in self._store.list_monitor_runs(filters)
         ]
+
+    def get_desktop_bridge_status(self) -> dict:
+        status = self._store.get_desktop_bridge_status()
+        status["dispatchMode"] = self._store.get_settings()[
+            "resumeDispatchMode"
+        ]
+        return status
+
+    def claim_desktop_bridge_job(self, payload: dict) -> dict | None:
+        self._reject_unknown(payload, {"runnerId", "leaseSeconds"})
+        runner_id = validate_required_text(payload.get("runnerId"), "runnerId")
+        lease_seconds = _strict_positive_int(
+            payload.get("leaseSeconds", 90),
+            "leaseSeconds",
+            minimum=30,
+            maximum=300,
+        )
+        return self._store.claim_desktop_bridge_job(
+            runner_id,
+            self._now(),
+            lease_seconds=lease_seconds,
+        )
+
+    def mark_desktop_bridge_started(self, job_id: str, payload: dict) -> dict:
+        self._reject_unknown(payload, {"leaseToken", "resumedTurnId"})
+        lease_token = validate_required_text(
+            payload.get("leaseToken"), "leaseToken"
+        )
+        resumed_turn_id = validate_thread_id(payload.get("resumedTurnId"))
+        run = self._store.mark_desktop_bridge_started(
+            validate_required_text(job_id, "jobId"),
+            lease_token,
+            resumed_turn_id,
+            self._now(),
+        )
+        return self._safe_run(run)
+
+    def finish_desktop_bridge_job(self, job_id: str, payload: dict) -> dict:
+        self._reject_unknown(payload, {"leaseToken", "outcome", "detail"})
+        lease_token = validate_required_text(
+            payload.get("leaseToken"), "leaseToken"
+        )
+        outcome = validate_required_text(payload.get("outcome"), "outcome")
+        if outcome not in {
+            "completed",
+            "failed",
+            "interrupted",
+            "manual_attention",
+            "dispatch_failed",
+        }:
+            raise ValidationError("unsupported desktop bridge outcome")
+        detail = str(payload.get("detail") or "")[:500]
+        run = self._store.finish_desktop_bridge_job(
+            validate_required_text(job_id, "jobId"),
+            lease_token,
+            outcome,
+            self._now(),
+            detail,
+        )
+        return self._safe_run(run)
 
     @staticmethod
     def _safe_run(run: dict) -> dict:

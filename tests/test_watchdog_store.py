@@ -202,6 +202,7 @@ class WatchdogStoreTests(unittest.TestCase):
         self.assertEqual(settings["defaultIntervalMinutes"], 15)
         self.assertEqual(settings["minimumIntervalMinutes"], 5)
         self.assertFalse(settings["resumeActionsEnabled"])
+        self.assertEqual(settings["resumeDispatchMode"], "direct_app_server")
         self.assertEqual(settings["recordRetentionDays"], 90)
         self.assertEqual(settings["recordLimit"], 10000)
 

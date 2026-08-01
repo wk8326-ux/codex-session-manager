@@ -87,6 +87,17 @@ class WatchdogClientContractTests(unittest.TestCase):
         self.assertIn("权限扩展和模型提问仍会停下", html)
         self.assertIn("unattendedApprovalsEnabled", html)
 
+    def test_resume_dispatch_mode_exposes_desktop_realtime_bridge(self) -> None:
+        html = self.read_html()
+
+        self.assertIn('id="resume-dispatch-mode"', html)
+        self.assertIn('value="desktop_bridge"', html)
+        self.assertIn('value="direct_app_server"', html)
+        self.assertIn("实时同步", html)
+        self.assertIn("resumeDispatchMode", html)
+        self.assertIn("desktopBridge", html)
+        self.assertIn("resume_queued", html)
+
     def test_run_history_provides_all_supported_filters(self) -> None:
         html = self.read_html()
 

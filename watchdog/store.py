@@ -98,7 +98,8 @@ class WatchdogStore:
                     record_retention_days INTEGER NOT NULL DEFAULT 90,
                     record_limit INTEGER NOT NULL DEFAULT 10000,
                     scheduler_enabled INTEGER NOT NULL DEFAULT 1,
-                    resume_actions_enabled INTEGER NOT NULL DEFAULT 0
+                    resume_actions_enabled INTEGER NOT NULL DEFAULT 0,
+                    resume_dispatch_mode TEXT NOT NULL DEFAULT 'direct_app_server'
                 );
                 CREATE TABLE IF NOT EXISTS api_channels (
                     id TEXT PRIMARY KEY,
@@ -178,10 +179,37 @@ class WatchdogStore:
                     FOREIGN KEY (session_id) REFERENCES monitored_sessions(id),
                     FOREIGN KEY (channel_id) REFERENCES api_channels(id)
                 );
+                CREATE TABLE IF NOT EXISTS desktop_bridge_jobs (
+                    id TEXT PRIMARY KEY,
+                    incident_fingerprint TEXT NOT NULL,
+                    incident_attempt INTEGER NOT NULL,
+                    monitor_run_id TEXT NOT NULL UNIQUE,
+                    session_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    runner_id TEXT,
+                    lease_token TEXT,
+                    lease_expires_at TEXT,
+                    claim_attempt_count INTEGER NOT NULL DEFAULT 0,
+                    resumed_turn_id TEXT,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    UNIQUE (incident_fingerprint, incident_attempt),
+                    FOREIGN KEY (incident_fingerprint)
+                        REFERENCES recovery_incidents(fingerprint),
+                    FOREIGN KEY (monitor_run_id) REFERENCES monitor_runs(id),
+                    FOREIGN KEY (session_id) REFERENCES monitored_sessions(id)
+                );
                 CREATE INDEX IF NOT EXISTS monitored_sessions_due
                     ON monitored_sessions(enabled, next_check_at);
                 CREATE INDEX IF NOT EXISTS monitor_runs_started
                     ON monitor_runs(started_at);
+                CREATE INDEX IF NOT EXISTS desktop_bridge_jobs_pending
+                    ON desktop_bridge_jobs(status, created_at);
                 """
             )
             self._ensure_column(
@@ -202,8 +230,16 @@ class WatchdogStore:
                 "resumed_turn_id",
                 "TEXT",
             )
+            self._ensure_column(
+                connection,
+                "watchdog_settings",
+                "resume_dispatch_mode",
+                "TEXT NOT NULL DEFAULT 'direct_app_server'",
+            )
             if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
-                connection.execute("INSERT INTO schema_version(version) VALUES (1)")
+                connection.execute("INSERT INTO schema_version(version) VALUES (2)")
+            else:
+                connection.execute("UPDATE schema_version SET version = 2")
             connection.execute(
                 """INSERT OR IGNORE INTO watchdog_settings(
                     id, default_interval_minutes, minimum_interval_minutes,
@@ -276,6 +312,15 @@ class WatchdogStore:
             "minimum_interval_minutes": "minimumIntervalMinutes", "record_retention_days": "recordRetentionDays",
             "record_limit": "recordLimit", "scheduler_enabled": "schedulerEnabled",
             "resume_actions_enabled": "resumeActionsEnabled",
+            "resume_dispatch_mode": "resumeDispatchMode",
+            "incident_fingerprint": "incidentFingerprint",
+            "incident_attempt": "incidentAttempt",
+            "monitor_run_id": "monitorRunId",
+            "runner_id": "runnerId",
+            "lease_token": "leaseToken",
+            "lease_expires_at": "leaseExpiresAt",
+            "claim_attempt_count": "claimAttemptCount",
+            "claimed_at": "claimedAt",
         }
         for source, target in aliases.items():
             if source in values:
@@ -313,7 +358,14 @@ class WatchdogStore:
         columns = {
             key: value
             for key, value in changes.items()
-            if key in {"defaultIntervalMinutes", "recordRetentionDays", "recordLimit", "schedulerEnabled", "resumeActionsEnabled"}
+            if key in {
+                "defaultIntervalMinutes",
+                "recordRetentionDays",
+                "recordLimit",
+                "schedulerEnabled",
+                "resumeActionsEnabled",
+                "resumeDispatchMode",
+            }
         }
         if not columns:
             return self.get_settings()
@@ -321,6 +373,7 @@ class WatchdogStore:
             "defaultIntervalMinutes": "default_interval_minutes",
             "recordRetentionDays": "record_retention_days", "recordLimit": "record_limit",
             "schedulerEnabled": "scheduler_enabled", "resumeActionsEnabled": "resume_actions_enabled",
+            "resumeDispatchMode": "resume_dispatch_mode",
         }
         assignments = []
         values = []
@@ -390,6 +443,9 @@ class WatchdogStore:
 
     def delete_session(self, session_id: str) -> None:
         with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM desktop_bridge_jobs WHERE session_id = ?", (session_id,)
+            )
             connection.execute(
                 "DELETE FROM recovery_incidents WHERE session_id = ?", (session_id,)
             )
@@ -500,14 +556,378 @@ class WatchdogStore:
                 clauses.append(f"{column} = ?")
                 params.append(filters[key])
         if filters.get("from"):
-            clauses.append("started_at >= ?"); params.append(filters["from"])
+            clauses.append("started_at >= ?")
+            params.append(filters["from"])
         if filters.get("to"):
-            clauses.append("started_at <= ?"); params.append(filters["to"])
+            clauses.append("started_at <= ?")
+            params.append(filters["to"])
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
         query = "SELECT * FROM monitor_runs" + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY started_at DESC, id DESC LIMIT ?"
         params.append(limit)
         with self._connect() as connection:
             return [self._row(row) for row in connection.execute(query, params)]
+
+    def queue_desktop_bridge_job(
+        self,
+        fingerprint: str,
+        thread_id: str,
+        prompt: str,
+        queued_at: str,
+        run_data: dict,
+        next_check_at: str,
+    ) -> dict:
+        """Persist the bridge job, audit run, and next schedule atomically."""
+        try:
+            with self._connect() as connection:
+                incident = connection.execute(
+                    """SELECT attempt_count FROM recovery_incidents
+                       WHERE fingerprint = ? AND status = 'sending'""",
+                    (fingerprint,),
+                ).fetchone()
+                if incident is None:
+                    raise WatchdogStoreError(
+                        "resume incident is not awaiting bridge dispatch"
+                    )
+                run = self._record_monitor_result(
+                    connection, run_data, next_check_at
+                )
+                connection.execute(
+                    """INSERT INTO desktop_bridge_jobs(
+                           id, incident_fingerprint, incident_attempt,
+                           monitor_run_id, session_id, thread_id, prompt,
+                           status, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                    (
+                        str(uuid4()),
+                        fingerprint,
+                        incident["attempt_count"],
+                        run["id"],
+                        run_data["sessionId"],
+                        thread_id,
+                        prompt,
+                        queued_at,
+                    ),
+                )
+                connection.execute(
+                    """UPDATE recovery_incidents
+                       SET detail = 'waiting for Codex Desktop bridge'
+                       WHERE fingerprint = ? AND status = 'sending'""",
+                    (fingerprint,),
+                )
+                return run
+        except Exception as error:
+            raise ResumeOutcomePersistenceError(
+                "desktop bridge queue transaction was rolled back"
+            ) from error
+
+    @staticmethod
+    def _lease_expiry(claimed_at: str, lease_seconds: int) -> str:
+        current = datetime.strptime(claimed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        return (current + timedelta(seconds=lease_seconds)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def claim_desktop_bridge_job(
+        self,
+        runner_id: str,
+        claimed_at: str,
+        *,
+        lease_seconds: int = 90,
+    ) -> dict | None:
+        lease_expires_at = self._lease_expiry(claimed_at, lease_seconds)
+        lease_token = str(uuid4())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = 'pending', runner_id = NULL,
+                       lease_token = NULL, lease_expires_at = NULL
+                   WHERE status = 'claimed' AND lease_expires_at <= ?""",
+                (claimed_at,),
+            )
+            row = connection.execute(
+                """SELECT id FROM desktop_bridge_jobs
+                   WHERE status = 'pending'
+                   ORDER BY created_at, id LIMIT 1"""
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = 'claimed', runner_id = ?, lease_token = ?,
+                       lease_expires_at = ?, claimed_at = ?,
+                       claim_attempt_count = claim_attempt_count + 1
+                   WHERE id = ? AND status = 'pending'""",
+                (
+                    runner_id,
+                    lease_token,
+                    lease_expires_at,
+                    claimed_at,
+                    row["id"],
+                ),
+            )
+            return self._row(
+                connection.execute(
+                    "SELECT * FROM desktop_bridge_jobs WHERE id = ?",
+                    (row["id"],),
+                ).fetchone()
+            )
+
+    def get_desktop_bridge_status(self) -> dict:
+        with self._connect() as connection:
+            counts = {
+                row["status"]: row["count"]
+                for row in connection.execute(
+                    """SELECT status, COUNT(*) AS count
+                       FROM desktop_bridge_jobs GROUP BY status"""
+                )
+            }
+            last_claimed = connection.execute(
+                "SELECT MAX(claimed_at) FROM desktop_bridge_jobs"
+            ).fetchone()[0]
+        return {
+            "pending": counts.get("pending", 0),
+            "claimed": counts.get("claimed", 0),
+            "started": counts.get("started", 0),
+            "terminal": sum(
+                counts.get(status, 0)
+                for status in (
+                    "completed",
+                    "failed",
+                    "interrupted",
+                    "manual_attention",
+                    "dispatch_failed",
+                )
+            ),
+            "lastClaimedAt": last_claimed,
+        }
+
+    @staticmethod
+    def _bridge_job(
+        connection: sqlite3.Connection, job_id: str
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT * FROM desktop_bridge_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise WatchdogStoreError("desktop bridge job does not exist")
+        return row
+
+    @staticmethod
+    def _bridge_run(
+        connection: sqlite3.Connection, monitor_run_id: str
+    ) -> dict:
+        row = connection.execute(
+            "SELECT * FROM monitor_runs WHERE id = ?", (monitor_run_id,)
+        ).fetchone()
+        result = WatchdogStore._row(row)
+        if result is None:
+            raise WatchdogStoreError("desktop bridge monitor run does not exist")
+        return result
+
+    def mark_desktop_bridge_started(
+        self,
+        job_id: str,
+        lease_token: str,
+        resumed_turn_id: str,
+        started_at: str,
+    ) -> dict:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = self._bridge_job(connection, job_id)
+            if (
+                job["status"] == "started"
+                and job["resumed_turn_id"] == resumed_turn_id
+            ):
+                return self._bridge_run(connection, job["monitor_run_id"])
+            if job["status"] != "claimed" or job["lease_token"] != lease_token:
+                raise WatchdogStoreError("desktop bridge lease is no longer valid")
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = 'started', resumed_turn_id = ?, started_at = ?,
+                       lease_expires_at = NULL
+                   WHERE id = ?""",
+                (resumed_turn_id, started_at, job_id),
+            )
+            updated = connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = 'started', resumed_turn_id = ?,
+                       detail = 'resumed turn started by Codex Desktop'
+                   WHERE fingerprint = ? AND status = 'sending'""",
+                (resumed_turn_id, job["incident_fingerprint"]),
+            )
+            if updated.rowcount != 1:
+                raise WatchdogStoreError(
+                    "desktop bridge incident is not awaiting start"
+                )
+            connection.execute(
+                """UPDATE monitor_runs
+                   SET decision = 'resume_started', session_state = 'inProgress',
+                       resumed_turn_id = ?, finished_at = NULL,
+                       detail_sanitized = 'resumed turn started by Codex Desktop'
+                   WHERE id = ? AND decision = 'resume_queued'""",
+                (resumed_turn_id, job["monitor_run_id"]),
+            )
+            connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_session_state = 'inProgress',
+                       last_check_result = 'resume_started',
+                       last_turn_id = ?, last_checked_at = ?
+                   WHERE id = ?""",
+                (resumed_turn_id, started_at, job["session_id"]),
+            )
+            return self._bridge_run(connection, job["monitor_run_id"])
+
+    def finish_desktop_bridge_job(
+        self,
+        job_id: str,
+        lease_token: str,
+        outcome: str,
+        finished_at: str,
+        detail: str = "",
+    ) -> dict:
+        if outcome == "dispatch_failed":
+            return self._finish_desktop_bridge_dispatch_failure(
+                job_id, lease_token, finished_at, detail
+            )
+        outcomes = {
+            "completed": ("completed", "resume_completed", "completed"),
+            "failed": ("resumed_failed", "resume_failed", "failed"),
+            "interrupted": (
+                "resumed_interrupted",
+                "resume_interrupted",
+                "interrupted",
+            ),
+            "manual_attention": (
+                "manual_attention",
+                "resume_manual_attention",
+                "attention",
+            ),
+        }
+        mapped = outcomes.get(outcome)
+        if mapped is None:
+            raise WatchdogStoreError("unsupported desktop bridge outcome")
+        incident_status, decision, session_state = mapped
+        safe_detail = (detail or f"desktop bridge turn {outcome}")[:500]
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = self._bridge_job(connection, job_id)
+            if job["status"] == outcome:
+                return self._bridge_run(connection, job["monitor_run_id"])
+            if job["status"] != "started" or job["lease_token"] != lease_token:
+                raise WatchdogStoreError("desktop bridge job is not running")
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = ?, detail = ?, finished_at = ?
+                   WHERE id = ?""",
+                (outcome, safe_detail, finished_at, job_id),
+            )
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = ?, resolved_at = ?, detail = ?
+                   WHERE fingerprint = ? AND status = 'started'""",
+                (
+                    incident_status,
+                    finished_at,
+                    safe_detail,
+                    job["incident_fingerprint"],
+                ),
+            )
+            connection.execute(
+                """UPDATE monitor_runs
+                   SET decision = ?, session_state = ?, finished_at = ?,
+                       detail_sanitized = ?
+                   WHERE id = ? AND decision = 'resume_started'""",
+                (
+                    decision,
+                    session_state,
+                    finished_at,
+                    safe_detail,
+                    job["monitor_run_id"],
+                ),
+            )
+            connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_session_state = ?, last_check_result = ?,
+                       last_turn_id = ?, last_checked_at = ?
+                   WHERE id = ?""",
+                (
+                    session_state,
+                    decision,
+                    job["resumed_turn_id"],
+                    finished_at,
+                    job["session_id"],
+                ),
+            )
+            return self._bridge_run(connection, job["monitor_run_id"])
+
+    def _finish_desktop_bridge_dispatch_failure(
+        self,
+        job_id: str,
+        lease_token: str,
+        finished_at: str,
+        detail: str,
+    ) -> dict:
+        safe_detail = (detail or "Codex Desktop rejected the resume request")[:500]
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = self._bridge_job(connection, job_id)
+            if job["status"] == "dispatch_failed":
+                return self._bridge_run(connection, job["monitor_run_id"])
+            if job["status"] != "claimed" or job["lease_token"] != lease_token:
+                raise WatchdogStoreError("desktop bridge job is not awaiting dispatch")
+            incident = connection.execute(
+                """SELECT attempt_count, last_attempt_at
+                   FROM recovery_incidents WHERE fingerprint = ?""",
+                (job["incident_fingerprint"],),
+            ).fetchone()
+            if incident is None:
+                raise WatchdogStoreError("desktop bridge incident does not exist")
+            exhausted = incident["attempt_count"] >= 3
+            retry_delay = {1: 30, 2: 120}.get(incident["attempt_count"])
+            retry_at = (
+                self._lease_expiry(incident["last_attempt_at"], retry_delay)
+                if retry_delay is not None and incident["last_attempt_at"]
+                else None
+            )
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = 'dispatch_failed', detail = ?, finished_at = ?,
+                       lease_expires_at = NULL
+                   WHERE id = ?""",
+                (safe_detail, finished_at, job_id),
+            )
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = ?, resolved_at = ?, detail = ?
+                   WHERE fingerprint = ? AND status = 'sending'""",
+                (
+                    "manual_attention" if exhausted else "failed",
+                    finished_at if exhausted else None,
+                    safe_detail,
+                    job["incident_fingerprint"],
+                ),
+            )
+            connection.execute(
+                """UPDATE monitor_runs
+                   SET decision = 'resume_action_failed',
+                       session_state = 'failed', finished_at = ?,
+                       detail_sanitized = ?
+                   WHERE id = ? AND decision = 'resume_queued'""",
+                (finished_at, safe_detail, job["monitor_run_id"]),
+            )
+            connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_session_state = 'failed',
+                       last_check_result = 'resume_action_failed',
+                       last_checked_at = ?,
+                       next_check_at = COALESCE(?, next_check_at)
+                   WHERE id = ?""",
+                (finished_at, retry_at, job["session_id"]),
+            )
+            return self._bridge_run(connection, job["monitor_run_id"])
 
     def get_or_create_incident(self, data: dict) -> dict:
         with self._connect() as connection:
@@ -736,6 +1156,12 @@ class WatchdogStore:
                 (decision, status, resolved_at, detail, resumed_turn_id),
             )
             connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = ?, finished_at = ?, detail = ?
+                   WHERE resumed_turn_id = ? AND status = 'started'""",
+                (status, resolved_at, detail, resumed_turn_id),
+            )
+            connection.execute(
                 """UPDATE monitored_sessions
                    SET last_session_state = ?, last_check_result = ?,
                        last_turn_id = ?, last_checked_at = ?
@@ -766,6 +1192,12 @@ class WatchdogStore:
                    SET decision = 'resume_manual_attention', finished_at = ?,
                        detail_sanitized = ?
                    WHERE resumed_turn_id = ? AND decision IN ('resume_started', 'resume_running')""",
+                (resolved_at, detail, resumed_turn_id),
+            )
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = 'manual_attention', finished_at = ?, detail = ?
+                   WHERE resumed_turn_id = ? AND status = 'started'""",
                 (resolved_at, detail, resumed_turn_id),
             )
             connection.execute(
@@ -806,6 +1238,12 @@ class WatchdogStore:
                          AND decision IN ('resume_started', 'resume_running')""",
                     (resolved_at, detail, row["resumed_turn_id"]),
                 )
+                connection.execute(
+                    """UPDATE desktop_bridge_jobs
+                       SET status = 'manual_attention', finished_at = ?, detail = ?
+                       WHERE resumed_turn_id = ? AND status = 'started'""",
+                    (resolved_at, detail, row["resumed_turn_id"]),
+                )
             return len(rows)
 
     def recover_interrupted_sends(self, recovered_at: str) -> int:
@@ -815,7 +1253,13 @@ class WatchdogStore:
                    SET status = 'manual_attention',
                        resolved_at = ?,
                        detail = 'interrupted send requires manual confirmation'
-                   WHERE status = 'sending'""",
+                   WHERE status = 'sending'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM desktop_bridge_jobs
+                         WHERE desktop_bridge_jobs.incident_fingerprint =
+                               recovery_incidents.fingerprint
+                           AND desktop_bridge_jobs.status IN ('pending', 'claimed')
+                     )""",
                 (recovered_at,),
             )
             return cursor.rowcount
@@ -829,8 +1273,29 @@ class WatchdogStore:
             "%Y-%m-%dT%H:%M:%SZ"
         )
         with self._connect() as connection:
-            connection.execute("DELETE FROM monitor_runs WHERE started_at < ?", (cutoff,))
-            extra_rows = connection.execute("SELECT id FROM monitor_runs ORDER BY started_at DESC, id DESC LIMIT -1 OFFSET ?", (settings["recordLimit"],)).fetchall()
-            if extra_rows:
-                connection.executemany("DELETE FROM monitor_runs WHERE id = ?", [(row["id"],) for row in extra_rows])
+            aged_rows = connection.execute(
+                """SELECT id FROM monitor_runs
+                   WHERE finished_at IS NOT NULL AND started_at < ?""",
+                (cutoff,),
+            ).fetchall()
+            self._delete_monitor_runs(connection, aged_rows)
+            extra_rows = connection.execute(
+                """SELECT id FROM monitor_runs
+                   WHERE finished_at IS NOT NULL
+                   ORDER BY started_at DESC, id DESC LIMIT -1 OFFSET ?""",
+                (settings["recordLimit"],),
+            ).fetchall()
+            self._delete_monitor_runs(connection, extra_rows)
             connection.execute("""DELETE FROM recovery_incidents WHERE resolved_at IS NOT NULL AND session_id IN (SELECT id FROM monitored_sessions WHERE last_turn_id IS NOT NULL AND last_turn_id != recovery_incidents.turn_id) AND NOT EXISTS (SELECT 1 FROM monitor_runs WHERE monitor_runs.turn_id = recovery_incidents.turn_id)""")
+
+    @staticmethod
+    def _delete_monitor_runs(
+        connection: sqlite3.Connection, rows: list[sqlite3.Row]
+    ) -> None:
+        if not rows:
+            return
+        values = [(row["id"],) for row in rows]
+        connection.executemany(
+            "DELETE FROM desktop_bridge_jobs WHERE monitor_run_id = ?", values
+        )
+        connection.executemany("DELETE FROM monitor_runs WHERE id = ?", values)

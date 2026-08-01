@@ -122,6 +122,23 @@ class WatchdogApplicationApiTests(unittest.TestCase):
             self.assertTrue(status.body["schedulerRunning"])
             self.assertEqual(status.body["nextCheckAt"], now)
 
+            bridge_settings = api.dispatch(
+                "PUT",
+                "/api/watchdog/settings",
+                {},
+                {"resumeDispatchMode": "desktop_bridge"},
+            )
+            self.assertEqual(
+                bridge_settings.body["resumeDispatchMode"], "desktop_bridge"
+            )
+            invalid_mode = api.dispatch(
+                "PUT",
+                "/api/watchdog/settings",
+                {},
+                {"resumeDispatchMode": "both"},
+            )
+            self.assertEqual(invalid_mode.status, 400)
+
     def test_dashboard_resources_have_stable_ui_response_shapes(self) -> None:
         with TemporaryDirectory() as directory:
             store = WatchdogStore(Path(directory) / "watchdog.db")
@@ -197,6 +214,8 @@ class WatchdogApplicationApiTests(unittest.TestCase):
                     "schedulerEnabled",
                     "codexConnected",
                     "resumeActionsEnabled",
+                    "resumeDispatchMode",
+                    "desktopBridge",
                     "nextCheckAt",
                 },
             )

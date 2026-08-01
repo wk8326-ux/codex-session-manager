@@ -56,6 +56,7 @@ SESSION_STATES = frozenset(
         "interrupted",
         "unavailable",
         "monitor_error",
+        "queued",
     }
 )
 TURN_ID = re.compile(
@@ -66,6 +67,7 @@ DECISION_DETAILS = {
     "resume_candidate": "enabled recovery rule matched",
     "resume_candidate_observed": "enabled recovery rule matched",
     "resume_started": "resumed turn started; waiting for final outcome",
+    "resume_queued": "waiting for Codex Desktop bridge",
     "resume_completed": "resumed turn completed",
     "resume_failed": "resumed turn failed",
     "resume_interrupted": "resumed turn was interrupted",
@@ -428,30 +430,35 @@ class WatchdogService:
             resume_attempt = incident["attemptCount"] or None
             claim_outcome = incident["claimOutcome"]
             if claim_outcome == "claimed":
-                try:
-                    new_turn_id = self._adapter.start_turn(
-                        session["threadId"], session["resumePrompt"]
-                    )
-                except DefiniteSendFailure:
-                    resume_outcome = "definite_failure"
-                    resume_audit_detail = "resume request was rejected"
-                    retry_delay_seconds = {1: 30, 2: 120}.get(
-                        incident["attemptCount"]
-                    )
-                    decision = Decision(
-                        "resume_action_failed", decision.error_signature
-                    )
-                except CodexAdapterError:
-                    resume_outcome = "manual_attention"
-                    resume_audit_detail = (
-                        "send outcome requires manual confirmation"
-                    )
-                    decision = Decision(
-                        "resume_action_failed", decision.error_signature
-                    )
+                if settings["resumeDispatchMode"] == "desktop_bridge":
+                    decision = Decision("resume_queued", decision.error_signature)
                 else:
-                    resume_outcome = "started"
-                    decision = Decision("resume_started", decision.error_signature)
+                    try:
+                        new_turn_id = self._adapter.start_turn(
+                            session["threadId"], session["resumePrompt"]
+                        )
+                    except DefiniteSendFailure:
+                        resume_outcome = "definite_failure"
+                        resume_audit_detail = "resume request was rejected"
+                        retry_delay_seconds = {1: 30, 2: 120}.get(
+                            incident["attemptCount"]
+                        )
+                        decision = Decision(
+                            "resume_action_failed", decision.error_signature
+                        )
+                    except CodexAdapterError:
+                        resume_outcome = "manual_attention"
+                        resume_audit_detail = (
+                            "send outcome requires manual confirmation"
+                        )
+                        decision = Decision(
+                            "resume_action_failed", decision.error_signature
+                        )
+                    else:
+                        resume_outcome = "started"
+                        decision = Decision(
+                            "resume_started", decision.error_signature
+                        )
             else:
                 outcome_decisions = {
                     "already_handled": "silent_already_handled",
@@ -499,6 +506,17 @@ class WatchdogService:
             resume_attempt=resume_attempt,
             detail=resume_audit_detail,
         )
+        if decision.code == "resume_queued":
+            run_data["sessionState"] = "queued"
+            run_data["finishedAt"] = None
+            return self._store.queue_desktop_bridge_job(
+                fingerprint,
+                session["threadId"],
+                session["resumePrompt"],
+                now,
+                run_data,
+                next_check_at,
+            )
         if resume_outcome == "started":
             run_data["resumedTurnId"] = new_turn_id
             run_data["sessionState"] = "inProgress"

@@ -122,6 +122,15 @@ Invoke-RestMethod `
 
 每个会话都可以保存独立提示词，最长 4000 个字符。
 
+### 恢复通道
+
+页面顶部可以选择两种恢复通道：
+
+- `Codex Desktop · 实时同步`：推荐。控制台只创建持久化 bridge job，由 Codex Desktop heartbeat runner 领取并通过桌面原生任务接口发送，因此 commentary、工具调用、审批和最终状态会实时显示在桌面端。
+- `独立 App Server · 兼容`：保留原有 `thread/resume` + `turn/start` 路径，适用于未配置桌面 runner 的环境。该路径能恢复任务，但运行中状态不会实时同步到 Codex Desktop。
+
+新数据库默认使用兼容模式，避免没有 runner 时任务停留在待领取状态。桌面桥接的设置步骤、heartbeat 提示词和回调协议见 [Codex Desktop 实时桥接](codex-desktop-bridge.md)。
+
 一次检查只有同时满足以下条件才可能发送续跑提示词：
 
 1. 会话已由用户加入监控目录且处于启用状态。
@@ -173,7 +182,7 @@ python scripts/probe_codex_app_server.py `
 
 ### 续跑开始与最终结果
 
-`thread/resume` 和 `turn/start` 返回新的 turn ID 时，执行记录只标记为 `resume_started`，表示续跑已经启动，并不表示任务已经完成。监控器继续订阅同一个 App Server 的事件：
+桌面桥接任务创建后先记录为 `resume_queued`。runner 回传新的 turn ID 后更新为 `resume_started`，表示续跑已经启动，并不表示任务已经完成。桌面 runner 会等待目标任务并回传终态。兼容直连模式则继续订阅独立 App Server 的事件：
 
 - `turn/completed` 且状态为 `completed`：更新为 `resume_completed`。
 - 最终状态为 `failed`：更新为 `resume_failed`；若新 turn 本身又是明确的可恢复 API 异常，后续检查会把它视为新的 incident。
@@ -191,7 +200,7 @@ python scripts/probe_codex_app_server.py `
 - 三次仍明确失败后转为“需要关注”。
 - `turn/start` 发送结果不确定时不会盲目重试，而是立即转为人工确认。
 - `turn/start` 被接受不等于任务恢复完成；只有后续 `turn/completed` 的最终状态为 `completed` 才记为续跑完成。
-- 控制台异常退出时仍处于发送中的事件，会在下次启动时转为人工确认。
+- 控制台异常退出时，兼容直连模式中仍处于发送中的事件会在下次启动时转为人工确认；已持久化的待领取桌面 bridge job 会保留并在控制台恢复后继续等待 runner。
 
 “立即检查”走同一套渠道、会话、恢复规则、去重和重试逻辑，不会绕过安全限制。
 
@@ -253,6 +262,10 @@ Invoke-RestMethod `
 | `POST` | `/api/watchdog/sessions/{id}/check` | 立即按完整规则检查会话 |
 | `GET` | `/api/watchdog/local-codex-sessions?limit=20` | 用户触发后列出本机会话 |
 | `GET` | `/api/watchdog/runs` | 查询执行记录 |
+| `GET` | `/api/watchdog/bridge/status` | 查询桌面桥接队列状态 |
+| `POST` | `/api/watchdog/bridge/jobs/claim` | 桌面 runner 原子领取一个任务 |
+| `POST` | `/api/watchdog/bridge/jobs/{id}/started` | 回传桌面 turn ID |
+| `POST` | `/api/watchdog/bridge/jobs/{id}/finish` | 回传桌面任务最终状态 |
 
 添加渠道的 API 示例使用环境变量承载密钥，避免把密钥写进脚本或 shell 历史：
 
@@ -286,6 +299,8 @@ Invoke-RestMethod http://127.0.0.1:8765/api/watchdog/status
 - `schedulerEnabled`：是否允许执行到期任务。
 - `codexConnected`：控制台启动时是否成功连接 Codex App Server。
 - `resumeActionsEnabled`：是否允许发送续跑提示词。
+- `resumeDispatchMode`：`desktop_bridge` 或 `direct_app_server`。
+- `desktopBridge`：待领取、已领取、运行中、已结束数量和最近领取时间。
 - `nextCheckAt`：所有启用会话中最早的下次检查时间，使用 UTC。
 
 ### 渠道异常

@@ -4,6 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#e9eeeb">
+  <script>
+    (() => {
+      const key = 'localhost-project-console.theme';
+      let saved = null;
+      try { saved = localStorage.getItem(key); } catch { /* Storage can be unavailable in hardened browsers. */ }
+      const theme = saved === 'light' || saved === 'dark'
+        ? saved
+        : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme;
+      document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#0f1513' : '#e9eeeb';
+    })();
+  </script>
   <title>本地项目控制台</title>
   <style>
     :root {
@@ -32,11 +45,21 @@
       --surface-raised: var(--n-0);
       --surface-sidebar: #e9eeeb;
       --surface-sunken: #e7ebe9;
+      --surface-input: var(--n-0);
+      --surface-active: #f5f9f7;
+      --surface-hover: rgba(251, 252, 251, 0.52);
+      --surface-danger: #fff5f3;
+      --surface-danger-strong: #fff0ed;
+      --surface-inverse: var(--n-900);
       --text-primary: var(--n-900);
       --text-secondary: var(--n-500);
       --text-tertiary: #7e8985;
+      --text-danger: #8e3026;
+      --text-on-inverse: var(--n-0);
+      --input-placeholder: #929c98;
       --border-subtle: rgba(24, 34, 31, 0.08);
       --border-default: rgba(24, 34, 31, 0.15);
+      --backdrop: rgba(24, 34, 31, 0.42);
       --shadow-raised: 0 10px 28px rgba(48, 64, 57, 0.07), 0 1px 3px rgba(48, 64, 57, 0.08);
       --shadow-overlay: 0 24px 64px rgba(36, 48, 43, 0.18), 0 4px 12px rgba(36, 48, 43, 0.1);
       --radius-input: 6px;
@@ -47,6 +70,49 @@
       --font-display: Bahnschrift, "Microsoft YaHei UI", "Segoe UI", sans-serif;
       --font-mono: "Cascadia Mono", Consolas, monospace;
       --sidebar-width: 264px;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --n-25: #1b2421;
+      --n-50: #111815;
+      --n-100: #26312d;
+      --n-200: #35423d;
+      --n-300: #52615b;
+      --n-500: #9eaaa5;
+      --n-600: #b7c3be;
+      --n-700: #d0d9d5;
+      --accent-50: #183128;
+      --accent-100: #204235;
+      --accent-300: #4f9578;
+      --accent-500: #60ad8d;
+      --accent-600: #72bea0;
+      --accent-700: #8acdaf;
+      --running: #62c993;
+      --warning: #e1a858;
+      --danger: #ed8377;
+      --info: #81b4c5;
+      --surface-canvas: #0f1513;
+      --surface-raised: #17201d;
+      --surface-sidebar: #121a17;
+      --surface-sunken: #0b110f;
+      --surface-input: #1b2521;
+      --surface-active: #1a2923;
+      --surface-hover: rgba(236, 245, 240, 0.06);
+      --surface-danger: rgba(237, 131, 119, 0.1);
+      --surface-danger-strong: rgba(237, 131, 119, 0.15);
+      --surface-inverse: #e8efeb;
+      --text-primary: #e8efeb;
+      --text-secondary: #a1ada7;
+      --text-tertiary: #7f8c86;
+      --text-danger: #f09a90;
+      --text-on-inverse: #14201c;
+      --input-placeholder: #6f7c76;
+      --border-subtle: rgba(232, 239, 235, 0.08);
+      --border-default: rgba(232, 239, 235, 0.15);
+      --backdrop: rgba(3, 8, 6, 0.72);
+      --shadow-raised: 0 0 0 1px rgba(232, 239, 235, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+      --shadow-overlay: 0 28px 68px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(232, 239, 235, 0.08);
     }
 
     * { box-sizing: border-box; }
@@ -91,7 +157,17 @@
     .tool-link { min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
     .tool-link svg { width: 16px; height: 16px; }
 
-    .host-status { margin-top: auto; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
+    .theme-controls { margin-top: auto; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
+    .theme-toggle { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-button); font-size: 12px; font-weight: 600; text-align: left; }
+    .theme-toggle-copy { flex: 1; }
+    .theme-switch { position: relative; width: 48px; height: 26px; flex: none; color: var(--text-tertiary); background: var(--n-100); border: 1px solid var(--border-default); border-radius: 999px; }
+    .theme-switch svg { position: absolute; top: 6px; width: 12px; height: 12px; stroke-width: 2; }
+    .theme-switch .sun { left: 6px; }
+    .theme-switch .moon { right: 6px; }
+    .theme-thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: 50%; box-shadow: 0 1px 3px rgba(24, 34, 31, 0.16); transform: translateX(0); transition: transform 160ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out; }
+    :root[data-theme="dark"] .theme-thumb { transform: translateX(22px); }
+
+    .host-status { margin-top: 16px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
     .host-line { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 12px; font-weight: 600; }
     .host-line .light { width: 7px; height: 7px; background: var(--running); border-radius: 50%; box-shadow: 0 0 0 3px rgba(39, 132, 90, 0.12); }
     .host-address { margin: 9px 0 0; color: var(--text-secondary); font: 11px/1.5 var(--font-mono); }
@@ -107,11 +183,11 @@
 
     .button { min-height: 40px; display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; box-shadow: 0 1px 1px rgba(24, 34, 31, 0.03); transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, transform 100ms ease-out, box-shadow 140ms ease-out; }
     .button.primary { color: var(--n-0); background: var(--accent-700); border-color: var(--accent-700); box-shadow: 0 5px 12px rgba(36, 94, 76, 0.14), 0 1px 2px rgba(36, 94, 76, 0.18); }
-    .button.danger { color: var(--danger); background: #fff9f8; border-color: rgba(180, 69, 56, 0.28); }
+    .button.danger { color: var(--danger); background: var(--surface-danger); border-color: rgba(180, 69, 56, 0.28); }
     .button.ghost { background: transparent; border-color: transparent; box-shadow: none; }
     .button.icon-only { width: 40px; padding: 0; }
     .button:active { transform: scale(0.98); }
-    .button:focus-visible, .filter-button:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+    .button:focus-visible, .filter-button:focus-visible, .theme-toggle:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
     .tool-link:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
 
     .board { margin-top: 38px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
@@ -128,7 +204,7 @@
     .service-item { position: relative; }
     .service-row { position: relative; min-height: 126px; padding: 18px; border-bottom: 1px solid var(--border-subtle); }
     .service-list li:last-child .service-row { border-bottom: 0; }
-    .service-row[data-state="running"], .service-row[data-state="online"] { background: #f5f9f7; }
+    .service-row[data-state="running"], .service-row[data-state="online"] { background: var(--surface-active); }
 
     .bus-slot { position: relative; align-self: stretch; display: grid; place-items: center; }
     .bus-slot::before, .bus-slot::after { content: ""; position: absolute; left: 50%; width: 1px; height: 50%; background: var(--n-200); transform: translateX(-50%); }
@@ -185,7 +261,7 @@
     .skeleton::after { content: ""; position: absolute; left: 74px; top: 28px; width: min(260px, 36%); height: 13px; background: var(--n-100); border-radius: 3px; box-shadow: 0 28px 0 var(--n-100), 350px 0 0 var(--n-100), 350px 28px 0 var(--n-100); opacity: 0.72; }
 
     dialog { max-height: calc(100dvh - 28px); padding: 0; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-dialog); box-shadow: var(--shadow-overlay); }
-    dialog::backdrop { background: rgba(24, 34, 31, 0.42); }
+    dialog::backdrop { background: var(--backdrop); }
     .project-dialog { width: min(680px, calc(100% - 28px)); }
     .dialog-head { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 18px 0 24px; border-bottom: 1px solid var(--border-subtle); }
     .dialog-head h2 { margin: 0; font: 600 18px var(--font-display); }
@@ -195,8 +271,8 @@
     .field { display: grid; gap: 7px; }
     .field > span, .field-label { color: var(--n-700); font-size: 12px; font-weight: 700; }
     .field-hint { margin: -1px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
-    input, textarea { width: 100%; min-height: 42px; padding: 9px 11px; color: var(--text-primary); background: var(--n-0); border: 1px solid var(--border-default); border-radius: var(--radius-input); font-size: 13px; }
-    input::placeholder, textarea::placeholder { color: #929c98; }
+    input, textarea { width: 100%; min-height: 42px; padding: 9px 11px; color: var(--text-primary); background: var(--surface-input); border: 1px solid var(--border-default); border-radius: var(--radius-input); font-size: 13px; }
+    input::placeholder, textarea::placeholder { color: var(--input-placeholder); }
     textarea { min-height: 76px; resize: vertical; line-height: 1.5; }
     input[name="path"], input[name="startCommand"], input[name="stopCommand"], input[name="url"] { font-family: var(--font-mono); font-size: 12px; }
     .segment { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; background: var(--surface-sunken); border-radius: var(--radius-surface); }
@@ -206,7 +282,7 @@
     .segment input:checked + span { color: var(--text-primary); background: var(--surface-raised); border-color: var(--border-subtle); box-shadow: 0 1px 3px rgba(24, 34, 31, 0.08); }
     .local-fields { display: grid; gap: 18px; padding: 20px 0 2px; border: 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
     .port-field { max-width: 180px; }
-    .form-error { margin: 0; padding: 10px 12px; color: #8e3026; background: #fff5f3; border: 1px solid rgba(180, 69, 56, 0.2); border-radius: var(--radius-input); font-size: 12px; line-height: 1.5; }
+    .form-error { margin: 0; padding: 10px 12px; color: var(--text-danger); background: var(--surface-danger); border: 1px solid rgba(180, 69, 56, 0.2); border-radius: var(--radius-input); font-size: 12px; line-height: 1.5; }
     .dialog-actions { display: flex; justify-content: flex-start; gap: 8px; padding-top: 4px; }
 
     .log-dialog { width: min(920px, calc(100% - 28px)); }
@@ -214,26 +290,34 @@
     .log-content { min-height: 320px; max-height: 62dvh; overflow: auto; margin: 0; padding: 20px 24px; color: #dfe7e3; background: #1c2723; font: 12px/1.65 var(--font-mono); white-space: pre-wrap; overscroll-behavior: contain; }
 
     .confirm-dialog { width: min(440px, calc(100% - 28px)); padding: 24px; }
-    .confirm-icon { display: grid; place-items: center; width: 40px; height: 40px; color: var(--danger); background: #fff0ed; border-radius: 50%; }
+    .confirm-icon { display: grid; place-items: center; width: 40px; height: 40px; color: var(--danger); background: var(--surface-danger-strong); border-radius: 50%; }
     .confirm-dialog h2 { margin: 18px 0 0; font-size: 18px; }
     .confirm-dialog p { margin: 10px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
     .confirm-dialog .dialog-actions { padding-top: 22px; }
 
-    #toast { position: fixed; z-index: 50; right: 24px; bottom: max(24px, env(safe-area-inset-bottom)); max-width: min(420px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 11px 14px; color: var(--n-0); background: var(--n-900); border-radius: var(--radius-button); box-shadow: var(--shadow-overlay); font-size: 13px; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity 160ms ease-out, transform 160ms ease-out; }
+    #toast { position: fixed; z-index: 50; right: 24px; bottom: max(24px, env(safe-area-inset-bottom)); max-width: min(420px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 11px 14px; color: var(--text-on-inverse); background: var(--surface-inverse); border-radius: var(--radius-button); box-shadow: var(--shadow-overlay); font-size: 13px; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity 160ms ease-out, transform 160ms ease-out; }
     #toast.visible { opacity: 1; transform: translateY(0); }
     #toast svg { width: 16px; height: 16px; color: #72d49f; }
 
     @media (hover: hover) and (pointer: fine) {
       .button:hover { border-color: var(--n-300); box-shadow: 0 4px 10px rgba(48, 64, 57, 0.08), 0 1px 2px rgba(48, 64, 57, 0.07); }
       .button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
-      .button.danger:hover { background: #fff0ed; border-color: rgba(180, 69, 56, 0.4); }
+      .button.danger:hover { background: var(--surface-danger-strong); border-color: rgba(180, 69, 56, 0.4); }
       .button.ghost:hover { background: var(--n-50); border-color: transparent; box-shadow: none; }
-      .filter-button:hover { color: var(--text-primary); background: rgba(251, 252, 251, 0.52); }
-      .tool-link:hover { color: var(--accent-700); background: rgba(251, 252, 251, 0.52); }
+      .filter-button:hover { color: var(--text-primary); background: var(--surface-hover); }
+      .tool-link:hover { color: var(--accent-700); background: var(--surface-hover); }
+      .theme-toggle:hover { color: var(--text-primary); background: var(--surface-hover); }
       .drag-handle:hover { color: var(--n-600); background: var(--n-50); }
       .service-row:hover { background-color: var(--n-25); }
       .service-row[data-state="running"]:hover, .service-row[data-state="online"]:hover { background-color: rgba(45, 113, 91, 0.055); }
     }
+
+    :root[data-theme="dark"] .button.primary { color: #102019; background: var(--accent-600); border-color: var(--accent-600); box-shadow: none; }
+    :root[data-theme="dark"] .button.danger { border-color: rgba(237, 131, 119, 0.3); }
+    :root[data-theme="dark"] .brand-mark { color: #dfe8e3; background: #202c28; box-shadow: 0 0 0 1px rgba(232, 239, 235, 0.08); }
+    :root[data-theme="dark"] .brand-mark::after { border-color: #202c28; }
+    :root[data-theme="dark"] .log-content { color: #dfe7e3; background: #0a0f0d; }
+    :root[data-theme="dark"] .segment input:checked + span { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
 
     @media (max-width: 1440px) {
       .column-head, .service-row { grid-template-columns: 42px 34px minmax(210px, 1.2fr) minmax(150px, 0.8fr) minmax(90px, 0.45fr) 240px; }
@@ -249,10 +333,12 @@
       .summary-track { display: none; }
       .filters { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 0; overflow-x: auto; padding-bottom: 3px; }
       .filters h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-      .filter-button { flex: none; min-height: 38px; gap: 9px; padding: 0 11px; background: rgba(251, 252, 251, 0.42); border-color: var(--border-subtle); }
+      .filter-button { flex: none; min-height: 38px; gap: 9px; padding: 0 11px; background: var(--surface-hover); border-color: var(--border-subtle); }
       .tool-nav { grid-column: 1 / -1; margin-top: 0; padding-top: 14px; }
       .tool-nav h2 { margin-bottom: 4px; }
-      .tool-link { width: fit-content; min-height: 44px; background: rgba(251, 252, 251, 0.42); border-color: var(--border-subtle); }
+      .tool-link { width: fit-content; min-height: 44px; background: var(--surface-hover); border-color: var(--border-subtle); }
+      .theme-controls { grid-column: 1 / -1; margin-top: 0; padding-top: 12px; }
+      .theme-toggle { width: min(240px, 100%); background: var(--surface-hover); border-color: var(--border-subtle); }
       .host-status { display: none; }
       .workspace { padding: 30px 20px 52px; }
       .page-head { align-items: center; }
@@ -332,6 +418,16 @@
         <h2>自动化工具</h2>
         <a class="tool-link" href="/watchdog"><span data-icon="activity"></span><span>会话监控</span></a>
       </nav>
+      <div class="theme-controls">
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换至深色模式" title="切换至深色模式">
+          <span class="theme-toggle-copy">日间模式</span>
+          <span class="theme-switch" aria-hidden="true">
+            <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/></svg>
+            <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+            <span class="theme-thumb"></span>
+          </span>
+        </button>
+      </div>
       <div class="host-status">
         <div class="host-line"><span class="light" aria-hidden="true"></span><span>控制台在线</span></div>
         <p class="host-address">127.0.0.1:8765</p>
@@ -397,6 +493,42 @@
   </dialog>
 
   <div id="toast" role="status" aria-live="polite"><span id="toast-icon"></span><span id="toast-message"></span></div>
+
+  <script>
+    (() => {
+      const key = 'localhost-project-console.theme';
+      const button = document.getElementById('theme-toggle');
+      const label = button.querySelector('.theme-toggle-copy');
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      let explicitPreference = false;
+      try { explicitPreference = ['light', 'dark'].includes(localStorage.getItem(key)); } catch { /* Keep the resolved theme without persistence. */ }
+
+      const applyTheme = (theme, persist = false) => {
+        const next = theme === 'dark' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = next;
+        document.documentElement.style.colorScheme = next;
+        document.querySelector('meta[name="theme-color"]').content = next === 'dark' ? '#0f1513' : '#e9eeeb';
+        const dark = next === 'dark';
+        button.setAttribute('aria-pressed', String(dark));
+        button.setAttribute('aria-label', dark ? '切换至浅色模式' : '切换至深色模式');
+        button.title = dark ? '切换至浅色模式' : '切换至深色模式';
+        label.textContent = dark ? '夜间模式' : '日间模式';
+        if (persist) {
+          explicitPreference = true;
+          try { localStorage.setItem(key, next); } catch { /* The visual toggle still works for this page. */ }
+        }
+      };
+
+      applyTheme(document.documentElement.dataset.theme);
+      button.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true));
+      media.addEventListener?.('change', event => { if (!explicitPreference) applyTheme(event.matches ? 'dark' : 'light'); });
+      window.addEventListener('storage', event => {
+        if (event.key !== key || !['light', 'dark'].includes(event.newValue)) return;
+        explicitPreference = true;
+        applyTheme(event.newValue);
+      });
+    })();
+  </script>
 
   <script>
     const iconPaths = {

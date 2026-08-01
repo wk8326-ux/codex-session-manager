@@ -44,6 +44,7 @@ There is no hard-coded Codex CLI version. If the read-only probe fails after an 
 - The built-in prompt means "continue the current development task" and can be customized per session.
 - Running, completed, waiting-for-user, unknown, unmatched, and channel-unavailable states stay silent.
 - A recoverable incident is deduplicated. `turn/start` is recorded as started, not completed; the final result comes from the App Server `turn/completed` event. Definite send failures stop after three total attempts, while uncertain outcomes require manual confirmation and are not blindly retried.
+- Resume dispatch supports two explicit modes. `desktop_bridge` queues the recovery for Codex Desktop so the resumed turn is visible live in the desktop task; `direct_app_server` keeps the standalone App Server path as a compatibility fallback. New installations default to the compatibility mode until a desktop bridge runner is configured.
 - Execution records default to 90 days and 10,000 rows, with daily cleanup while the scheduler runs.
 
 Before turning on automatic resume, use a disposable Codex session titled exactly `watchdog-integration-test` and follow the gated send procedure in the operator guide. Do not use an active development session for the first send test.
@@ -56,6 +57,7 @@ The complete device-independent operator guide is in [docs/watchdog-configuratio
 - finding a local thread ID;
 - check intervals and per-session prompts;
 - strict recovery and retry rules;
+- Codex Desktop bridge setup and its claim/start/finish callback contract;
 - DPAPI backup implications;
 - API examples, status categories, record retention, and troubleshooting.
 

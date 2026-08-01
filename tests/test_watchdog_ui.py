@@ -6,6 +6,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WatchdogUiTests(unittest.TestCase):
+    def test_both_workspaces_support_persistent_system_aware_theming(self) -> None:
+        for filename in ("index.html", "watchdog.html"):
+            with self.subTest(filename=filename):
+                html = (ROOT / filename).read_text(encoding="utf-8")
+
+                self.assertEqual(html.count('id="theme-toggle"'), 1)
+                self.assertIn(':root[data-theme="dark"]', html)
+                self.assertIn("prefers-color-scheme: dark", html)
+                self.assertIn("localhost-project-console.theme", html)
+                self.assertIn("localStorage.setItem(key, next)", html)
+                self.assertIn("window.addEventListener('storage'", html)
+                self.assertIn('aria-label="切换至深色模式"', html)
+                self.assertIn('title="切换至深色模式"', html)
+                self.assertIn('aria-pressed="false"', html)
+                self.assertLess(
+                    html.index("document.documentElement.dataset.theme"),
+                    html.index("<style>"),
+                    "theme must resolve before styles are parsed to avoid a light-mode flash",
+                )
+
     def test_project_page_adds_only_one_watchdog_navigation_link(self) -> None:
         html = (ROOT / "index.html").read_text(encoding="utf-8")
 
