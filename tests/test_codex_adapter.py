@@ -129,6 +129,41 @@ class CodexAdapterTests(unittest.TestCase):
                 self.assertEqual(turn.error_kind, "")
                 self.assertIsNone(turn.http_status)
 
+    def test_read_thread_extracts_recoverable_status_from_error_message(self) -> None:
+        cases = (
+            ("unexpected status 503 Service Unavailable", 503),
+            ("exceeded retry limit, last status: 429 Too Many Requests", 429),
+            ("upstream_status: HTTP 502", 502),
+        )
+        for message, expected_status in cases:
+            with self.subTest(message=message):
+                transport = FakeTransport(
+                    {
+                        "thread/read": {
+                            "thread": {
+                                "id": THREAD_ID,
+                                "name": "test",
+                                "status": {"type": "notLoaded"},
+                                "turns": [
+                                    {
+                                        "id": "turn-1",
+                                        "status": "failed",
+                                        "error": {"message": message},
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                )
+
+                turn = CodexAppServerAdapter(transport).read_thread(
+                    THREAD_ID
+                ).latest_turn
+
+                self.assertIsNotNone(turn)
+                self.assertEqual(turn.error_kind, "messageHttpStatus")
+                self.assertEqual(turn.http_status, expected_status)
+
     def test_start_turn_sends_one_text_input_without_thread_overrides(self) -> None:
         transport = FakeTransport(
             {

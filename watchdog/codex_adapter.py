@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -10,6 +11,13 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from .models import SessionSnapshot, TurnSnapshot
+
+
+_MESSAGE_HTTP_STATUS = re.compile(
+    r"\b(?:unexpected\s+status|last\s+status|upstream_status)\s*:?\s*"
+    r"(?:HTTP\s*)?(429|502|503|504)\b|\bHTTP\s+(429|502|503|504)\b",
+    re.IGNORECASE,
+)
 
 
 class RpcTransport(Protocol):
@@ -47,6 +55,16 @@ def _codex_error(error: object) -> tuple[str, int | None]:
     return str(kind), status if isinstance(status, int) else None
 
 
+def _message_http_status(message: object) -> int | None:
+    if not isinstance(message, str):
+        return None
+    match = _MESSAGE_HTTP_STATUS.search(message)
+    if match is None:
+        return None
+    value = next((group for group in match.groups() if group is not None), None)
+    return int(value) if value is not None else None
+
+
 def _thread_state(status: object) -> tuple[str, tuple[str, ...]]:
     if not isinstance(status, dict):
         return "", ()
@@ -68,6 +86,12 @@ def _turn_snapshot(turn: object) -> TurnSnapshot:
     error = turn.get("error")
     message = error.get("message") if isinstance(error, dict) else None
     error_kind, http_status = _codex_error(error)
+    if http_status is None:
+        parsed_status = _message_http_status(message)
+        if parsed_status is not None:
+            http_status = parsed_status
+            if not error_kind:
+                error_kind = "messageHttpStatus"
     return TurnSnapshot(
         id=turn_id,
         status=status,
