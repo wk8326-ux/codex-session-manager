@@ -29,6 +29,34 @@ class ProbeHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+class FakeResponse:
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        self.body = body
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self) -> bytes:
+        return self.body
+
+
+class FakeOpener:
+    def __init__(self, outcome: object) -> None:
+        self.outcome = outcome
+
+    def open(self, request, timeout: float):
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return self.outcome
+
+
 class ChannelProbeTests(unittest.TestCase):
     def setUp(self) -> None:
         ProbeHandler.status = 200
@@ -62,7 +90,7 @@ class ChannelProbeTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertEqual(classify_http_status(status), category)
 
-    def test_invalid_json_is_protocol_error_without_secret(self) -> None:
+    def test_invalid_shape_is_protocol_error_without_secret(self) -> None:
         ProbeHandler.body = {"unexpected": True}
         server = ThreadingHTTPServer(("127.0.0.1", 0), ProbeHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
@@ -73,6 +101,32 @@ class ChannelProbeTests(unittest.TestCase):
         self.assertEqual(result.category, "protocol_error")
         self.assertFalse(result.healthy)
         self.assertNotIn("sk-secret", result.detail)
+
+    def test_malformed_json_is_protocol_error_without_secret(self) -> None:
+        result = probe_channel(
+            ChannelConfig("https://api.example/v1", "", "model", "sk-secret", 2.0),
+            opener=FakeOpener(FakeResponse(b"{not-json")),
+            clock=iter((10.0, 10.25)).__next__,
+        )
+
+        self.assertEqual(result.category, "protocol_error")
+        self.assertFalse(result.healthy)
+        self.assertEqual(result.duration_ms, 250)
+        self.assertNotIn("sk-secret", result.detail)
+
+    def test_timeout_and_connection_reset_are_network_errors_without_secret(self) -> None:
+        for error in (TimeoutError("slow"), ConnectionResetError("reset")):
+            with self.subTest(error=type(error).__name__):
+                result = probe_channel(
+                    ChannelConfig(
+                        "https://api.example/v1", "", "model", "sk-secret", 0.1
+                    ),
+                    opener=FakeOpener(error),
+                )
+
+                self.assertEqual(result.category, "network_error")
+                self.assertFalse(result.healthy)
+                self.assertNotIn("sk-secret", result.detail)
 
     def test_connection_error_is_network_error(self) -> None:
         result = probe_channel(ChannelConfig("http://127.0.0.1:1", "", "model", "sk-secret", 0.1))

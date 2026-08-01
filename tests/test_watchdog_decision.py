@@ -1,6 +1,6 @@
 import unittest
 
-from watchdog.decision import DecisionInput, decide
+from watchdog.decision import DecisionInput, decide, validate_rules
 from watchdog.models import SessionSnapshot, TurnSnapshot
 
 
@@ -26,8 +26,41 @@ class DecisionTests(unittest.TestCase):
 
     def test_interrupted_without_error_and_manual_wait_are_never_resumed(self) -> None:
         self.assertEqual(decide(DecisionInput("healthy", snapshot("interrupted"), [])).code, "silent_unknown")
-        waiting = snapshot("inProgress", flags=("waitingOnUserInput",))
-        self.assertEqual(decide(DecisionInput("healthy", waiting, [])).code, "silent_manual_attention")
+        for flag in ("waitingOnUserInput", "waitingOnApproval"):
+            with self.subTest(flag=flag):
+                waiting = snapshot("inProgress", flags=(flag,))
+                self.assertEqual(
+                    decide(DecisionInput("healthy", waiting, [])).code,
+                    "silent_manual_attention",
+                )
+
+    def test_all_seeded_http_status_rules_require_an_exact_enabled_match(self) -> None:
+        for status in (429, 502, 503, 504):
+            with self.subTest(status=status):
+                turn = snapshot("failed", kind="httpConnectionFailed", http=status)
+                enabled = [
+                    {
+                        "matchType": "http_status",
+                        "pattern": str(status),
+                        "enabled": True,
+                    }
+                ]
+                wrong = [
+                    {
+                        "matchType": "http_status",
+                        "pattern": str(status + 1),
+                        "enabled": True,
+                    }
+                ]
+
+                self.assertEqual(
+                    decide(DecisionInput("healthy", turn, enabled)).code,
+                    "resume_candidate",
+                )
+                self.assertEqual(
+                    decide(DecisionInput("healthy", turn, wrong)).code,
+                    "silent_unrecoverable_error",
+                )
 
     def test_only_enabled_exact_rules_can_resume(self) -> None:
         cases = [
@@ -44,3 +77,31 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(decide(DecisionInput("healthy", None, [])).code, "silent_codex_unavailable")
         empty = SessionSnapshot("thread", "name", "notLoaded", (), None)
         self.assertEqual(decide(DecisionInput("healthy", empty, [])).code, "silent_no_turn")
+
+    def test_system_error_and_unknown_turn_statuses_are_silent(self) -> None:
+        for status in ("systemError", "cancelled", "futureStatus"):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    decide(DecisionInput("healthy", snapshot(status), [])).code,
+                    "silent_unknown",
+                )
+
+    def test_malformed_regex_is_reported_and_never_matches(self) -> None:
+        rules = [
+            {
+                "id": "bad-regex",
+                "matchType": "regex",
+                "pattern": "[",
+                "enabled": True,
+            }
+        ]
+
+        self.assertEqual(validate_rules(rules), ["bad-regex"])
+        self.assertEqual(
+            decide(
+                DecisionInput(
+                    "healthy", snapshot("failed", message="request timed out"), rules
+                )
+            ).code,
+            "silent_unrecoverable_error",
+        )

@@ -18,7 +18,7 @@ codex --version
 python scripts/probe_codex_app_server.py --list --limit 5
 ```
 
-第二条命令只读取本地会话，不发送消息。若初始化、`thread/list` 或 `thread/read` 报协议错误，请保持自动续跑关闭，先解决 Codex CLI 兼容性问题。
+第二条命令只读取本地会话，不发送消息。控制台启动时会验证 App Server 初始化握手；实际监控只读取用户明确添加的目标会话。若初始化、`thread/list` 或 `thread/read` 报协议错误，请保持自动续跑关闭，先解决 Codex CLI 兼容性问题。`thread/resume` 和 `turn/start` 无法在不修改会话的情况下探测，因此必须使用后文的专用测试会话闸门验证；任何不确定发送结果都会转为人工确认，不会盲目重试。
 
 ## 启动和关闭
 
@@ -140,6 +140,10 @@ Invoke-RestMethod `
 
 内置恢复规则可识别最新 Codex turn 中的 HTTP 429、502、503、504，以及若干超时、限流和上游错误模式。恢复规则严格匹配；不要把未知异常宽泛地标记为可恢复。
 
+### 维护恢复规则
+
+首版不提供恢复规则写入 API 或管理界面。规则由 `WatchdogStore.initialize()` 以稳定 ID 写入 `recovery_rules`，重复启动不会重复创建。新增已确认异常时，应通过版本化代码变更添加精确的 `http_status`、`error_kind` 或安全正则规则，并同时补充 DecisionEngine 测试和运维说明；不要在控制台运行时直接编辑 SQLite，也不要用宽泛正则覆盖未知错误。未来的规则管理界面仍必须遵守相同的严格匹配和默认静默原则。
+
 ### 开启全局续跑
 
 首次使用时保持只读模式。先创建标题严格为 `watchdog-integration-test` 的一次性 Codex 会话，然后执行：
@@ -181,6 +185,10 @@ python scripts/probe_codex_app_server.py `
 - 页面和 API 不回显完整 API Key；执行记录不保存或展示完整提示词和渠道响应正文。
 
 仓库的 `.gitignore` 已排除上述数据库文件和本地 `.superpowers/` 目录。
+
+### SecretStore 扩展点
+
+业务代码只依赖 `SecretStore.protect(value) -> bytes` 与 `SecretStore.unprotect(value) -> str` 接口，当前 `DpapiSecretStore` 是 Windows 当前用户作用域实现。若移植到其他平台，应新增操作系统密钥环或等价安全存储实现，并在运行时构造处注入；不得把明文密钥、设备名、用户目录或固定密钥写入业务逻辑，也不得以“兼容”为由退化为明文数据库字段。迁移实现必须继续通过密钥不回显、不入日志和加密往返测试。
 
 ## 执行记录与保留
 

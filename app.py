@@ -63,60 +63,7 @@ class NoRedirectHandler(HTTPRedirectHandler):
     ) -> None:
         return None
 
-DEFAULT_PROJECTS = [
-    {
-        "id": "public-welfare",
-        "mode": "local",
-        "name": "公益项目管理系统",
-        "path": r"D:\WK_workfiles\bot_workspace\projects\public-welfare-lifecycle-system",
-        "startCommand": "",
-        "stopCommand": "",
-        "port": "",
-        "url": "",
-        "note": "填写项目的本地启动命令后即可控制。",
-        "pid": None,
-        "startedAt": "",
-    },
-    {
-        "id": "emby-workbench",
-        "mode": "local",
-        "name": "Emby 刮削工作台",
-        "path": r"D:\WK_workfiles\bot_workspace\projects\media-metadata-fixer",
-        "startCommand": "",
-        "stopCommand": "",
-        "port": "",
-        "url": "",
-        "note": "填写项目的本地启动命令后即可控制。",
-        "pid": None,
-        "startedAt": "",
-    },
-    {
-        "id": "invoice-tool",
-        "mode": "local",
-        "name": "发票识别工具",
-        "path": r"D:\WK_workfiles\bot_workspace\projects\invoice-registration-assistant",
-        "startCommand": "start-invoice-tool.bat",
-        "stopCommand": "",
-        "port": "",
-        "url": "",
-        "note": "已检测到启动脚本；建议补充端口和访问链接以获得健康检查。",
-        "pid": None,
-        "startedAt": "",
-    },
-    {
-        "id": "pt-automation",
-        "mode": "external",
-        "name": "PT Manager",
-        "path": "",
-        "startCommand": "",
-        "stopCommand": "",
-        "port": "",
-        "url": "https://ptm.holdzywoo.top/dashboard#overview",
-        "note": "服务器常驻服务；通过 Cloudflare Access 验证后打开。",
-        "pid": None,
-        "startedAt": "",
-    },
-]
+DEFAULT_PROJECTS: list[dict] = []
 
 
 def now() -> str:

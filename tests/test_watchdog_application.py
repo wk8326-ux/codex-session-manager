@@ -26,7 +26,7 @@ class FakeAdapter:
         return [
             SessionSnapshot(
                 thread_id="11111111-1111-1111-1111-111111111111",
-                name="woxsheet",
+                name="sample-development-session",
                 thread_status="idle",
             )
         ][:limit]
@@ -95,7 +95,7 @@ class WatchdogApplicationApiTests(unittest.TestCase):
                 "/api/watchdog/sessions",
                 {},
                 {
-                    "name": "woxsheet",
+                    "name": "sample-development-session",
                     "threadId": "11111111-1111-1111-1111-111111111111",
                     "channelId": channel_id,
                 },
@@ -146,7 +146,7 @@ class WatchdogApplicationApiTests(unittest.TestCase):
                 "/api/watchdog/sessions",
                 {},
                 {
-                    "name": "woxsheet",
+                    "name": "sample-development-session",
                     "threadId": "11111111-1111-1111-1111-111111111111",
                     "channelId": channel["id"],
                     "intervalMinutes": 10,

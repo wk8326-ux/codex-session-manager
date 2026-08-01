@@ -12,7 +12,7 @@ from watchdog.store import (
 )
 
 
-THREAD_ID = "019fa619-0c95-76c3-a151-9289b7510e09"
+THREAD_ID = "00000000-0000-4000-8000-000000000001"
 
 
 class WatchdogStoreTests(unittest.TestCase):
@@ -233,7 +233,7 @@ class WatchdogStoreTests(unittest.TestCase):
         self.store.create_session(
             {
                 "name": "disabled",
-                "threadId": "019f73f7-38a9-7ed1-b5c5-5a55913a71dd",
+                "threadId": "00000000-0000-4000-8000-000000000002",
                 "channelId": channel["id"],
                 "intervalMinutes": 10,
                 "resumePrompt": "continue current task",

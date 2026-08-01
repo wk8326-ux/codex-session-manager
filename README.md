@@ -11,7 +11,7 @@ need only an HTTP or HTTPS URL and appear as an `Open` action. The console check
 the URL on a short interval and reports whether the remote website is online; it
 does not pretend to start or stop the remote service.
 
-The project definitions are saved in `projects.json` after the first launch. Command output is appended to `logs/<project-id>.log`.
+The project definitions are saved in the local-only `projects.json` after the first launch. It is ignored by Git so project paths, remote URLs, process IDs, and other device-specific settings are not published. See `projects.example.json` for portable local and external project examples. Command output is appended to the ignored `logs/<project-id>.log`.
 
 ## Session watchdog
 

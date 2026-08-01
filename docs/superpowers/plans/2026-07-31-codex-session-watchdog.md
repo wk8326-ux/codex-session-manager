@@ -18,7 +18,7 @@
 - Use `python -m unittest discover -s tests -v` as the canonical test command. Do not add pytest or third-party runtime packages.
 - Keep `projects.json`, `/api/projects`, the five-second project refresh loop, and all existing project start/stop behavior unchanged.
 - Automatic resume stays globally disabled through the read-only milestones. It is enabled only after the App Server send test succeeds against a dedicated test thread.
-- Never perform the first real send against woxsheet, invoice recognition, PT automation, or another working thread.
+- Never perform the first real send against any active development or production work thread.
 - `codex app-server daemon` is unavailable on Windows. `CodexAppServerAdapter` must start `codex app-server --listen stdio://` as a child process and stop it with the console.
 
 ## Planned File Structure
@@ -68,7 +68,7 @@ localhost-project-console/
 - Create: `scripts/probe_codex_app_server.py`
 - Test: `tests/test_codex_adapter.py`
 
-- [ ] **Step 1: Write failing adapter normalization tests**
+- [x] **Step 1: Write failing adapter normalization tests**
 
 Create `watchdog/models.py` imports in the test even though the module does not yet exist:
 
@@ -96,8 +96,8 @@ class CodexAdapterTests(unittest.TestCase):
         transport = FakeTransport({
             "thread/read": {
                 "thread": {
-                    "id": "019fa619-0c95-76c3-a151-9289b7510e09",
-                    "name": "woxsheet",
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "name": "sample-development-session",
                     "status": {"type": "idle"},
                     "turns": [{
                         "id": "turn-1",
@@ -115,7 +115,7 @@ class CodexAdapterTests(unittest.TestCase):
         })
 
         snapshot = CodexAppServerAdapter(transport).read_thread(
-            "019fa619-0c95-76c3-a151-9289b7510e09"
+            "00000000-0000-4000-8000-000000000001"
         )
 
         self.assertEqual(snapshot.thread_status, "idle")
@@ -123,11 +123,12 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(snapshot.latest_turn.http_status, 503)
         self.assertEqual(transport.calls, [(
             "thread/read",
-            {"threadId": "019fa619-0c95-76c3-a151-9289b7510e09", "includeTurns": True},
+            {"threadId": "00000000-0000-4000-8000-000000000001", "includeTurns": True},
         )])
 
     def test_start_turn_sends_one_text_input_without_overriding_thread_settings(self) -> None:
         transport = FakeTransport({
+            "thread/resume": {"thread": {"id": "thread-1"}},
             "turn/start": {"turn": {"id": "turn-new", "status": "inProgress", "items": []}}
         })
 
@@ -136,22 +137,33 @@ class CodexAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(turn_id, "turn-new")
-        self.assertEqual(transport.calls, [(
-            "turn/start",
-            {"threadId": "thread-1", "input": [{"type": "text", "text": "继续当前开发任务"}]},
-        )])
+        self.assertEqual(transport.calls, [
+            ("thread/resume", {"threadId": "thread-1"}),
+            (
+                "turn/start",
+                {
+                    "threadId": "thread-1",
+                    "input": [{
+                        "type": "text",
+                        "text": "继续当前开发任务",
+                        "text_elements": [],
+                    }],
+                },
+            ),
+        ])
 
     def test_turn_start_does_not_override_approval_policy(self) -> None:
         transport = FakeTransport({
+            "thread/resume": {"thread": {"id": "thread-1"}},
             "turn/start": {"turn": {"id": "turn-new", "status": "inProgress", "items": []}}
         })
         CodexAppServerAdapter(transport).start_turn("thread-1", "继续")
-        params = transport.calls[0][1]
-        self.assertNotIn("approvalPolicy", params)
-        self.assertNotIn("approvalsReviewer", params)
+        for _method, params in transport.calls:
+            self.assertNotIn("approvalPolicy", params)
+            self.assertNotIn("approvalsReviewer", params)
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -161,7 +173,7 @@ python -m unittest tests.test_codex_adapter -v
 
 Expected: import failure for `watchdog.codex_adapter` or missing adapter symbols.
 
-- [ ] **Step 3: Add DTOs, strict normalization, and the transport contract**
+- [x] **Step 3: Add DTOs, strict normalization, and the transport contract**
 
 Implement these public types in `watchdog/models.py`:
 
@@ -213,7 +225,7 @@ def _codex_error(error: object) -> tuple[str, int | None]:
 
 Reject a `thread/read` response that lacks `thread`, has a mismatched ID, or has a malformed turn list by raising `CodexProtocolError`. Do not infer recoverability inside the adapter.
 
-- [ ] **Step 4: Implement the Windows stdio JSON-RPC client**
+- [x] **Step 4: Implement the Windows stdio JSON-RPC client**
 
 Add `StdioJsonRpcClient` that starts:
 
@@ -250,7 +262,7 @@ SAFE_SERVER_REQUEST_RESULTS = {
 
 For `item/tool/requestUserInput`, return an `answers` object containing an empty answer list for every supplied question ID. For any other server request, return JSON-RPC error code `-32601`. Every such request must call an `on_attention(thread_id, method)` callback so the service can record “需要人工关注”. Add a transport test that feeds request ID `91` for a command approval and asserts the response is exactly `{"id": 91, "result": {"decision": "decline"}}`; no test or implementation path may emit `accept` or `acceptForSession`.
 
-- [ ] **Step 5: Add a diagnostic script with an explicit send gate**
+- [x] **Step 5: Add a diagnostic script with an explicit send gate**
 
 `scripts/probe_codex_app_server.py` must support:
 
@@ -260,9 +272,9 @@ For `item/tool/requestUserInput`, return an `answers` object containing an empty
 --thread-id UUID --allow-send --prompt "watchdog integration test"
 ```
 
-Without `--allow-send`, the script may call only `thread/list` and `thread/read`. With `--allow-send`, require the exact title `watchdog-integration-test`; refuse all other thread names before calling `turn/start`.
+Without `--allow-send`, the script may call only `thread/list` and `thread/read`. With `--allow-send`, require the exact title `watchdog-integration-test`; refuse all other thread names before calling `thread/resume` or `turn/start`. A successful gate must wait for the created turn and print both `confirmedTurnId` and `"status": "completed"`.
 
-- [ ] **Step 6: Verify unit tests and perform the read-only protocol check**
+- [x] **Step 6: Verify unit tests and perform the read-only protocol check**
 
 Run:
 
@@ -273,7 +285,7 @@ python scripts/probe_codex_app_server.py --list --limit 5
 
 Expected: tests pass; the script prints at most five local thread IDs, names, and thread statuses without starting a turn.
 
-- [ ] **Step 7: Git-aware checkpoint**
+- [x] **Step 7: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -288,7 +300,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Create: `watchdog/store.py`
 - Test: `tests/test_watchdog_store.py`
 
-- [ ] **Step 1: Write failing schema/default tests**
+- [x] **Step 1: Write failing schema/default tests**
 
 ```python
 import tempfile
@@ -320,8 +332,8 @@ class WatchdogStoreTests(unittest.TestCase):
 
     def test_due_sessions_returns_only_enabled_due_rows(self) -> None:
         channel = self.store.create_channel({"name": "main", "baseUrl": "https://api.example/v1", "model": "test", "encryptedKey": b"cipher"})
-        self.store.create_session({"name": "due", "threadId": "019fa619-0c95-76c3-a151-9289b7510e09", "channelId": channel["id"], "intervalMinutes": 10, "resumePrompt": "继续当前开发任务", "enabled": True, "nextCheckAt": "2026-07-31T06:00:00Z"})
-        self.store.create_session({"name": "disabled", "threadId": "019f73f7-38a9-7ed1-b5c5-5a55913a71dd", "channelId": channel["id"], "intervalMinutes": 10, "resumePrompt": "继续", "enabled": False, "nextCheckAt": "2026-07-31T06:00:00Z"})
+        self.store.create_session({"name": "due", "threadId": "00000000-0000-4000-8000-000000000001", "channelId": channel["id"], "intervalMinutes": 10, "resumePrompt": "继续当前开发任务", "enabled": True, "nextCheckAt": "2026-07-31T06:00:00Z"})
+        self.store.create_session({"name": "disabled", "threadId": "00000000-0000-4000-8000-000000000002", "channelId": channel["id"], "intervalMinutes": 10, "resumePrompt": "继续", "enabled": False, "nextCheckAt": "2026-07-31T06:00:00Z"})
 
         rows = self.store.list_due_sessions("2026-07-31T06:05:00Z")
 
@@ -329,7 +341,7 @@ class WatchdogStoreTests(unittest.TestCase):
 
     def test_prune_keeps_incident_while_session_is_still_on_same_turn(self) -> None:
         channel = self.store.create_channel({"name": "main", "baseUrl": "https://api.example/v1", "model": "test", "encryptedKey": b"cipher"})
-        session = self.store.create_session({"name": "old", "threadId": "019fa619-0c95-76c3-a151-9289b7510e09", "channelId": channel["id"], "intervalMinutes": 15, "resumePrompt": "继续", "enabled": True, "nextCheckAt": "2026-01-01T00:00:00Z"})
+        session = self.store.create_session({"name": "old", "threadId": "00000000-0000-4000-8000-000000000001", "channelId": channel["id"], "intervalMinutes": 15, "resumePrompt": "继续", "enabled": True, "nextCheckAt": "2026-01-01T00:00:00Z"})
         self.store.create_monitor_run({"sessionId": session["id"], "channelId": channel["id"], "startedAt": "2026-01-01T00:00:00Z", "finishedAt": "2026-01-01T00:00:01Z", "decision": "resume_sent", "turnId": "turn-old"})
         self.store.get_or_create_incident({"fingerprint": "fingerprint-old", "sessionId": session["id"], "turnId": "turn-old", "errorSignature": "httpConnectionFailed:http:503", "firstSeenAt": "2026-01-01T00:00:00Z"})
         self.store.begin_resume_attempt("fingerprint-old")
@@ -342,7 +354,7 @@ class WatchdogStoreTests(unittest.TestCase):
         self.assertIsNotNone(self.store.get_incident("fingerprint-old"))
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_store -v
@@ -350,7 +362,7 @@ python -m unittest tests.test_watchdog_store -v
 
 Expected: missing `WatchdogStore`.
 
-- [ ] **Step 3: Implement versioned schema creation**
+- [x] **Step 3: Implement versioned schema creation**
 
 Use one connection per store operation with:
 
@@ -371,7 +383,7 @@ CHECK(recovery_incidents.attempt_count BETWEEN 0 AND 3)
 
 Set `resume_actions_enabled` to `0` by default. Use UTC `YYYY-MM-DDTHH:MM:SSZ` strings consistently.
 
-- [ ] **Step 4: Implement transactional CRUD and run/incident methods**
+- [x] **Step 4: Implement transactional CRUD and run/incident methods**
 
 Add focused methods rather than exposing SQL:
 
@@ -403,7 +415,7 @@ prune_records(now_utc)
 `delete_channel` must raise `ChannelInUseError` while any session references the channel.
 `prune_records` deletes runs older than the configured retention or beyond the configured count. It deletes a resolved incident only after its session has advanced to a different `last_turn_id` and the related runs have expired.
 
-- [ ] **Step 5: Verify store tests**
+- [x] **Step 5: Verify store tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_store -v
@@ -411,7 +423,7 @@ python -m unittest tests.test_watchdog_store -v
 
 Expected: all store tests pass and no database remains outside the temporary directory.
 
-- [ ] **Step 6: Git-aware checkpoint**
+- [x] **Step 6: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -430,7 +442,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Test: `tests/test_watchdog_validation.py`
 - Test: `tests/test_watchdog_store.py`
 
-- [ ] **Step 1: Write failing SecretStore tests**
+- [x] **Step 1: Write failing SecretStore tests**
 
 ```python
 import os
@@ -454,7 +466,7 @@ class DpapiSecretStoreTests(unittest.TestCase):
             DpapiSecretStore().protect("")
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_secrets -v
@@ -462,7 +474,7 @@ python -m unittest tests.test_watchdog_secrets -v
 
 Expected: missing `watchdog.secrets`.
 
-- [ ] **Step 3: Implement the SecretStore boundary and DPAPI**
+- [x] **Step 3: Implement the SecretStore boundary and DPAPI**
 
 Define:
 
@@ -477,7 +489,7 @@ class SecretStore(Protocol):
 
 Use `ctypes.windll.crypt32.CryptProtectData` and `CryptUnprotectData` with a `DATA_BLOB` structure, `CRYPTPROTECT_UI_FORBIDDEN`, current-user scope, and optional fixed application entropy. Always release returned buffers with `kernel32.LocalFree`. Wrap platform and Win32 errors in `SecretStoreError` without including the secret.
 
-- [ ] **Step 4: Add shared payload validation**
+- [x] **Step 4: Add shared payload validation**
 
 Add pure validation helpers in `watchdog/validation.py`, with these exact rules:
 
@@ -496,7 +508,7 @@ Require non-empty channel name, model, and API Key on create. On update, an omit
 
 Also implement `validate_thread_id` with `uuid.UUID`, `validate_interval` with the five-minute minimum, and `validate_resume_prompt` with non-empty text and a 4000-character maximum. Add direct unit tests for valid and invalid values in `tests/test_watchdog_validation.py`.
 
-- [ ] **Step 5: Verify secret and store tests**
+- [x] **Step 5: Verify secret and store tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_secrets tests.test_watchdog_validation tests.test_watchdog_store -v
@@ -504,7 +516,7 @@ python -m unittest tests.test_watchdog_secrets tests.test_watchdog_validation te
 
 Expected: DPAPI round-trip passes on Windows; no plaintext key appears in serialized channel dictionaries.
 
-- [ ] **Step 6: Git-aware checkpoint**
+- [x] **Step 6: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -519,7 +531,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Create: `watchdog/channels.py`
 - Test: `tests/test_watchdog_channels.py`
 
-- [ ] **Step 1: Write failing classification tests with a local HTTP server**
+- [x] **Step 1: Write failing classification tests with a local HTTP server**
 
 ```python
 import json
@@ -576,13 +588,13 @@ class ChannelProbeTests(unittest.TestCase):
                 self.assertEqual(classify_http_status(status), category)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_channels -v
 ```
 
-- [ ] **Step 3: Implement the minimal real-model probe**
+- [x] **Step 3: Implement the minimal real-model probe**
 
 Define immutable `ChannelConfig` and `ProbeResult` dataclasses in `watchdog/channels.py`. `ProbeResult` has `category`, `http_status`, `detail`, `duration_ms`, and `checked_at`, plus a derived `healthy` property. Build the default URL by appending `/chat/completions` to the normalized Base URL unless it already ends with that path; allow `probe_url_override` to replace it.
 
@@ -599,17 +611,17 @@ Send:
 
 Treat only 2xx plus valid JSON containing a non-empty `id` or `choices` array as `healthy`. Classify invalid JSON/shape as `protocol_error`; `URLError`, timeout, TLS, DNS, and connection reset as `network_error`. Return sanitized detail and duration; never include Authorization or response bodies in detail.
 
-- [ ] **Step 4: Add timeout, invalid JSON, and connection-reset tests**
+- [x] **Step 4: Add timeout, invalid JSON, and connection-reset tests**
 
 Use the same local server plus injected opener/clock seams. Assert that every non-healthy result has `healthy == False` and never returns the API key in `detail`.
 
-- [ ] **Step 5: Verify tests**
+- [x] **Step 5: Verify tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_channels -v
 ```
 
-- [ ] **Step 6: Git-aware checkpoint**
+- [x] **Step 6: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -625,7 +637,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Modify: `watchdog/models.py`
 - Test: `tests/test_watchdog_decision.py`
 
-- [ ] **Step 1: Write the full failing decision matrix**
+- [x] **Step 1: Write the full failing decision matrix**
 
 ```python
 import unittest
@@ -659,13 +671,13 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(decide(DecisionInput("healthy", waiting, [])).code, "silent_manual_attention")
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_decision -v
 ```
 
-- [ ] **Step 3: Implement decision values and exact precedence**
+- [x] **Step 3: Implement decision values and exact precedence**
 
 Use this precedence:
 
@@ -683,17 +695,17 @@ failed without recovery rule
 
 Use a frozen `Decision` dataclass with `code`, `error_signature`, and `detail`. Match enabled rules by exact HTTP status, exact Codex error kind, or compiled safe regex over the error message. A regex compile failure disables only that rule and returns it in validation results; it must not crash monitoring.
 
-- [ ] **Step 4: Add exhaustive strictness tests**
+- [x] **Step 4: Add exhaustive strictness tests**
 
 Cover 429/502/503/504, timeout and reset message rules, disabled rules, malformed regex, `systemError`, `notLoaded`, missing turn, and unknown status. Assert that only explicit enabled rule matches produce `resume_candidate`.
 
-- [ ] **Step 5: Verify tests**
+- [x] **Step 5: Verify tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_decision -v
 ```
 
-- [ ] **Step 6: Git-aware checkpoint**
+- [x] **Step 6: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -709,7 +721,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Modify: `watchdog/store.py`
 - Test: `tests/test_watchdog_service.py`
 
-- [ ] **Step 1: Write failing short-circuit and audit tests**
+- [x] **Step 1: Write failing short-circuit and audit tests**
 
 Add these complete fixtures above the test class in `tests/test_watchdog_service.py`:
 
@@ -765,7 +777,7 @@ class FakeAdapter:
 
 def failed_snapshot(http_status: int) -> SessionSnapshot:
     return SessionSnapshot(
-        "019fa619-0c95-76c3-a151-9289b7510e09",
+        "00000000-0000-4000-8000-000000000001",
         "watchdog-test",
         "idle",
         (),
@@ -779,7 +791,7 @@ def make_service(probe: FakeProbe, adapter: FakeAdapter, resume_enabled: bool) -
     store.initialize()
     store.update_settings({"resumeActionsEnabled": resume_enabled})
     channel = store.create_channel({"name": "main", "baseUrl": "https://api.example/v1", "model": "test", "encryptedKey": b"sk-test"})
-    store.create_session({"id": "session-1", "name": "watchdog-test", "threadId": "019fa619-0c95-76c3-a151-9289b7510e09", "channelId": channel["id"], "intervalMinutes": 15, "resumePrompt": "继续当前开发任务", "enabled": True, "nextCheckAt": "2026-07-31T06:00:00Z"})
+    store.create_session({"id": "session-1", "name": "watchdog-test", "threadId": "00000000-0000-4000-8000-000000000001", "channelId": channel["id"], "intervalMinutes": 15, "resumePrompt": "继续当前开发任务", "enabled": True, "nextCheckAt": "2026-07-31T06:00:00Z"})
     service = WatchdogService(store, MemorySecretStore(), probe, adapter)
     service._test_temp_directory = temp
     return service
@@ -809,13 +821,13 @@ class ReadOnlyServiceTests(unittest.TestCase):
         self.assertEqual(service.store.list_monitor_runs({})[0]["turnId"], "turn-failed")
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_service -v
 ```
 
-- [ ] **Step 3: Implement one-session orchestration**
+- [x] **Step 3: Implement one-session orchestration**
 
 `WatchdogService.check_session(session_id, now, probe_cache=None)` must:
 
@@ -830,11 +842,11 @@ python -m unittest tests.test_watchdog_service -v
 
 Never hold a database transaction across a network call.
 
-- [ ] **Step 4: Implement batch due checks with per-channel probe reuse**
+- [x] **Step 4: Implement batch due checks with per-channel probe reuse**
 
 `run_due(now)` loads due sessions, groups them by `channel_id`, probes each channel once, and passes the same immutable `ProbeResult` to every due session in that group. One session failure must produce its own run and must not stop other sessions.
 
-- [ ] **Step 5: Verify service tests**
+- [x] **Step 5: Verify service tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_service -v
@@ -842,7 +854,7 @@ python -m unittest tests.test_watchdog_service -v
 
 Expected: two due sessions bound to one channel cause one probe call and two independent run rows.
 
-- [ ] **Step 6: Git-aware checkpoint**
+- [x] **Step 6: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -861,7 +873,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Test: `tests/test_watchdog_service.py`
 - Test: `tests/test_watchdog_store.py`
 
-- [ ] **Step 1: Write failing idempotency and retry tests**
+- [x] **Step 1: Write failing idempotency and retry tests**
 
 ```python
 class ResumeSafetyTests(unittest.TestCase):
@@ -908,13 +920,13 @@ Extend the test module imports for this task with:
 from watchdog.codex_adapter import DefiniteSendFailure, UncertainSendFailure
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_service tests.test_watchdog_store -v
 ```
 
-- [ ] **Step 3: Implement incident transactions and fingerprints**
+- [x] **Step 3: Implement incident transactions and fingerprints**
 
 Generate:
 
@@ -926,7 +938,7 @@ fingerprint = hashlib.sha256(
 
 `begin_resume_attempt` must atomically insert-or-read the incident, refuse `sent`, `sending`, `manual_attention`, and `attempt_count >= 3`, then increment the attempt and mark `sending` in the same `BEGIN IMMEDIATE` transaction.
 
-- [ ] **Step 4: Separate definite from uncertain send failures**
+- [x] **Step 4: Separate definite from uncertain send failures**
 
 The stdio client raises:
 
@@ -943,11 +955,11 @@ Explicit JSON-RPC errors are definite. EOF/timeout after the request was written
 
 At service startup, `recover_interrupted_sends` converts every persisted `sending` incident to `manual_attention`. A process crash makes delivery outcome uncertain, so these rows must never return to the automatic retry queue.
 
-- [ ] **Step 5: Add 30-second and 120-second retry eligibility**
+- [x] **Step 5: Add 30-second and 120-second retry eligibility**
 
 The first failure schedules attempt 2 after 30 seconds; the second schedules attempt 3 after 120 seconds. Before each retry, reuse a healthy probe only if it is at most 60 seconds old; otherwise probe again. A successful `turn/start` response marks the incident `sent` immediately.
 
-- [ ] **Step 6: Verify concurrency**
+- [x] **Step 6: Verify concurrency**
 
 Run two `check_session` calls simultaneously with a barrier in `FakeAdapter.start_turn`; assert only one enters the adapter and the other records `silent_already_handled` or `sending_in_progress`.
 
@@ -955,7 +967,7 @@ Run two `check_session` calls simultaneously with a barrier in `FakeAdapter.star
 python -m unittest tests.test_watchdog_service tests.test_watchdog_store -v
 ```
 
-- [ ] **Step 7: Git-aware checkpoint**
+- [x] **Step 7: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -970,7 +982,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Create: `watchdog/scheduler.py`
 - Test: `tests/test_watchdog_scheduler.py`
 
-- [ ] **Step 1: Write failing lifecycle tests**
+- [x] **Step 1: Write failing lifecycle tests**
 
 ```python
 import threading
@@ -1022,23 +1034,23 @@ class SchedulerTests(unittest.TestCase):
         scheduler.stop(timeout=1)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_scheduler -v
 ```
 
-- [ ] **Step 3: Implement the scheduler**
+- [x] **Step 3: Implement the scheduler**
 
 Use one non-daemon worker thread plus `threading.Event.wait(timeout)` so shutdown interrupts sleep. Each cycle calls `service.run_due(now_utc())`, catches and records cycle-level exceptions, then waits for the configured scheduler poll interval. The store itself decides which sessions are due, so waking early cannot trigger duplicate checks. Never run overlapping cycles. Run `store.prune_records(now_utc())` at most once per local calendar day.
 
-- [ ] **Step 4: Verify tests**
+- [x] **Step 4: Verify tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_scheduler -v
 ```
 
-- [ ] **Step 5: Git-aware checkpoint**
+- [x] **Step 5: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -1058,7 +1070,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Test: `tests/test_watchdog_http_api.py`
 - Test: `tests/test_app.py`
 
-- [ ] **Step 1: Write failing router tests**
+- [x] **Step 1: Write failing router tests**
 
 ```python
 class FakeService:
@@ -1097,17 +1109,17 @@ class WatchdogApiTests(unittest.TestCase):
         self.assertIsNone(api.dispatch("GET", "/api/projects", {}, None))
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_http_api -v
 ```
 
-- [ ] **Step 3: Implement strict route dispatch**
+- [x] **Step 3: Implement strict route dispatch**
 
 Return an `ApiResponse(status, body)` or `None` when the path is outside `/api/watchdog/`. Implement the routes from the design, including the exact user-facing tab terminology “添加监控渠道” in messages. Validate JSON types, UUID thread IDs, interval minimum, prompt non-empty, URL rules, channel references, pagination limits, and filters.
 
-- [ ] **Step 4: Integrate without holding the project lock**
+- [x] **Step 4: Integrate without holding the project lock**
 
 In every `Handler.do_*`, dispatch `/api/watchdog/*` before entering the existing `with LOCK:` project section. Network probes and Codex reads must never hold `LOCK`.
 
@@ -1121,17 +1133,17 @@ if parsed.path in {"/watchdog", "/watchdog/"}:
 
 Construct `WatchdogStore`, `DpapiSecretStore`, adapter, service, API, and scheduler inside a `create_console_runtime(ROOT)` factory. In `__main__`, start the scheduler before `serve_forever()` and stop scheduler/adapter in `finally`.
 
-- [ ] **Step 5: Add project regression assertions**
+- [x] **Step 5: Add project regression assertions**
 
 Extend `tests/test_app.py` so requesting `/api/projects` with a fake watchdog API still returns project state and `/` still serves `index.html`. Assert watchdog dispatch is not called for project CRUD methods.
 
-- [ ] **Step 6: Verify API and regression tests**
+- [x] **Step 6: Verify API and regression tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_http_api tests.test_app -v
 ```
 
-- [ ] **Step 7: Git-aware checkpoint**
+- [x] **Step 7: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -1147,7 +1159,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Modify: `index.html:311-324`
 - Test: `tests/test_watchdog_ui.py`
 
-- [ ] **Step 1: Write failing static UI contract tests**
+- [x] **Step 1: Write failing static UI contract tests**
 
 ```python
 import unittest
@@ -1171,17 +1183,17 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn('class="watchdog-tabs"', html)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_ui -v
 ```
 
-- [ ] **Step 3: Add the sidebar entry without changing filters**
+- [x] **Step 3: Add the sidebar entry without changing filters**
 
 After the existing filter `<nav>` and before `.host-status`, add a visually separate “自动化工具” group with a single anchor to `/watchdog`. Do not add a `data-filter` attribute and do not change filter counts or `state.filter` logic.
 
-- [ ] **Step 4: Build the standalone page shell**
+- [x] **Step 4: Build the standalone page shell**
 
 Use a separate HTML document with inline CSS/JS, matching the current token system:
 
@@ -1201,7 +1213,7 @@ Use a separate HTML document with inline CSS/JS, matching the current token syst
 
 Keep the same brand/sidebar shell, highlight “会话监控”, and place `监控会话 / 执行记录 / 添加监控渠道` in a horizontal tablist inside the main page. Include empty, loading, unavailable, disabled, and reduced-motion states. Do not put cards inside cards.
 
-- [ ] **Step 5: Verify static tests and responsive layout manually**
+- [x] **Step 5: Verify static tests and responsive layout manually**
 
 ```powershell
 python -m unittest tests.test_watchdog_ui -v
@@ -1209,7 +1221,7 @@ python -m unittest tests.test_watchdog_ui -v
 
 Expected: project page contains only the new entry; watchdog page owns all three subview labels.
 
-- [ ] **Step 6: Git-aware checkpoint**
+- [x] **Step 6: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -1226,14 +1238,14 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Test: `tests/test_watchdog_http_api.py`
 - Test: `tests/test_watchdog_ui.py`
 
-- [ ] **Step 1: Add failing response-shape and client-contract tests**
+- [x] **Step 1: Add failing response-shape and client-contract tests**
 
 Require these stable response properties:
 
 ```json
 {
   "status": {"schedulerRunning": true, "codexConnected": true, "nextCheckAt": "2026-07-31T14:40:00Z"},
-  "sessions": [{"id": "session-1", "name": "woxsheet", "state": "running", "effectiveIntervalMinutes": 10}],
+  "sessions": [{"id": "session-1", "name": "sample-development-session", "state": "running", "effectiveIntervalMinutes": 10}],
   "channels": [{"id": "channel-1", "name": "主兼容渠道", "apiKeyMasked": "已保存", "lastProbeCategory": "healthy"}],
   "runs": [{"decision": "silent_session_running", "detail": "会话正在执行"}]
 }
@@ -1241,37 +1253,37 @@ Require these stable response properties:
 
 Static JS tests must assert that `watchdog.html` uses only `/api/watchdog/` endpoints and never `/api/projects`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 python -m unittest tests.test_watchdog_http_api tests.test_watchdog_ui -v
 ```
 
-- [ ] **Step 3: Implement the “监控会话” view**
+- [x] **Step 3: Implement the “监控会话” view**
 
 Render enabled count, running, normal idle, and attention metrics. Provide add/edit/delete/enable controls, manual “立即检查并按规则处理”, local Codex selector, channel binding, global/default interval selection, and per-session prompt. The local selector loads only after user action and does not create a monitored row until Save.
 
-- [ ] **Step 4: Implement the “执行记录” view**
+- [x] **Step 4: Implement the “执行记录” view**
 
 Add filters for session, channel, decision, and time. Render channel status, HTTP status, turn status, reason, attempt, duration, and timestamp. Use explicit labels “静默”, “已续跑”, “续跑失败”, and “需要关注”. Do not show full prompt or API response body.
 
-- [ ] **Step 5: Implement the “添加监控渠道” view**
+- [x] **Step 5: Implement the “添加监控渠道” view**
 
 Provide add/edit/delete/enable, Base URL, model, API Key, advanced probe URL, timeout, and “立即测试”. Keep stored key fields blank on edit and show only “已保存”. A blank key on update means keep existing; it must not clear the key.
 
-- [ ] **Step 6: Add optimistic-control safety**
+- [x] **Step 6: Add optimistic-control safety**
 
 Disable action buttons while requests are pending, preserve table dimensions during refresh, show API validation messages near the relevant dialog, and restore controls after failures. Poll lightweight status/session data at 15 seconds; do not use the project page's five-second polling loop.
 
 Display the global `resumeActionsEnabled` state in the monitor header. Changing it requires a confirmation dialog that explains the dedicated-test-thread prerequisite; disabling it is immediate and never prevents read-only monitoring.
 
-- [ ] **Step 7: Verify tests**
+- [x] **Step 7: Verify tests**
 
 ```powershell
 python -m unittest tests.test_watchdog_http_api tests.test_watchdog_ui -v
 ```
 
-- [ ] **Step 8: Git-aware checkpoint**
+- [x] **Step 8: Git-aware checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -1290,7 +1302,7 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 - Modify: `tests/test_app.py`
 - Modify: any watchdog file only if verification finds an in-scope defect
 
-- [ ] **Step 1: Run the entire automated suite before real integration**
+- [x] **Step 1: Run the entire automated suite before real integration**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -1299,7 +1311,7 @@ python -m compileall -q app.py watchdog scripts
 
 Expected: all tests pass and compileall exits 0.
 
-- [ ] **Step 2: Start the console in read-only monitoring mode**
+- [x] **Step 2: Start the console in read-only monitoring mode**
 
 Confirm `resumeActionsEnabled` remains false, then run:
 
@@ -1309,11 +1321,11 @@ python app.py
 
 Expected: `http://127.0.0.1:8765/` and `http://127.0.0.1:8765/watchdog` load; closing the terminal stops both the scheduler and its child App Server process.
 
-- [ ] **Step 3: Verify original dashboard regression in a browser**
+- [x] **Step 3: Verify original dashboard regression in a browser**
 
 At desktop and mobile widths, verify project counts, filters, drag ordering, project CRUD, start/stop, logs, and remote website states. Confirm the only new project-page control is the “会话监控” sidebar link.
 
-- [ ] **Step 4: Verify watchdog browser flows**
+- [x] **Step 4: Verify watchdog browser flows**
 
 Using Playwright CLI during execution, test desktop 1440x900 and mobile 390x844:
 
@@ -1331,13 +1343,13 @@ delete the disabled test session
 
 Capture screenshots and verify no overlap, horizontal overflow, layout shift, blank canvas, or console errors.
 
-- [ ] **Step 5: Perform the dedicated Codex send gate**
+- [x] **Step 5: Perform the dedicated Codex send gate**
 
 Create a disposable local Codex task titled exactly `watchdog-integration-test`. Use the diagnostic script to read it first, then run the explicit `--allow-send` mode with prompt `watchdog integration test`. Confirm the new turn ID appears and the task receives exactly one prompt.
 
 Only after this passes, set `resumeActionsEnabled` to true through the settings API/UI. If the protocol test fails, leave the switch false and report the exact App Server error; do not use a real work session as fallback.
 
-- [ ] **Step 6: Verify one simulated recoverable incident end-to-end**
+- [x] **Step 6: Verify one simulated recoverable incident end-to-end**
 
 Use the local fake OpenAI-compatible server and fake adapter integration fixture to create a 503 failed turn. Run the check twice and assert:
 
@@ -1346,7 +1358,7 @@ first run: resume_sent, attempt 1
 second run: silent_already_handled, no second turn/start
 ```
 
-- [ ] **Step 7: Write operator documentation**
+- [x] **Step 7: Write operator documentation**
 
 Document:
 
@@ -1369,7 +1381,7 @@ watchdog.db-shm
 watchdog.db-wal
 ```
 
-- [ ] **Step 8: Run final verification**
+- [x] **Step 8: Run final verification**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -1378,7 +1390,7 @@ python -m compileall -q app.py watchdog scripts
 
 Expected: all tests pass; no plaintext API key appears under the project directory when searching a known test key.
 
-- [ ] **Step 9: Git-aware final checkpoint**
+- [x] **Step 9: Git-aware final checkpoint**
 
 ```powershell
 if (git rev-parse --is-inside-work-tree 2>$null) {
@@ -1389,17 +1401,26 @@ if (git rev-parse --is-inside-work-tree 2>$null) {
 
 ## Final Acceptance Checklist
 
-- [ ] Existing project dashboard behavior is unchanged except for one sidebar link.
-- [ ] `/watchdog` has horizontal `监控会话 / 执行记录 / 添加监控渠道` tabs.
-- [ ] Only explicitly added and enabled sessions are read by the scheduler.
-- [ ] Multiple channels and per-session binding work.
-- [ ] Global 15-minute default, per-session override, and five-minute minimum work.
-- [ ] API-unavailable paths never call the Codex adapter.
-- [ ] Completed, running, manual, waiting, interrupted-without-error, and unknown sessions never resume.
-- [ ] Explicit recoverable failed turns create a stable incident fingerprint.
-- [ ] A successful incident sends exactly one configured prompt.
-- [ ] Definite send failures stop after three total attempts; uncertain sends do not retry blindly.
-- [ ] API keys remain DPAPI-encrypted and are never returned or logged.
-- [ ] Execution records explain every silent/resume decision.
-- [ ] Scheduler and child App Server stop when the console process exits.
-- [ ] All automated tests, browser checks, and the dedicated test-thread gate pass.
+- [x] Existing project dashboard behavior is unchanged except for one sidebar link.
+- [x] `/watchdog` has horizontal `监控会话 / 执行记录 / 添加监控渠道` tabs.
+- [x] Only explicitly added and enabled sessions are read by the scheduler.
+- [x] Multiple channels and per-session binding work.
+- [x] Global 15-minute default, per-session override, and five-minute minimum work.
+- [x] API-unavailable paths never call the Codex adapter.
+- [x] Completed, running, manual, waiting, interrupted-without-error, and unknown sessions never resume.
+- [x] Explicit recoverable failed turns create a stable incident fingerprint.
+- [x] A successful incident sends exactly one configured prompt.
+- [x] Definite send failures stop after three total attempts; uncertain sends do not retry blindly.
+- [x] API keys remain DPAPI-encrypted and are never returned or logged.
+- [x] Execution records explain every silent/resume decision.
+- [x] Scheduler and child App Server stop when the console process exits.
+- [x] All automated tests, browser checks, and the dedicated test-thread gate pass.
+
+## Completion Evidence
+
+- `python -m unittest discover -s tests -v`: 108 tests passed.
+- `python -m compileall -q app.py watchdog scripts` and `git diff --check`: passed.
+- Desktop and mobile browser workflows passed without overflow or console errors.
+- The dedicated local Codex send gate created exactly one prompt and one completed turn.
+- A simulated recoverable 503 incident resumed once; the second check stayed silent.
+- Closing the console with `CTRL_BREAK` stopped its HTTP server and owned App Server child process.

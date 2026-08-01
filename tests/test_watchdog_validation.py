@@ -16,7 +16,7 @@ class ValidationTests(unittest.TestCase):
             validate_http_url("https://key:secret@api.example/v1")
 
     def test_thread_interval_and_prompt_have_strict_boundaries(self) -> None:
-        self.assertEqual(validate_thread_id("019fa619-0c95-76c3-a151-9289b7510e09"), "019fa619-0c95-76c3-a151-9289b7510e09")
+        self.assertEqual(validate_thread_id("00000000-0000-4000-8000-000000000001"), "00000000-0000-4000-8000-000000000001")
         self.assertEqual(validate_interval("5"), 5)
         self.assertEqual(validate_resume_prompt(" continue current task "), "continue current task")
         for invalid in ("not-a-uuid",):

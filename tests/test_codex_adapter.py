@@ -22,7 +22,7 @@ from watchdog.codex_adapter import (
 )
 
 
-THREAD_ID = "019fa619-0c95-76c3-a151-9289b7510e09"
+THREAD_ID = "00000000-0000-4000-8000-000000000001"
 
 
 class FakeTransport(RpcTransport):
@@ -45,7 +45,7 @@ class CodexAdapterTests(unittest.TestCase):
                 "thread/read": {
                     "thread": {
                         "id": THREAD_ID,
-                        "name": "woxsheet",
+                        "name": "sample-development-session",
                         "status": {"type": "idle"},
                         "turns": [
                             {"id": "turn-old", "status": "completed", "items": []},
@@ -71,7 +71,7 @@ class CodexAdapterTests(unittest.TestCase):
         snapshot = CodexAppServerAdapter(transport).read_thread(THREAD_ID)
 
         self.assertEqual(snapshot.thread_id, THREAD_ID)
-        self.assertEqual(snapshot.name, "woxsheet")
+        self.assertEqual(snapshot.name, "sample-development-session")
         self.assertEqual(snapshot.thread_status, "idle")
         self.assertIsNotNone(snapshot.latest_turn)
         self.assertEqual(snapshot.latest_turn.id, "turn-1")

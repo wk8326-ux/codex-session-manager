@@ -1,17 +1,34 @@
-import unittest
 import threading
+import tempfile
+import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
 from app import (
+    DEFAULT_PROJECTS,
     WEBSITE_CACHE,
     cached_website_health,
+    load_projects,
     probe_website,
     project_url_is_valid,
     reorder_projects,
     state_for,
 )
+
+
+class ProjectConfigPortabilityTests(unittest.TestCase):
+    def test_default_catalog_is_device_independent(self) -> None:
+        self.assertEqual(DEFAULT_PROJECTS, [])
+
+    def test_missing_local_config_starts_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "projects.json"
+            with patch("app.CONFIG_PATH", config_path):
+                self.assertEqual(load_projects(), [])
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), "[]")
 
 
 class ProjectUrlValidationTests(unittest.TestCase):

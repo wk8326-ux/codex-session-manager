@@ -19,7 +19,7 @@ from watchdog.service import WatchdogService
 from watchdog.store import ResumeOutcomePersistenceError, WatchdogStore
 
 
-THREAD_ID = "019fa619-0c95-76c3-a151-9289b7510e09"
+THREAD_ID = "00000000-0000-4000-8000-000000000001"
 NOW = "2026-07-31T06:05:00Z"
 API_KEY = "sk-service-test-secret"
 
@@ -750,7 +750,7 @@ class WatchdogServiceTests(unittest.TestCase):
 
     def test_due_sessions_share_probe_and_fail_independently(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
-        other_thread = "019f73f7-38a9-7ed1-b5c5-5a55913a71dd"
+        other_thread = "00000000-0000-4000-8000-000000000002"
         snapshots = {
             THREAD_ID: object(),
             other_thread: failed_snapshot(other_thread),
@@ -825,7 +825,7 @@ class WatchdogServiceTests(unittest.TestCase):
 
     def test_stale_session_fallback_failure_does_not_stop_due_batch(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
-        other_thread = "019f73f7-38a9-7ed1-b5c5-5a55913a71dd"
+        other_thread = "00000000-0000-4000-8000-000000000002"
         snapshots = {other_thread: failed_snapshot(other_thread)}
         service, secrets, probe, adapter = make_service(
             self.store, healthy, snapshots

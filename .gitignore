@@ -1,4 +1,10 @@
 .superpowers/
+.codegraph/
+.ui-craft/
+__pycache__/
+*.py[cod]
+logs/
+projects.json
 watchdog.db
 watchdog.db-shm
 watchdog.db-wal
