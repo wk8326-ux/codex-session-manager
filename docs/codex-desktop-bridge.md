@@ -9,8 +9,8 @@
 1. 控制台继续探测 API、读取会话、匹配恢复规则并去重。
 2. 命中恢复条件后，控制台原子写入恢复事件、执行记录和桌面桥接任务。
 3. Codex Desktop 中的桥接 runner 领取一个任务，并通过桌面原生 `send_message_to_thread` 启动目标会话。
-4. runner 回传新的 desktop turn ID，再等待目标任务完成或需要关注。
-5. runner 回传最终状态，控制台更新原执行记录。
+4. runner 回传新的 desktop turn ID 后立即结束，不跟随目标任务运行。
+5. 控制台通过 App Server 事件或后续会话检查读取目标 turn 的终态，并更新原执行记录。
 
 同一恢复事件只选择一个发送模式，不会同时调用桌面桥接和独立 App Server。
 
@@ -55,10 +55,10 @@ runnerId: codex-desktop-local
 4. 先用 read_thread(threadId, turnLimit=1) 记录发送前的最新 turn ID，再通过 Codex Desktop 的 send_message_to_thread 向 threadId 发送 prompt。
 5. 发送被明确拒绝时，POST /api/watchdog/bridge/jobs/{id}/finish，JSON 为
    {"leaseToken":"...","outcome":"dispatch_failed","detail":"简短错误"}，然后结束。
-6. send_message_to_thread 被接受后，继续用 read_thread(threadId, turnLimit=1) 读取最新 turn，直到它与发送前的 turn ID 不同；这个新 ID 才是 resumedTurnId。随后 POST /api/watchdog/bridge/jobs/{id}/started，JSON 为
+6. send_message_to_thread 被接受后，在 60 秒内短暂重试 read_thread(threadId, turnLimit=1)，直到最新 turn ID 与发送前不同；这个新 ID 才是 resumedTurnId。随后 POST /api/watchdog/bridge/jobs/{id}/started，JSON 为
    {"leaseToken":"...","resumedTurnId":"..."}。
-7. 通过 wait_threads 等待该 threadId。completed 回传 outcome=completed；failed 回传 failed；interrupted 回传 interrupted；需要审批或用户输入时回传 manual_attention。
-8. 最终 POST /api/watchdog/bridge/jobs/{id}/finish，并附带 leaseToken、outcome 和不超过 500 字的 detail。
+7. 成功回传 `/started` 后立即结束；不要等待目标任务，不要调用 wait 类工具，也不要为成功发送调用 `/finish`。控制台负责后续终态收敛。
+8. 如果发送已被接受但 60 秒内无法确认新 turn ID，POST /api/watchdog/bridge/jobs/{id}/finish，outcome 使用 manual_attention，然后结束；绝不重复发送。
 9. 一旦 send_message_to_thread 已被接受，绝不对同一个 job 再次发送。每轮绝不领取第二个任务。
 10. 不修改项目文件，不扫描其他会话，不处理领取结果之外的 threadId。
 ```
@@ -70,9 +70,9 @@ runnerId: codex-desktop-local
 | `GET` | `/api/watchdog/bridge/status` | 查看模式、待领取、已领取、运行中和已结束数量 |
 | `POST` | `/api/watchdog/bridge/jobs/claim` | 原子领取最早的待处理任务并获得租约 |
 | `POST` | `/api/watchdog/bridge/jobs/{id}/started` | 登记桌面 turn ID，将执行记录改为 `resume_started` |
-| `POST` | `/api/watchdog/bridge/jobs/{id}/finish` | 回传完成、失败、中断、人工关注或明确发送失败 |
+| `POST` | `/api/watchdog/bridge/jobs/{id}/finish` | 回传明确发送失败、无法确认新 turn 的人工关注，或兼容旧 runner 的终态 |
 
-领取租约默认 90 秒，可设置为 30 到 300 秒。租约到期且尚未登记 turn ID 的任务可被再次领取；一旦登记为 started，就不会再次出现在领取队列。启动和结束回调均支持相同参数的幂等重复提交。
+领取租约默认 90 秒，可设置为 30 到 300 秒。租约到期且尚未登记 turn ID 的任务可被再次领取；一旦登记为 started，就不会再次出现在领取队列。启动和失败回调均支持相同参数的幂等重复提交。正常成功路径不要求 runner 回传终态：控制台会通过 App Server 事件或后续检查调用相同的持久化收敛逻辑。`/finish` 仍兼容旧 runner 回传的完成、失败和中断状态。
 
 明确发送失败继续使用原有重试策略：第一次约 30 秒后重试，第二次约 120 秒后重试，总计最多 3 次。API 已可用但桌面发送仍连续失败，通常说明桥接逻辑、桌面状态或 thread ID 有问题，第三次后会转为人工关注。
 

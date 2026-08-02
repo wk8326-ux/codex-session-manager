@@ -126,7 +126,7 @@ Invoke-RestMethod `
 
 页面顶部可以选择两种恢复通道：
 
-- `Codex Desktop · 实时同步`：推荐。控制台只创建持久化 bridge job，由 Codex Desktop heartbeat runner 领取并通过桌面原生任务接口发送，因此 commentary、工具调用、审批和最终状态会实时显示在桌面端。
+- `Codex Desktop · 实时同步`：推荐。控制台只创建持久化 bridge job，由 Codex Desktop heartbeat runner 领取并通过桌面原生任务接口发送，因此 commentary、工具调用、审批和最终状态会实时显示在桌面端。runner 登记新 turn ID 后立即退出，控制台通过后续检查或 App Server 事件收敛最终状态。
 - `独立 App Server · 兼容`：保留原有 `thread/resume` + `turn/start` 路径，适用于未配置桌面 runner 的环境。该路径能恢复任务，但运行中状态不会实时同步到 Codex Desktop。
 
 新数据库默认使用兼容模式，避免没有 runner 时任务停留在待领取状态。桌面桥接的设置步骤、heartbeat 提示词和回调协议见 [Codex Desktop 实时桥接](codex-desktop-bridge.md)。
@@ -267,7 +267,7 @@ Invoke-RestMethod `
 | `GET` | `/api/watchdog/bridge/status` | 查询桌面桥接队列状态 |
 | `POST` | `/api/watchdog/bridge/jobs/claim` | 桌面 runner 原子领取一个任务 |
 | `POST` | `/api/watchdog/bridge/jobs/{id}/started` | 回传桌面 turn ID |
-| `POST` | `/api/watchdog/bridge/jobs/{id}/finish` | 回传桌面任务最终状态 |
+| `POST` | `/api/watchdog/bridge/jobs/{id}/finish` | 回传明确发送失败、人工关注，或兼容旧 runner 的最终状态 |
 
 添加渠道的 API 示例使用环境变量承载密钥，避免把密钥写进脚本或 shell 历史：
 

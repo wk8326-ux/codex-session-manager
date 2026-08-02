@@ -108,7 +108,9 @@ npm run dev -- --host 127.0.0.1 --port 4173 --strictPort
 无任务：静默结束
 有任务：向指定目标会话发送续跑提示词
         ↓
-Runner 将开始、完成或失败结果回传控制台
+Runner 回传新 turn ID 后立即结束
+        ↓
+控制台在后续检查或事件中收敛最终状态
 ```
 
 一台设备只需要一个全局 Runner。所有监控会话共用它，添加或删除监控会话不会创建或删除全局定时任务。删除监控会话会取消该会话尚未执行的 bridge job；删除或暂停全局 Runner 则会停止所有会话的 Desktop 实时恢复。
@@ -164,9 +166,9 @@ http://127.0.0.1:8765
    - 领取任务后，只处理返回的 threadId 和 prompt。
    - 先用 read_thread(threadId, turnLimit=1) 记录目标会话发送前的最新 turn ID。
    - 调用 send_message_to_thread(threadId, prompt)。若被明确拒绝，POST /api/watchdog/bridge/jobs/{id}/finish，outcome 使用 dispatch_failed，然后结束。
-   - 发送被接受后，继续读取目标会话，直到获得与发送前不同的新 turn ID，并 POST /api/watchdog/bridge/jobs/{id}/started。
-   - 用 wait_threads 等待目标任务。完成回传 completed，失败回传 failed，中断回传 interrupted，需要审批或用户输入时回传 manual_attention。
-   - 最后 POST /api/watchdog/bridge/jobs/{id}/finish，并携带 leaseToken、outcome 和不超过 500 字的 detail。
+   - 发送被接受后，在 60 秒内短暂重试读取目标会话，直到获得与发送前不同的新 turn ID，并 POST /api/watchdog/bridge/jobs/{id}/started。
+   - 成功回传 `/started` 后立即结束；不要等待目标任务，不要调用 wait 类工具，也不要为成功发送调用 `/finish`。目标任务的最终状态由控制台后续检查和事件订阅收敛。
+   - 如果发送已被接受但 60 秒内无法确认新 turn ID，POST /api/watchdog/bridge/jobs/{id}/finish，outcome 使用 manual_attention，然后结束；绝不重复发送。
    - send_message_to_thread 一旦被接受，绝不对同一个 job 重复发送。
    - 每轮最多处理一个任务，不扫描其他会话，不修改项目文件。
 

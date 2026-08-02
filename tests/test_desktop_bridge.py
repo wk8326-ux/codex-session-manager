@@ -296,6 +296,63 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(bridge["terminal"], 1)
         self.assertEqual(run["decision"], "resume_completed")
 
+    def test_later_session_check_finalizes_started_job_without_runner_finish(self) -> None:
+        queued_run, _adapter = self._queue_job()
+        job = self.store.claim_desktop_bridge_job(
+            "desktop-test", "2026-08-02T02:00:01Z", lease_seconds=60
+        )
+        assert job is not None
+        resumed_turn_id = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+        self.store.mark_desktop_bridge_started(
+            job["id"], job["leaseToken"], resumed_turn_id, "2026-08-02T02:00:02Z"
+        )
+
+        class CompletedTurnAdapter(BridgeAdapter):
+            def read_thread(self, thread_id: str) -> SessionSnapshot:
+                return SessionSnapshot(
+                    thread_id,
+                    "bridge target",
+                    "idle",
+                    (),
+                    TurnSnapshot(resumed_turn_id, "completed"),
+                )
+
+        service = WatchdogService(
+            self.store,
+            self.secrets,
+            lambda _config: ProbeResult(
+                "healthy", 200, "channel responded normally", 7, NOW
+            ),
+            CompletedTurnAdapter(),
+        )
+        service.check_session(self.session["id"], "2026-08-02T02:05:00Z")
+
+        bridge = self.store.get_desktop_bridge_status()
+        run = next(
+            item
+            for item in self.store.list_monitor_runs({})
+            if item["id"] == queued_run["id"]
+        )
+        self.assertEqual(bridge["started"], 0)
+        self.assertEqual(bridge["terminal"], 1)
+        self.assertEqual(run["decision"], "resume_completed")
+
+
+class DesktopBridgeProtocolTests(unittest.TestCase):
+    def test_runner_exits_after_started_callback_without_waiting_for_target(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        sources = {
+            "README": (root / "README.md").read_text(encoding="utf-8"),
+            "bridge guide": (root / "docs" / "codex-desktop-bridge.md").read_text(
+                encoding="utf-8"
+            ),
+        }
+
+        for label, content in sources.items():
+            with self.subTest(source=label):
+                self.assertNotIn("wait_threads", content)
+                self.assertIn("/started` 后立即结束", content)
+
 
 if __name__ == "__main__":
     unittest.main()
