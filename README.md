@@ -1,67 +1,223 @@
-# Local Project Console
+# 本地项目控制台
 
-Local Project Console is a lightweight Windows dashboard for starting local projects, opening remote tools, and monitoring selected local Codex sessions.
+本地项目控制台是一个面向 Windows 开发环境的轻量工作台，用于集中启动本地项目、打开远程网页入口，并监控指定的本地 Codex 会话。
 
-Run `start-console.bat` or `python app.py`, then open `http://127.0.0.1:8765`.
+项目包含两个彼此隔离的工作区：
 
-Register each project with its working directory, start command, optional stop command, port, and local URL. The dashboard checks whether the configured port is listening and whether a process started by the dashboard is still alive.
+- **项目控制台**：登记项目目录、启动命令、停止命令、端口和访问地址，一键启动、关闭或打开项目。
+- **会话监控**：检测 OpenAI 兼容 API 渠道和用户指定的 Codex 会话，在明确满足恢复条件时安全续跑。
 
-Projects that already run on a server can use the `External website` mode. They
-need only an HTTP or HTTPS URL and appear as an `Open` action. The console checks
-the URL on a short interval and reports whether the remote website is online; it
-does not pretend to start or stop the remote service.
+## 快速开始
 
-The project definitions are saved in the local-only `projects.json` after the first launch. It is ignored by Git so project paths, remote URLs, process IDs, and other device-specific settings are not published. See `projects.example.json` for portable local and external project examples. Command output is appended to the ignored `logs/<project-id>.log`.
+要求：
 
-## Session watchdog
+- Windows 10 或 Windows 11
+- Python 3.10 或更高版本
+- 使用会话监控时，需要已安装并登录 Codex CLI / Codex Desktop
 
-Open `http://127.0.0.1:8765/watchdog`, or use the Session watchdog link in the sidebar. This workspace is isolated from the project launcher and has three views:
+双击：
 
-- Monitored sessions: explicitly selected local Codex sessions, their state, interval, channel, and manual check actions.
-- Run history: the reason each check stayed silent, resumed, failed, or needs attention.
-- Monitoring channels: OpenAI-compatible API channels used for availability probes.
+```text
+start-console.bat
+```
 
-The scheduler starts and stops with the console process. It monitors only sessions the user adds and enables; opening the local-session picker does not automatically add every Codex session.
+也可以在项目目录运行：
 
-### Prerequisites and compatibility
+```powershell
+python app.py
+```
 
-The watchdog currently requires Windows because API keys are protected with Windows DPAPI in the current-user scope. It also requires a Codex CLI version that supports the App Server stdio protocol used by `thread/list`, `thread/read`, `thread/resume`, and `turn/start`.
+启动后访问：
 
-Check the installed CLI and the read-only protocol path before enabling resume actions:
+- 项目控制台：<http://127.0.0.1:8765/>
+- 会话监控：<http://127.0.0.1:8765/watchdog>
+
+调度器随控制台进程启动和关闭。关闭控制台终端后，HTTP 服务、监控调度器以及控制台创建的 Codex App Server 子进程会一起停止。
+
+## 项目控制台
+
+### 本地项目
+
+本地项目可以配置：
+
+- 项目名称
+- 工作目录
+- 启动命令或启动脚本
+- 可选的停止命令
+- 监听端口
+- 本地访问地址
+
+控制台会检查端口是否监听，以及由控制台启动的进程是否仍然存活。启动命令既可以填写项目中的脚本：
+
+```text
+start-invoice-tool.bat
+```
+
+也可以直接填写命令：
+
+```text
+npm run dev -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+命令会在该项目配置的工作目录中执行。
+
+### 外部网页
+
+已经运行在其他设备或服务器上的工具，可以使用“外部网页”模式。只需填写 HTTP 或 HTTPS 地址，控制台会定期检测网页可达性并显示在线或离线状态，不会假装启动或关闭远程服务。
+
+项目配置在首次运行后保存到本机 `projects.json`。该文件已被 Git 忽略，不会把设备路径、远程地址或进程 ID 上传到仓库。可移植示例见 [`projects.example.json`](projects.example.json)，启动日志保存在已忽略的 `logs/<project-id>.log`。
+
+## 会话监控
+
+会话监控页面包含三个视图：
+
+- **监控会话**：用户明确添加的本地 Codex 会话、状态、检查周期、绑定渠道和手动检查入口。
+- **执行记录**：记录每次检查为什么保持静默、触发续跑、执行失败或需要人工处理。
+- **添加监控渠道**：配置用于可用性探测的 OpenAI 兼容 API 渠道。
+
+工具只监控用户保存并启用的会话，不会无条件扫描所有 Codex 会话。打开“读取本地会话”选择器也不会自动把全部会话加入监控目录。
+
+### 安全默认值
+
+- 会话检查默认开启，但全局自动续跑默认关闭。
+- 每个会话的无人值守命令和文件审批默认关闭，必须逐个明确授权。
+- 全局检查周期默认 15 分钟，单个会话可以覆盖，最短 5 分钟。
+- 默认续跑提示词是“继续当前开发任务”，每个会话都可以单独修改。
+- API 渠道不可用、会话运行中、会话已完成、等待用户输入、状态未知或错误未命中恢复规则时保持静默。
+- 同一恢复事件会去重；明确发送失败最多尝试 3 次，不确定的发送结果不会盲目重试。
+- 执行记录默认保留 90 天、最多 10,000 条，调度器运行期间每天清理一次。
+
+首次启用自动续跑前，请使用一次性测试会话完成发送验证，不要直接使用仍在开发的真实工作会话。
+
+## Codex Desktop 桌面桥接
+
+恢复通道支持两种模式：
+
+- **Codex Desktop · 实时同步**：推荐。控制台创建持久化 bridge job，由 Codex Desktop Runner 领取并向目标会话发送提示词，运行过程会实时显示在桌面端。
+- **独立 App Server · 兼容**：使用独立 App Server 的 `thread/resume` 和 `turn/start`，可以恢复任务，但运行中的状态不会实时同步到 Codex Desktop。
+
+桌面桥接的链路如下：
+
+```text
+控制台检测 API 和目标会话
+        ↓
+命中恢复条件后生成 bridge job
+        ↓
+全局 Runner 每 5 分钟领取一次
+        ↓
+无任务：静默结束
+有任务：向指定目标会话发送续跑提示词
+        ↓
+Runner 将开始、完成或失败结果回传控制台
+```
+
+一台设备只需要一个全局 Runner。所有监控会话共用它，添加或删除监控会话不会创建或删除全局定时任务。删除监控会话会取消该会话尚未执行的 bridge job；删除或暂停全局 Runner 则会停止所有会话的 Desktop 实时恢复。
+
+Git 只同步项目代码，不会同步 Codex Desktop 会话、自动化、API 渠道、监控会话或本地数据库。因此，每台新设备需要安装一次自己的桌面桥接。
+
+### 新设备桥接安装提示词
+
+在新设备上拉取项目并启动控制台后，把下面整段提示词发送给该设备上的 Codex。Codex 会创建或复用专用 Runner 会话和全局 heartbeat 自动化，不会写死其他设备的会话 ID。
+
+```text
+请为 Local Project Console 安装 Codex Desktop 桌面桥接。
+
+控制台地址：
+http://127.0.0.1:8765
+
+请严格执行：
+
+1. 检查以下接口是否可访问：
+   GET http://127.0.0.1:8765/api/watchdog/status
+   GET http://127.0.0.1:8765/api/watchdog/bridge/status
+
+   如果控制台不可访问，停止操作并提示我先启动控制台。
+
+2. 检查当前设备是否已经存在：
+   - 标题为“Local Project Console 桌面桥接 Runner”的专用 Codex 任务
+   - 名称为“Local Project Console 桌面桥接”的 heartbeat 自动化
+
+   如果已有配置正确，则复用并更新，不要重复创建。
+
+3. 如果没有专用任务，创建一个本地 projectless Codex 任务，并将标题设置为：
+   Local Project Console 桌面桥接 Runner
+
+   该任务只用于桌面桥接，不修改项目文件，不作为业务会话使用。
+
+4. 为该专用任务创建或更新一个 heartbeat 自动化：
+   名称：Local Project Console 桌面桥接
+   周期：每 5 分钟
+   状态：启用
+   通知：仅失败时通知
+
+5. heartbeat 使用下面的提示词：
+
+   你是 Local Project Console 的 Codex Desktop 桌面桥接 runner。每次 heartbeat 只处理一个任务。
+
+   控制台地址：http://127.0.0.1:8765
+   runnerId：codex-desktop-local
+
+   严格执行：
+   - POST /api/watchdog/bridge/jobs/claim，JSON 为：
+     {"runnerId":"codex-desktop-local","leaseSeconds":180}
+   - 控制台不可访问或返回空任务时，静默结束。
+   - 领取任务后，只处理返回的 threadId 和 prompt。
+   - 先用 read_thread(threadId, turnLimit=1) 记录目标会话发送前的最新 turn ID。
+   - 调用 send_message_to_thread(threadId, prompt)。若被明确拒绝，POST /api/watchdog/bridge/jobs/{id}/finish，outcome 使用 dispatch_failed，然后结束。
+   - 发送被接受后，继续读取目标会话，直到获得与发送前不同的新 turn ID，并 POST /api/watchdog/bridge/jobs/{id}/started。
+   - 用 wait_threads 等待目标任务。完成回传 completed，失败回传 failed，中断回传 interrupted，需要审批或用户输入时回传 manual_attention。
+   - 最后 POST /api/watchdog/bridge/jobs/{id}/finish，并携带 leaseToken、outcome 和不超过 500 字的 detail。
+   - send_message_to_thread 一旦被接受，绝不对同一个 job 重复发送。
+   - 每轮最多处理一个任务，不扫描其他会话，不修改项目文件。
+
+6. PUT /api/watchdog/settings，JSON 为：
+   {"resumeDispatchMode":"desktop_bridge"}
+
+   不要自动开启 resumeActionsEnabled，由我在控制台页面中手动开启。
+
+7. 最后向我报告：
+   - 专用桥接任务 ID
+   - 自动化 ID
+   - 自动化状态
+   - 桥接周期
+   - 控制台连接结果
+   - 是否发现重复的旧桥接任务
+
+不要创建测试监控会话，不要向任何业务会话发送测试消息。
+```
+
+## 兼容性检查
+
+会话监控当前依赖 Windows DPAPI 加密 API Key，也依赖 Codex CLI 提供 App Server stdio 协议。开启续跑前建议先执行只读检查：
 
 ```powershell
 codex --version
 python scripts/probe_codex_app_server.py --list --limit 5
 ```
 
-There is no hard-coded Codex CLI version. If the read-only probe fails after an upgrade, leave resume actions disabled until protocol compatibility is restored.
+项目不写死 Codex CLI 版本。升级后如果只读探测失败，应保持自动续跑关闭，直到协议兼容性恢复。
 
-### Safe defaults
+## 本地数据与安全
 
-- Monitoring is enabled, but `resumeActionsEnabled` is `false` by default.
-- Unattended command/file approvals are disabled by default for every session. They must be enabled explicitly on each monitored session and only take effect while the global resume switch is on.
-- The global check interval is 15 minutes; a session can override it, with a five-minute minimum.
-- The built-in prompt means "continue the current development task" and can be customized per session.
-- Running, completed, waiting-for-user, unknown, unmatched, and channel-unavailable states stay silent.
-- A recoverable incident is deduplicated. `turn/start` is recorded as started, not completed; the final result comes from the App Server `turn/completed` event. Definite send failures stop after three total attempts, while uncertain outcomes require manual confirmation and are not blindly retried.
-- Resume dispatch supports two explicit modes. `desktop_bridge` queues the recovery for Codex Desktop so the resumed turn is visible live in the desktop task; `direct_app_server` keeps the standalone App Server path as a compatibility fallback. New installations default to the compatibility mode until a desktop bridge runner is configured.
-- Execution records default to 90 days and 10,000 rows, with daily cleanup while the scheduler runs.
+会话监控配置和执行记录保存在 `watchdog.db`。API Key 使用当前 Windows 用户作用域的 DPAPI 加密，不会由 API 返回，也不会以明文写入日志。数据库复制到其他设备或其他 Windows 用户后通常无法解密原密钥，需要重新填写渠道密钥。
 
-Before turning on automatic resume, use a disposable Codex session titled exactly `watchdog-integration-test` and follow the gated send procedure in the operator guide. Do not use an active development session for the first send test.
+仓库已忽略：
 
-### Configuration and diagnostics
+- `projects.json`
+- `logs/`
+- `watchdog.db`
+- `watchdog.db-shm`
+- `watchdog.db-wal`
+- `.superpowers/`
 
-The complete device-independent operator guide is in [docs/watchdog-configuration.md](docs/watchdog-configuration.md). It covers:
+不要提交真实 API Key、本地数据库、个人路径、生产会话 ID 或设备专用的自动化配置。
 
-- channel and session fields;
-- finding a local thread ID;
-- check intervals and per-session prompts;
-- strict recovery and retry rules;
-- Codex Desktop bridge setup and its claim/start/finish callback contract;
-- DPAPI backup implications;
-- API examples, status categories, record retention, and troubleshooting.
+## 详细文档
 
-Useful read-only checks:
+- [会话监控配置与运维](docs/watchdog-configuration.md)
+- [Codex Desktop 实时桥接](docs/codex-desktop-bridge.md)
+
+常用只读诊断接口：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8765/api/watchdog/status
@@ -69,9 +225,4 @@ Invoke-RestMethod http://127.0.0.1:8765/api/watchdog/settings
 Invoke-RestMethod 'http://127.0.0.1:8765/api/watchdog/runs?limit=20'
 ```
 
-All watchdog endpoints live under `/api/watchdog/`; the watchdog UI never uses `/api/projects`.
-
-## Local data and security
-
-Watchdog configuration and audit records are stored in `watchdog.db`. API keys are DPAPI-encrypted and are never returned by the API or written to logs in plaintext. A database copied to another device or Windows user normally cannot decrypt the saved keys; re-enter channel keys after migration.
-The repository ignores `.superpowers/`, `watchdog.db`, `watchdog.db-shm`, and `watchdog.db-wal`. Never commit real API keys, local database files, personal paths, or production thread IDs.
+所有会话监控接口都位于 `/api/watchdog/` 命名空间，不会读写项目控制台的 `/api/projects` 数据。
