@@ -131,6 +131,8 @@ Invoke-RestMethod `
 
 新数据库默认使用兼容模式，避免没有 runner 时任务停留在待领取状态。桌面桥接的设置步骤、heartbeat 提示词和回调协议见 [Codex Desktop 实时桥接](codex-desktop-bridge.md)。
 
+Desktop runner 是当前控制台的全局单例。添加监控会话不会额外创建定时任务，所有已启用会话共用同一个 runner。删除会话会取消该会话尚未执行的 bridge job，但不会删除全局 runner；删除或暂停 runner 则会让所有会话的 Desktop 实时恢复停止工作。
+
 一次检查只有同时满足以下条件才可能发送续跑提示词：
 
 1. 会话已由用户加入监控目录且处于启用状态。

@@ -24,6 +24,18 @@
 
 控制台关闭后，HTTP 领取接口不可访问，因此 heartbeat 会静默结束，不会恢复任何会话。这样监控的实际生命周期仍由控制台终端控制。删除 heartbeat 则会完全移除桌面桥接 runner。
 
+## 全局 runner 与监控会话
+
+Desktop heartbeat runner 是控制台级的单例，不是某个监控会话的附属任务：
+
+- 安装一次 runner 后，它会领取所有已启用监控会话产生的 bridge job。
+- 在控制台添加监控会话只会写入监控目录，不会为该会话新建一条 Codex 定时任务。
+- 删除监控会话会停止该会话的后续检查，并删除它尚未执行的 bridge job；已有执行记录会保留为匿名历史。
+- 删除或暂停全局 runner 不会删除监控会话，但 `desktop_bridge` 队列将无人领取，因而无法通过 Codex Desktop 实时恢复。
+- 不要把真实业务会话用作 runner 自身的 heartbeat 任务。runner 应绑定一个专用本地 Codex 任务；该任务中出现的定时消息是桥接心跳日志，不是某个被监控会话被错误续跑。
+
+因此，正常部署关系是“一台设备一个 runner，多个监控会话共用”。只有不再使用 `desktop_bridge`，或已切换到 `direct_app_server` 时，才应删除该 runner。
+
 ## Heartbeat 提示词模板
 
 将下面内容作为专用 Codex Desktop 任务的 heartbeat 提示词。端口改变时只需要修改 `baseUrl`，无需修改项目源码。

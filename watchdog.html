@@ -161,10 +161,14 @@
     .workspace { min-width: 0; padding: 42px clamp(24px, 4vw, 64px) 64px; }
     .workspace-inner { width: min(1280px, 100%); margin: 0 auto; }
     .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
-    .page-actions { flex: none; display: flex; align-items: flex-end; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
-    .dispatch-field { min-width: 230px; display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
-    .dispatch-field select { min-height: 40px; color: var(--text-primary); background-color: var(--surface-input); }
+    .page-actions { flex: none; display: flex; align-items: flex-start; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+    .dispatch-field { min-width: 230px; display: grid; grid-template-rows: 14px 40px 14px; gap: 5px; color: var(--text-secondary); font-size: 11px; }
+    .dispatch-field > span { line-height: 14px; }
+    .dispatch-field > select,
+    .dispatch-field > .resume-control { width: 100%; min-height: 40px; height: 40px; }
+    .dispatch-field > select { color: var(--text-primary); background-color: var(--surface-input); }
     .dispatch-field small { min-height: 14px; color: var(--text-tertiary); font: 10px/1.4 var(--font-mono); }
+    .resume-field { min-width: 164px; }
     .page-kicker { margin: 0 0 8px; color: var(--accent-700); font-size: 12px; font-weight: 700; }
     h1 { margin: 0; font: 600 32px/1.16 var(--font-display); letter-spacing: 0; text-wrap: balance; }
     .page-description { max-width: 690px; margin: 12px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.65; }
@@ -352,7 +356,7 @@
       .workspace { padding: 24px 12px 44px; }
       .page-head { align-items: stretch; flex-direction: column; gap: 14px; padding: 0 4px; }
       .page-actions { justify-content: stretch; }
-      .dispatch-field { min-width: 0; flex: 1 1 100%; }
+      .dispatch-field { width: 100%; min-width: 0; flex: none; }
       .resume-control { min-height: 44px; }
       h1 { font-size: 23px; }
       .head-state { min-height: 44px; max-width: 150px; padding: 0 10px; }
@@ -382,7 +386,7 @@
       .dialog-body { padding: 18px 16px 20px; }
       input, select, textarea { font-size: 16px; }
       .dialog-actions .button { flex: 1; }
-      .resume-control { min-width: 0; max-width: 154px; }
+      .resume-control { min-width: 0; max-width: none; }
       .table-wrap { min-height: 250px; }
       .live-region { right: 16px; bottom: 16px; }
     }
@@ -455,10 +459,14 @@
               </select>
               <small id="bridge-status-copy" aria-live="polite">正在读取桥接状态</small>
             </label>
-            <button class="button resume-control" id="resume-control" type="button" data-enabled="false" aria-describedby="resume-control-help">
-              <span class="status-dot" aria-hidden="true"></span>
-              <span><strong>续跑关闭</strong> · 只读</span>
-            </button>
+            <div class="dispatch-field resume-field">
+              <span>恢复执行</span>
+              <button class="button resume-control" id="resume-control" type="button" data-enabled="false" aria-describedby="resume-scope-copy resume-control-help">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span><strong>续跑关闭</strong> · 只读</span>
+              </button>
+              <small id="resume-scope-copy">所有已启用会话共用</small>
+            </div>
             <span id="resume-control-help" hidden>自动续跑总开关。开启前必须使用专用测试会话完成验证。</span>
           </div>
         </header>
@@ -851,7 +859,7 @@
       dispatchSelect.value = dispatchMode;
       const bridge = appState.status.desktopBridge || {};
       document.getElementById('bridge-status-copy').textContent = dispatchMode === 'desktop_bridge'
-        ? `${Number(bridge.pending || 0)} 待领取 · ${Number(bridge.started || 0)} 运行中`
+        ? `全局桥接 · ${Number(bridge.pending || 0)} 待领取 · ${Number(bridge.started || 0)} 运行中`
         : '兼容直连模式';
 
       const sidebarValue = document.querySelector('.sidebar-note-value');
@@ -1229,7 +1237,7 @@
       if (!session) return;
       if (button.dataset.sessionAction === 'edit') return openSessionDialog(session);
       if (button.dataset.sessionAction === 'delete') {
-        return askForConfirmation({ title: '删除监控会话', copy: `删除“${session.name}”后将停止后续监控，已有执行记录会保留。`, actionLabel: '删除会话', action: async () => {
+        return askForConfirmation({ title: '删除监控会话', copy: `删除“${session.name}”后将停止后续监控并取消该会话待处理的恢复任务。全局桌面桥接任务会保留，已有执行记录也会保留。`, actionLabel: '删除会话', action: async () => {
           await apiRequest(`${WATCHDOG_ENDPOINTS.sessions}/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
           await refreshSessionsAndStatus();
           showToast('监控会话已删除。');

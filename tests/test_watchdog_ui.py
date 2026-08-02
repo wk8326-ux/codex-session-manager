@@ -53,6 +53,14 @@ class WatchdogUiTests(unittest.TestCase):
         for state in ("loading", "empty", "unavailable", "disabled"):
             self.assertIn(f'data-view-state="{state}"', html)
 
+    def test_recovery_controls_share_the_same_labeled_grid(self) -> None:
+        html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
+
+        self.assertIn('class="dispatch-field resume-field"', html)
+        self.assertIn(".dispatch-field > select,", html)
+        self.assertIn(".dispatch-field > .resume-control", html)
+        self.assertIn("所有已启用会话共用", html)
+
 
 if __name__ == "__main__":
     unittest.main()

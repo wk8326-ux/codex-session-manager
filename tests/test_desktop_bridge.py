@@ -7,7 +7,7 @@ from pathlib import Path
 from watchdog.channels import ProbeResult
 from watchdog.models import SessionSnapshot, TurnSnapshot
 from watchdog.service import WatchdogService
-from watchdog.store import WatchdogStore
+from watchdog.store import WatchdogStore, WatchdogStoreError
 
 
 THREAD_ID = "11111111-2222-4333-8444-555555555555"
@@ -241,6 +241,38 @@ class DesktopBridgeTests(unittest.TestCase):
 
         self.assertIsNone(self.store.get_session(self.session["id"]))
         self.assertIsNone(self.store.list_monitor_runs({})[0]["sessionId"])
+
+    def test_deleting_session_cancels_pending_bridge_job(self) -> None:
+        self._queue_job()
+
+        self.store.delete_session(self.session["id"])
+
+        self.assertEqual(self.store.get_desktop_bridge_status()["pending"], 0)
+        self.assertIsNone(
+            self.store.claim_desktop_bridge_job(
+                "desktop-test", "2026-08-02T02:00:01Z", lease_seconds=60
+            )
+        )
+        self.assertIsNone(self.store.list_monitor_runs({})[0]["sessionId"])
+
+    def test_deleting_session_invalidates_claimed_bridge_lease(self) -> None:
+        self._queue_job()
+        job = self.store.claim_desktop_bridge_job(
+            "desktop-test", "2026-08-02T02:00:01Z", lease_seconds=60
+        )
+        assert job is not None
+
+        self.store.delete_session(self.session["id"])
+
+        with self.assertRaisesRegex(
+            WatchdogStoreError, "desktop bridge job does not exist"
+        ):
+            self.store.mark_desktop_bridge_started(
+                job["id"],
+                job["leaseToken"],
+                "66666666-7777-4888-8999-aaaaaaaaaaaa",
+                "2026-08-02T02:00:02Z",
+            )
 
     def test_persisted_turn_status_repairs_missing_runner_finish_callback(self) -> None:
         self._queue_job()
