@@ -9,6 +9,7 @@ from watchdog.store import (
     ChannelInUseError,
     ResumeOutcomePersistenceError,
     WatchdogStore,
+    WatchdogStoreError,
 )
 
 
@@ -217,6 +218,29 @@ class WatchdogStoreTests(unittest.TestCase):
             },
             {"429", "502", "503", "504"},
         )
+        self.assertTrue(all(rule["builtIn"] for rule in rules))
+
+    def test_custom_recovery_rule_supports_crud_without_mutating_builtins(self) -> None:
+        rule = self.store.create_recovery_rule(
+            {
+                "name": "Model capacity",
+                "pattern": "Selected model is at capacity",
+                "enabled": True,
+            }
+        )
+
+        self.assertEqual(rule["matchType"], "message_contains")
+        self.assertFalse(rule["builtIn"])
+        updated = self.store.update_recovery_rule(
+            rule["id"], {"name": "Capacity warning", "enabled": False}
+        )
+        self.assertEqual(updated["name"], "Capacity warning")
+        self.assertFalse(updated["enabled"])
+
+        self.store.delete_recovery_rule(rule["id"])
+        self.assertIsNone(self.store.get_recovery_rule(rule["id"]))
+        with self.assertRaises(WatchdogStoreError):
+            self.store.delete_recovery_rule("http-503")
 
     def test_unattended_approval_is_opt_in_per_session(self) -> None:
         session = self.create_session()

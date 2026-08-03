@@ -26,6 +26,21 @@ class FakeService:
     def list_channels(self) -> list[dict]:
         return []
 
+    def list_recovery_rules(self) -> list[dict]:
+        return [{"id": "http-503", "builtIn": True}]
+
+    def get_recovery_rule(self, rule_id: str) -> dict:
+        return {"id": rule_id}
+
+    def create_recovery_rule(self, payload: dict) -> dict:
+        return {"id": "rule-1", **payload}
+
+    def update_recovery_rule(self, rule_id: str, payload: dict) -> dict:
+        return {"id": rule_id, **payload}
+
+    def delete_recovery_rule(self, rule_id: str) -> None:
+        return None
+
     def get_channel(self, channel_id: str) -> dict:
         return {"id": channel_id}
 
@@ -118,6 +133,23 @@ class WatchdogApiTests(unittest.TestCase):
             ("GET", "/api/watchdog/settings", {}, None, 200),
             ("PUT", "/api/watchdog/settings", {}, {"schedulerEnabled": True}, 200),
             ("GET", "/api/watchdog/channels", {}, None, 200),
+            ("GET", "/api/watchdog/recovery-rules", {}, None, 200),
+            (
+                "POST",
+                "/api/watchdog/recovery-rules",
+                {},
+                {"name": "capacity", "pattern": "model is at capacity"},
+                201,
+            ),
+            ("GET", "/api/watchdog/recovery-rules/rule-1", {}, None, 200),
+            (
+                "PUT",
+                "/api/watchdog/recovery-rules/rule-1",
+                {},
+                {"enabled": False},
+                200,
+            ),
+            ("DELETE", "/api/watchdog/recovery-rules/rule-1", {}, None, 204),
             ("GET", "/api/watchdog/channels/channel-1", {}, None, 200),
             ("PUT", "/api/watchdog/channels/channel-1", {}, {"name": "backup"}, 200),
             ("DELETE", "/api/watchdog/channels/channel-1", {}, None, 204),

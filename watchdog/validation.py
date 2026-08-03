@@ -51,3 +51,19 @@ def validate_required_text(value: object, field: str) -> str:
     if not text:
         raise ValidationError(f"{field} must not be empty")
     return text
+
+
+def validate_recovery_rule_name(value: object) -> str:
+    name = validate_required_text(value, "name")
+    if len(name) > 120:
+        raise ValidationError("name must be at most 120 characters")
+    return name
+
+
+def validate_recovery_rule_pattern(value: object) -> str:
+    pattern = str(value or "").strip()
+    if len(pattern) < 8:
+        raise ValidationError("error text must be at least 8 characters")
+    if len(pattern) > 500:
+        raise ValidationError("error text must be at most 500 characters")
+    return pattern

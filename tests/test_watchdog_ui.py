@@ -49,9 +49,9 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn('href="/watchdog" aria-current="page"', watchdog_html)
         self.assertIn('href="/?filter=running"', watchdog_html)
 
-    def test_watchdog_page_has_three_horizontal_tabs(self) -> None:
+    def test_watchdog_page_has_four_horizontal_tabs(self) -> None:
         html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
-        labels = ["监控会话", "执行记录", "添加监控渠道"]
+        labels = ["监控会话", "执行记录", "添加监控渠道", "错误类型"]
         positions = [html.index(label) for label in labels]
 
         self.assertEqual(positions, sorted(positions))

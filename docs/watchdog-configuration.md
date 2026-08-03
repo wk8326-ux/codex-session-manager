@@ -164,7 +164,16 @@ Desktop runner 是当前控制台的全局单例。添加监控会话不会额�
 
 ### 维护恢复规则
 
-首版不提供恢复规则写入 API 或管理界面。规则由 `WatchdogStore.initialize()` 以稳定 ID 写入 `recovery_rules`，重复启动不会重复创建。新增已确认异常时，应通过版本化代码变更添加精确的 `http_status`、`error_kind` 或安全正则规则，并同时补充 DecisionEngine 测试和运维说明；不要在控制台运行时直接编辑 SQLite，也不要用宽泛正则覆盖未知错误。未来的规则管理界面仍必须遵守相同的严格匹配和默认静默原则。
+“错误类型”页签列出全部恢复规则。HTTP 429、502、503、504、`timeout` 和 `connection_reset` 由系统以稳定 ID 写入，重复启动不会重复创建，且不能在页面或 API 中修改、停用或删除。
+
+对于没有明确状态码、但报错正文稳定的异常，可以点击“添加文本错误”创建自定义规则：
+
+1. 使用便于识别的名称，例如“模型容量已满”。
+2. 粘贴报错中稳定出现的文本，例如 `Selected model is at capacity. Please try a different model.`。
+3. 保存后按“文本包含”匹配，忽略大小写以及换行、连续空格等空白差异。
+4. 错误文本长度为 8 到 500 个字符。只保留能够唯一识别该异常的稳定片段，不要填写 `error`、`failed` 等宽泛词语。
+
+自定义规则可以编辑、启用、停用或删除。规则只读取最新失败 turn 的错误信息，不会匹配普通用户消息或助手正文。命中规则也不会单独触发发送：渠道健康、会话状态、全局续跑开关、事件去重和审批条件仍必须全部通过。
 
 ### 开启全局续跑
 
@@ -259,6 +268,8 @@ Invoke-RestMethod `
 | `GET`, `POST` | `/api/watchdog/channels` | 列出或添加渠道 |
 | `GET`, `PUT`, `DELETE` | `/api/watchdog/channels/{id}` | 读取、修改或删除渠道 |
 | `POST` | `/api/watchdog/channels/{id}/probe` | 立即测试渠道 |
+| `GET`, `POST` | `/api/watchdog/recovery-rules` | 列出规则或添加自定义文本错误 |
+| `GET`, `PUT`, `DELETE` | `/api/watchdog/recovery-rules/{id}` | 读取、修改或删除自定义规则；内置规则只读 |
 | `GET`, `POST` | `/api/watchdog/sessions` | 列出或添加监控会话 |
 | `GET`, `PUT`, `DELETE` | `/api/watchdog/sessions/{id}` | 读取、修改或删除会话 |
 | `POST` | `/api/watchdog/sessions/{id}/check` | 立即按完整规则检查会话 |

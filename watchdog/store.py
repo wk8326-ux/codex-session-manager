@@ -71,6 +71,11 @@ class WatchdogStore:
         "nextCheckAt": "next_check_at",
         "updatedAt": "updated_at",
     }
+    _RECOVERY_RULE_COLUMNS = {
+        "name": "name",
+        "pattern": "pattern",
+        "enabled": "enabled",
+    }
 
     def __init__(self, database_path: Path) -> None:
         self._path = Path(database_path)
@@ -143,7 +148,8 @@ class WatchdogStore:
                     match_type TEXT NOT NULL,
                     pattern TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
-                    description TEXT NOT NULL DEFAULT ''
+                    description TEXT NOT NULL DEFAULT '',
+                    is_builtin INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS recovery_incidents (
                     id TEXT PRIMARY KEY,
@@ -236,10 +242,16 @@ class WatchdogStore:
                 "resume_dispatch_mode",
                 "TEXT NOT NULL DEFAULT 'direct_app_server'",
             )
+            self._ensure_column(
+                connection,
+                "recovery_rules",
+                "is_builtin",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
             if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
-                connection.execute("INSERT INTO schema_version(version) VALUES (2)")
+                connection.execute("INSERT INTO schema_version(version) VALUES (3)")
             else:
-                connection.execute("UPDATE schema_version SET version = 2")
+                connection.execute("UPDATE schema_version SET version = 3")
             connection.execute(
                 """INSERT OR IGNORE INTO watchdog_settings(
                     id, default_interval_minutes, minimum_interval_minutes,
@@ -250,8 +262,9 @@ class WatchdogStore:
             for status in ("429", "502", "503", "504"):
                 connection.execute(
                     """INSERT OR IGNORE INTO recovery_rules(
-                        id, name, scope, match_type, pattern, enabled, description
-                    ) VALUES (?, ?, 'channel', 'http_status', ?, 1, ?)""",
+                        id, name, scope, match_type, pattern, enabled, description,
+                        is_builtin
+                    ) VALUES (?, ?, 'channel', 'http_status', ?, 1, ?, 1)""",
                     (f"http-{status}", f"HTTP {status}", status, "Built-in recoverable status"),
                 )
             for pattern, description in (
@@ -260,10 +273,18 @@ class WatchdogStore:
             ):
                 connection.execute(
                     """INSERT OR IGNORE INTO recovery_rules(
-                        id, name, scope, match_type, pattern, enabled, description
-                    ) VALUES (?, ?, 'session_turn', 'error_kind', ?, 1, ?)""",
+                        id, name, scope, match_type, pattern, enabled, description,
+                        is_builtin
+                    ) VALUES (?, ?, 'session_turn', 'error_kind', ?, 1, ?, 1)""",
                     (f"builtin-{pattern}", pattern, pattern, description),
                 )
+            connection.execute(
+                """UPDATE recovery_rules SET is_builtin = 1
+                   WHERE id IN (
+                       'http-429', 'http-502', 'http-503', 'http-504',
+                       'builtin-timeout', 'builtin-connection_reset'
+                   )"""
+            )
 
     @staticmethod
     def _ensure_column(
@@ -313,6 +334,7 @@ class WatchdogStore:
             "record_limit": "recordLimit", "scheduler_enabled": "schedulerEnabled",
             "resume_actions_enabled": "resumeActionsEnabled",
             "resume_dispatch_mode": "resumeDispatchMode",
+            "is_builtin": "builtIn",
             "incident_fingerprint": "incidentFingerprint",
             "incident_attempt": "incidentAttempt",
             "monitor_run_id": "monitorRunId",
@@ -330,6 +352,7 @@ class WatchdogStore:
             "schedulerEnabled",
             "resumeActionsEnabled",
             "unattendedApprovalsEnabled",
+            "builtIn",
         ):
             if key in values:
                 values[key] = bool(values[key])
@@ -353,6 +376,50 @@ class WatchdogStore:
                     "SELECT * FROM recovery_rules ORDER BY name, id"
                 )
             ]
+
+    def get_recovery_rule(self, rule_id: str) -> dict | None:
+        return self._one("SELECT * FROM recovery_rules WHERE id = ?", (rule_id,))
+
+    def create_recovery_rule(self, data: dict) -> dict:
+        rule_id = str(data.get("id") or uuid4())
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO recovery_rules(
+                       id, name, scope, match_type, pattern, enabled,
+                       description, is_builtin
+                   ) VALUES (?, ?, 'session_turn', 'message_contains', ?, ?, ?, 0)""",
+                (
+                    rule_id,
+                    data["name"],
+                    data["pattern"],
+                    self._bool(data.get("enabled", True)),
+                    data.get("description", "User-defined recoverable error text"),
+                ),
+            )
+        return self.get_recovery_rule(rule_id)  # type: ignore[return-value]
+
+    def update_recovery_rule(self, rule_id: str, changes: dict) -> dict | None:
+        current = self.get_recovery_rule(rule_id)
+        if current is None:
+            return None
+        if current["builtIn"]:
+            raise WatchdogStoreError("built-in recovery rules are read-only")
+        return self._update(
+            "recovery_rules",
+            rule_id,
+            changes,
+            self._RECOVERY_RULE_COLUMNS,
+            self.get_recovery_rule,
+        )
+
+    def delete_recovery_rule(self, rule_id: str) -> None:
+        current = self.get_recovery_rule(rule_id)
+        if current is None:
+            return
+        if current["builtIn"]:
+            raise WatchdogStoreError("built-in recovery rules cannot be deleted")
+        with self._connect() as connection:
+            connection.execute("DELETE FROM recovery_rules WHERE id = ?", (rule_id,))
 
     def update_settings(self, changes: dict) -> dict:
         columns = {

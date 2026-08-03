@@ -66,6 +66,17 @@ class WatchdogRouter:
                 },
                 created_method="POST",
             )
+        if path == "/api/watchdog/recovery-rules":
+            return self._method(
+                method,
+                {
+                    "GET": lambda: self._service.list_recovery_rules(),
+                    "POST": lambda: self._service.create_recovery_rule(
+                        self._body(payload)
+                    ),
+                },
+                created_method="POST",
+            )
         if path == "/api/watchdog/sessions":
             return self._method(
                 method,
@@ -120,6 +131,18 @@ class WatchdogRouter:
                     method,
                     {"POST": lambda: self._service.probe_channel(channel_id)},
                 )
+        if len(parts) == 4 and parts[:3] == ["api", "watchdog", "recovery-rules"]:
+            rule_id = parts[3]
+            return self._method(
+                method,
+                {
+                    "GET": lambda: self._service.get_recovery_rule(rule_id),
+                    "PUT": lambda: self._service.update_recovery_rule(
+                        rule_id, self._body(payload)
+                    ),
+                    "DELETE": lambda: self._delete_recovery_rule(rule_id),
+                },
+            )
         if len(parts) >= 4 and parts[:3] == ["api", "watchdog", "sessions"]:
             session_id = parts[3]
             if len(parts) == 4:
@@ -188,6 +211,9 @@ class WatchdogRouter:
 
     def _delete_session(self, session_id: str) -> None:
         self._service.delete_session(session_id)
+
+    def _delete_recovery_rule(self, rule_id: str) -> None:
+        self._service.delete_recovery_rule(rule_id)
 
     @staticmethod
     def _single_query(

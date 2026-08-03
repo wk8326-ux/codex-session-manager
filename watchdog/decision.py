@@ -51,6 +51,10 @@ def _matches(turn: TurnSnapshot, rule: dict) -> bool:
         return turn.http_status is not None and pattern == str(turn.http_status)
     if match_type == "error_kind":
         return bool(turn.error_kind) and pattern == turn.error_kind
+    if match_type == "message_contains":
+        needle = " ".join(pattern.split()).casefold()
+        message = " ".join(turn.error_message.split()).casefold()
+        return bool(needle) and needle in message
     if match_type == "regex":
         try:
             return re.search(pattern, turn.error_message, flags=re.IGNORECASE) is not None

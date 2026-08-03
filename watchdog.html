@@ -263,6 +263,7 @@
     .data-table { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; }
     .data-table.sessions-table { min-width: 1080px; }
     .data-table.runs-table { min-width: 1180px; }
+    .data-table.rules-table { min-width: 880px; }
     .data-table th { height: 40px; padding: 0 14px; color: var(--text-tertiary); background: var(--n-25); border-bottom: 1px solid var(--border-subtle); font-size: 11px; font-weight: 500; text-align: left; }
     .data-table td { height: 62px; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 12px; line-height: 1.45; vertical-align: middle; }
     .data-table tbody tr:last-child td { border-bottom: 0; }
@@ -281,6 +282,8 @@
     .decision-label[data-tone="danger"] { color: var(--danger); }
     .decision-label[data-tone="warning"] { color: var(--text-warning); }
     .row-detail { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .rule-pattern { display: -webkit-box; overflow: hidden; color: var(--text-secondary); font: 11px/1.55 var(--font-mono); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .rule-origin { color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
 
     .filters-row { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; padding: 14px 18px; background: var(--n-25); border-bottom: 1px solid var(--border-subtle); }
     .compact-field { display: grid; gap: 5px; min-width: 150px; }
@@ -515,6 +518,7 @@
           <button class="watchdog-tab" id="tab-sessions" type="button" role="tab" aria-selected="true" aria-controls="panel-sessions" tabindex="0">监控会话</button>
           <button class="watchdog-tab" id="tab-runs" type="button" role="tab" aria-selected="false" aria-controls="panel-runs" tabindex="-1">执行记录</button>
           <button class="watchdog-tab" id="tab-channels" type="button" role="tab" aria-selected="false" aria-controls="panel-channels" tabindex="-1">添加监控渠道</button>
+          <button class="watchdog-tab" id="tab-rules" type="button" role="tab" aria-selected="false" aria-controls="panel-rules" tabindex="-1">错误类型</button>
         </div>
 
         <section class="tab-panel" id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions" tabindex="0">
@@ -625,6 +629,29 @@
             </div>
           </section>
         </section>
+
+        <section class="tab-panel" id="panel-rules" role="tabpanel" aria-labelledby="tab-rules" tabindex="0" hidden>
+          <section class="board" aria-labelledby="rules-heading">
+            <div class="board-toolbar">
+              <div class="board-title"><h2 id="rules-heading">可恢复错误类型</h2><span id="rules-count">0 条规则</span></div>
+              <div class="toolbar-actions"><button class="button primary" id="add-rule" type="button">添加文本错误</button></div>
+            </div>
+            <div class="table-wrap" id="rules-table-wrap" hidden>
+              <table class="data-table rules-table">
+                <thead><tr><th style="width: 11%">状态</th><th style="width: 18%">错误类型</th><th style="width: 14%">匹配方式</th><th style="width: 31%">匹配内容</th><th style="width: 10%">来源</th><th style="width: 16%; text-align: right">操作</th></tr></thead>
+                <tbody id="rules-body"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="rules-empty" data-view-state="empty" hidden>
+              <div class="empty-state-inner">
+                <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.7 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg></span>
+                <h3>还没有错误类型</h3>
+                <p>添加需要进入续跑判断的错误文本。</p>
+                <button class="text-action" type="button" id="empty-add-rule">添加第一条文本错误</button>
+              </div>
+            </div>
+          </section>
+        </section>
       </div>
     </main>
   </div>
@@ -673,6 +700,20 @@
         </div>
         <p class="form-error" id="channel-form-error" role="alert"></p>
         <div class="dialog-actions"><button class="button" type="button" data-close-dialog="channel-dialog">取消</button><button class="button primary" id="save-channel" type="submit">保存渠道</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rule-dialog" aria-labelledby="rule-dialog-title">
+    <form id="rule-form" novalidate>
+      <div class="dialog-head"><h2 id="rule-dialog-title">添加文本错误</h2><button class="dialog-close" type="button" data-close-dialog="rule-dialog" aria-label="关闭错误类型编辑">×</button></div>
+      <div class="dialog-body">
+        <input id="rule-id" name="id" type="hidden">
+        <div class="field"><label for="rule-name">错误类型名称</label><input id="rule-name" name="name" maxlength="120" autocomplete="off" required></div>
+        <div class="field"><label for="rule-pattern">错误文本</label><p class="field-help" id="rule-pattern-help">粘贴报错中稳定出现的文字，匹配时忽略大小写和多余空白。</p><textarea class="mono" id="rule-pattern" name="pattern" minlength="8" maxlength="500" required aria-describedby="rule-pattern-help rule-pattern-error"></textarea><p class="field-error" id="rule-pattern-error"></p></div>
+        <div class="field"><div class="checkbox-field"><input id="rule-enabled" name="enabled" type="checkbox" checked><label for="rule-enabled">启用该错误类型</label></div></div>
+        <p class="form-error" id="rule-form-error" role="alert"></p>
+        <div class="dialog-actions"><button class="button" type="button" data-close-dialog="rule-dialog">取消</button><button class="button primary" id="save-rule" type="submit">保存错误类型</button></div>
       </div>
     </form>
   </dialog>
@@ -743,6 +784,7 @@
       settings: '/api/watchdog/settings',
       sessions: '/api/watchdog/sessions',
       channels: '/api/watchdog/channels',
+      rules: '/api/watchdog/recovery-rules',
       runs: '/api/watchdog/runs',
       localSessions: '/api/watchdog/local-codex-sessions',
     });
@@ -752,6 +794,7 @@
       projectSummary: { runningCount: 0, localCount: 0, counts: {} },
       sessions: [],
       channels: [],
+      rules: [],
       runs: [],
       localSessions: [],
       confirmAction: null,
@@ -1003,10 +1046,43 @@
       renderStatus();
     }
 
+    function ruleMatchLabel(rule) {
+      const labels = {
+        http_status: 'HTTP 状态码',
+        error_kind: '错误类型',
+        message_contains: '文本包含',
+        regex: '正则表达式',
+      };
+      return labels[rule.matchType] || rule.matchType || '未知';
+    }
+
+    function renderRules() {
+      const empty = document.getElementById('rules-empty');
+      const wrap = document.getElementById('rules-table-wrap');
+      document.getElementById('rules-count').textContent = `${appState.rules.length} 条规则`;
+      empty.hidden = appState.rules.length !== 0;
+      wrap.hidden = appState.rules.length === 0;
+      document.getElementById('rules-body').innerHTML = appState.rules.map(rule => {
+        const origin = rule.builtIn ? '系统内置' : '自定义';
+        const actions = rule.builtIn
+          ? '<span class="rule-origin">固定规则</span>'
+          : `<button class="button small ghost" type="button" data-rule-action="toggle" data-id="${escapeHtml(rule.id)}">${rule.enabled ? '停用' : '启用'}</button><button class="button small ghost" type="button" data-rule-action="edit" data-id="${escapeHtml(rule.id)}">编辑</button><button class="button small danger" type="button" data-rule-action="delete" data-id="${escapeHtml(rule.id)}">删除</button>`;
+        return `<tr data-rule-id="${escapeHtml(rule.id)}">
+          <td><span class="status-label" data-tone="${rule.enabled ? 'success' : 'neutral'}"><span class="status-dot" aria-hidden="true"></span>${rule.enabled ? '已启用' : '已停用'}</span></td>
+          <td><strong title="${escapeHtml(rule.name)}">${escapeHtml(rule.name)}</strong><code>${escapeHtml(rule.id)}</code></td>
+          <td><strong>${escapeHtml(ruleMatchLabel(rule))}</strong></td>
+          <td><span class="rule-pattern" title="${escapeHtml(rule.pattern)}">${escapeHtml(rule.pattern)}</span></td>
+          <td><span class="rule-origin">${origin}</span></td>
+          <td><div class="row-actions">${actions}</div></td>
+        </tr>`;
+      }).join('');
+    }
+
     function renderAll() {
       renderChannels();
       renderSessions();
       renderRuns();
+      renderRules();
       document.getElementById('interval-help').textContent = `留空使用全局默认值 ${appState.settings.defaultIntervalMinutes} 分钟；最短 ${appState.settings.minimumIntervalMinutes} 分钟。`;
     }
 
@@ -1053,6 +1129,19 @@
       document.getElementById('channel-enabled').checked = channel?.enabled ?? true;
       document.getElementById('channel-dialog').showModal();
       document.getElementById('channel-name').focus();
+    }
+
+    function openRuleDialog(rule = null) {
+      const form = document.getElementById('rule-form');
+      form.reset();
+      clearFormErrors(form);
+      document.getElementById('rule-dialog-title').textContent = rule ? '编辑文本错误' : '添加文本错误';
+      document.getElementById('rule-id').value = rule?.id || '';
+      document.getElementById('rule-name').value = rule?.name || '';
+      document.getElementById('rule-pattern').value = rule?.pattern || '';
+      document.getElementById('rule-enabled').checked = rule?.enabled ?? true;
+      document.getElementById('rule-dialog').showModal();
+      document.getElementById('rule-name').focus();
     }
 
     function clearFormErrors(form) {
@@ -1120,6 +1209,11 @@
       renderChannels();
     }
 
+    async function refreshRules() {
+      appState.rules = await apiRequest(WATCHDOG_ENDPOINTS.rules);
+      renderRules();
+    }
+
     function runFilterQuery() {
       const params = new URLSearchParams({ limit: '100' });
       const form = document.getElementById('runs-filter-form');
@@ -1146,12 +1240,13 @@
 
     async function loadInitial() {
       try {
-        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs, appState.projectSummary] = await Promise.all([
+        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs, appState.rules, appState.projectSummary] = await Promise.all([
           apiRequest(WATCHDOG_ENDPOINTS.status),
           apiRequest(WATCHDOG_ENDPOINTS.settings),
           apiRequest(WATCHDOG_ENDPOINTS.channels),
           apiRequest(WATCHDOG_ENDPOINTS.sessions),
           apiRequest(`${WATCHDOG_ENDPOINTS.runs}?limit=100`),
+          apiRequest(WATCHDOG_ENDPOINTS.rules),
           apiRequest('/api/shell/project-summary'),
         ]);
         renderProjectSidebar();
@@ -1207,6 +1302,8 @@
     document.getElementById('add-session').addEventListener('click', () => openSessionDialog());
     document.getElementById('add-channel').addEventListener('click', () => openChannelDialog());
     document.getElementById('empty-add-channel').addEventListener('click', () => openChannelDialog());
+    document.getElementById('add-rule').addEventListener('click', () => openRuleDialog());
+    document.getElementById('empty-add-rule').addEventListener('click', () => openRuleDialog());
 
     async function loadLocalSessions(event) {
       const button = event.currentTarget;
@@ -1288,6 +1385,34 @@
       }
     });
 
+    document.getElementById('rule-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      clearFormErrors(form);
+      if (!form.checkValidity()) {
+        form.querySelector(':invalid')?.focus();
+        return;
+      }
+      const id = document.getElementById('rule-id').value;
+      const payload = {
+        name: document.getElementById('rule-name').value.trim(),
+        pattern: document.getElementById('rule-pattern').value.trim(),
+        enabled: document.getElementById('rule-enabled').checked,
+      };
+      const button = document.getElementById('save-rule');
+      withPendingAction(button, true, '正在保存…');
+      try {
+        await apiRequest(id ? `${WATCHDOG_ENDPOINTS.rules}/${encodeURIComponent(id)}` : WATCHDOG_ENDPOINTS.rules, { method: id ? 'PUT' : 'POST', body: payload });
+        closeDialog('rule-dialog');
+        await refreshRules();
+        showToast(id ? '错误类型已更新。' : '错误类型已添加。');
+      } catch (error) {
+        document.getElementById('rule-form-error').textContent = error.message;
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
     document.getElementById('sessions-body').addEventListener('click', async event => {
       const button = event.target.closest('button[data-session-action]');
       if (!button) return;
@@ -1343,6 +1468,31 @@
           await refreshChannels();
           showToast(channel.enabled ? '监控渠道已停用。' : '监控渠道已启用。');
         }
+      } catch (error) {
+        showToast(error.message, 'error');
+      } finally {
+        withPendingAction(button, false);
+      }
+    });
+
+    document.getElementById('rules-body').addEventListener('click', async event => {
+      const button = event.target.closest('button[data-rule-action]');
+      if (!button) return;
+      const rule = appState.rules.find(item => item.id === button.dataset.id);
+      if (!rule || rule.builtIn) return;
+      if (button.dataset.ruleAction === 'edit') return openRuleDialog(rule);
+      if (button.dataset.ruleAction === 'delete') {
+        return askForConfirmation({ title: '删除错误类型', copy: `删除“${rule.name}”后，后续相同错误将不再进入续跑判断。`, actionLabel: '删除错误类型', action: async () => {
+          await apiRequest(`${WATCHDOG_ENDPOINTS.rules}/${encodeURIComponent(rule.id)}`, { method: 'DELETE' });
+          await refreshRules();
+          showToast('错误类型已删除。');
+        }});
+      }
+      withPendingAction(button, true, '更新中…');
+      try {
+        await apiRequest(`${WATCHDOG_ENDPOINTS.rules}/${encodeURIComponent(rule.id)}`, { method: 'PUT', body: { enabled: !rule.enabled } });
+        await refreshRules();
+        showToast(rule.enabled ? '错误类型已停用。' : '错误类型已启用。');
       } catch (error) {
         showToast(error.message, 'error');
       } finally {

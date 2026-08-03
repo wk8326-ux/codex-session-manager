@@ -4,6 +4,8 @@ from watchdog.validation import (
     ValidationError,
     validate_http_url,
     validate_interval,
+    validate_recovery_rule_name,
+    validate_recovery_rule_pattern,
     validate_resume_prompt,
     validate_thread_id,
 )
@@ -28,3 +30,13 @@ class ValidationTests(unittest.TestCase):
         for invalid in ("", " " * 3, "x" * 4001):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 validate_resume_prompt(invalid)
+
+    def test_recovery_rule_text_has_safe_boundaries(self) -> None:
+        self.assertEqual(validate_recovery_rule_name(" Model capacity "), "Model capacity")
+        self.assertEqual(
+            validate_recovery_rule_pattern(" Selected model is at capacity. "),
+            "Selected model is at capacity.",
+        )
+        for invalid in ("", "short", "x" * 501):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                validate_recovery_rule_pattern(invalid)

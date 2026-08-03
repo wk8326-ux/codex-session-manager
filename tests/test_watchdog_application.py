@@ -139,6 +139,47 @@ class WatchdogApplicationApiTests(unittest.TestCase):
             )
             self.assertEqual(invalid_mode.status, 400)
 
+            created_rule = api.dispatch(
+                "POST",
+                "/api/watchdog/recovery-rules",
+                {},
+                {
+                    "name": "Model capacity",
+                    "pattern": "Selected model is at capacity",
+                },
+            )
+            self.assertEqual(created_rule.status, 201)
+            self.assertEqual(created_rule.body["matchType"], "message_contains")
+            self.assertFalse(created_rule.body["builtIn"])
+
+            rule_id = created_rule.body["id"]
+            updated_rule = api.dispatch(
+                "PUT",
+                f"/api/watchdog/recovery-rules/{rule_id}",
+                {},
+                {"enabled": False},
+            )
+            self.assertEqual(updated_rule.status, 200)
+            self.assertFalse(updated_rule.body["enabled"])
+            self.assertEqual(
+                api.dispatch(
+                    "DELETE",
+                    f"/api/watchdog/recovery-rules/{rule_id}",
+                    {},
+                    None,
+                ).status,
+                204,
+            )
+            self.assertEqual(
+                api.dispatch(
+                    "DELETE",
+                    "/api/watchdog/recovery-rules/http-503",
+                    {},
+                    None,
+                ).status,
+                409,
+            )
+
     def test_dashboard_resources_have_stable_ui_response_shapes(self) -> None:
         with TemporaryDirectory() as directory:
             store = WatchdogStore(Path(directory) / "watchdog.db")

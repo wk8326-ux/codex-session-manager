@@ -30,6 +30,7 @@ class WatchdogClientContractTests(unittest.TestCase):
             "/api/watchdog/settings",
             "/api/watchdog/sessions",
             "/api/watchdog/channels",
+            "/api/watchdog/recovery-rules",
             "/api/watchdog/runs",
             "/api/watchdog/local-codex-sessions",
         ):
@@ -71,6 +72,26 @@ class WatchdogClientContractTests(unittest.TestCase):
         self.assertRegex(
             html,
             r'<button[^>]+(?:id|data-action)="add-channel"',
+        )
+
+    def test_error_type_directory_exposes_text_rule_crud(self) -> None:
+        html = self.read_html()
+
+        for marker in (
+            'id="tab-rules"',
+            'id="rule-form"',
+            'name="pattern"',
+            'data-rule-action="edit"',
+            'data-rule-action="delete"',
+            'data-rule-action="toggle"',
+            "/api/watchdog/recovery-rules",
+            "系统内置",
+            "文本包含",
+        ):
+            self.assertIn(marker, html)
+        self.assertRegex(
+            html,
+            r'<button[^>]+(?:id|data-action)="add-rule"',
         )
 
     def test_global_resume_setting_requires_an_explicit_confirmation_surface(self) -> None:
@@ -154,6 +175,7 @@ class WatchdogClientContractTests(unittest.TestCase):
         self.assertRegex(html, r"\.disabled\s*=\s*true")
         self.assertIn('id="session-form-error" role="alert"', html)
         self.assertIn('id="channel-form-error" role="alert"', html)
+        self.assertIn('id="rule-form-error" role="alert"', html)
         self.assertIn("aria-describedby=", html)
         self.assertRegex(html, r"setAttribute\(\s*['\"]aria-busy['\"]")
 

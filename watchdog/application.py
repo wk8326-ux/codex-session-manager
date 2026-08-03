@@ -12,6 +12,8 @@ from .validation import (
     ValidationError,
     validate_http_url,
     validate_interval,
+    validate_recovery_rule_name,
+    validate_recovery_rule_pattern,
     validate_required_text,
     validate_resume_prompt,
     validate_thread_id,
@@ -116,6 +118,46 @@ class WatchdogApplication:
 
     def get_settings(self) -> dict:
         return self._store.get_settings()
+
+    def list_recovery_rules(self) -> list[dict]:
+        return self._store.list_recovery_rules()
+
+    def get_recovery_rule(self, rule_id: str) -> dict:
+        rule = self._store.get_recovery_rule(rule_id)
+        if rule is None:
+            raise ResourceNotFoundError("错误类型不存在。")
+        return rule
+
+    def create_recovery_rule(self, payload: dict) -> dict:
+        self._reject_unknown(payload, {"name", "pattern", "enabled"})
+        return self._store.create_recovery_rule(
+            {
+                "name": validate_recovery_rule_name(payload.get("name")),
+                "pattern": validate_recovery_rule_pattern(payload.get("pattern")),
+                "enabled": self._optional_bool(payload, "enabled", True),
+            }
+        )
+
+    def update_recovery_rule(self, rule_id: str, payload: dict) -> dict:
+        current = self._store.get_recovery_rule(rule_id)
+        if current is None:
+            raise ResourceNotFoundError("错误类型不存在。")
+        self._reject_unknown(payload, {"name", "pattern", "enabled"})
+        changes: dict = {}
+        if "name" in payload:
+            changes["name"] = validate_recovery_rule_name(payload["name"])
+        if "pattern" in payload:
+            changes["pattern"] = validate_recovery_rule_pattern(payload["pattern"])
+        if "enabled" in payload:
+            changes["enabled"] = _strict_bool(payload["enabled"], "enabled")
+        updated = self._store.update_recovery_rule(rule_id, changes)
+        assert updated is not None
+        return updated
+
+    def delete_recovery_rule(self, rule_id: str) -> None:
+        if self._store.get_recovery_rule(rule_id) is None:
+            raise ResourceNotFoundError("错误类型不存在。")
+        self._store.delete_recovery_rule(rule_id)
 
     def update_settings(self, payload: dict) -> dict:
         allowed = {

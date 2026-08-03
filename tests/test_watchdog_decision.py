@@ -24,6 +24,31 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(result.code, "resume_candidate")
         self.assertEqual(result.error_signature, "httpConnectionFailed:http:503")
 
+    def test_configured_error_text_is_a_resume_candidate(self) -> None:
+        rules = [
+            {
+                "matchType": "message_contains",
+                "pattern": "Selected model is at capacity",
+                "enabled": True,
+            }
+        ]
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot(
+                    "failed",
+                    message=(
+                        "SELECTED MODEL IS AT CAPACITY.\n"
+                        "Please try a different model."
+                    ),
+                ),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "resume_candidate")
+        self.assertTrue(result.error_signature.startswith("message:"))
+
     def test_interrupted_without_error_is_explicit_and_never_resumed(self) -> None:
         result = decide(DecisionInput("healthy", snapshot("interrupted"), []))
         self.assertEqual(result.code, "silent_interrupted_without_error")
