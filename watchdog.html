@@ -130,11 +130,27 @@
     .brand-copy strong { display: block; font: 600 15px/1.25 var(--font-display); }
     .brand-copy span { display: block; margin-top: 3px; color: var(--text-secondary); font: 11px/1.25 var(--font-mono); }
 
-    .workspace-nav { display: grid; gap: 4px; margin-top: 54px; }
+    .sidebar-summary { margin-top: 54px; }
+    .summary-label { margin: 0; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .summary-number { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-family: var(--font-display); font-variant-numeric: tabular-nums; }
+    .summary-number strong { font-size: 46px; line-height: 1; font-weight: 600; }
+    .summary-number span { color: var(--text-secondary); font-size: 14px; }
+    .summary-track { height: 3px; margin-top: 18px; overflow: hidden; background: var(--n-200); }
+    .summary-track span { display: block; width: 0; height: 100%; background: var(--accent-600); transition: width 250ms ease-out; }
+
+    .workspace-nav { display: grid; gap: 4px; margin-top: 38px; }
     .workspace-nav h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
     .nav-link { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
     .nav-link svg { width: 16px; height: 16px; }
     .nav-link[aria-current="page"] { color: var(--accent-700); background: var(--accent-50); border-color: rgba(45, 113, 91, 0.11); }
+    .project-nav-group { display: grid; gap: 4px; }
+    .project-filter-list { display: grid; gap: 2px; margin: 2px 0 4px 18px; padding: 6px 0 6px 12px; border-left: 1px solid var(--border-subtle); }
+    .project-filter-list h3 { margin: 0 0 3px; color: var(--text-tertiary); font-size: 11px; font-weight: 600; }
+    .filter-link { min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 12px; text-decoration: none; }
+    .filter-link span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+    .tool-nav { display: grid; gap: 4px; margin-top: 22px; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
+    .tool-nav h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
 
     .sidebar-note { margin-top: 30px; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
     .sidebar-note-label { margin: 0; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
@@ -235,7 +251,7 @@
     .button.small { min-height: 34px; padding: 0 10px; font-size: 12px; }
     .button[disabled] { cursor: wait; opacity: 0.58; transform: none; }
     .button:active { transform: scale(0.98); }
-    .nav-link:focus-visible, .watchdog-tab:focus-visible, .button:focus-visible, .theme-toggle:focus-visible, .text-action:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+    .nav-link:focus-visible, .filter-link:focus-visible, .watchdog-tab:focus-visible, .button:focus-visible, .theme-toggle:focus-visible, .text-action:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
 
     .toolbar-actions, .row-actions, .filter-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .resume-control { min-width: 132px; justify-content: flex-start; }
@@ -305,7 +321,7 @@
     @keyframes skeleton-pulse { from { opacity: 0.48; } to { opacity: 0.92; } }
 
     @media (hover: hover) and (pointer: fine) {
-      .nav-link:hover { color: var(--text-primary); background: var(--surface-hover); }
+      .nav-link:hover, .filter-link:hover { color: var(--text-primary); background: var(--surface-hover); }
       .watchdog-tab:hover { color: var(--text-primary); }
       .button:hover { border-color: var(--n-300); box-shadow: 0 4px 10px rgba(48, 64, 57, 0.08), 0 1px 2px rgba(48, 64, 57, 0.07); }
       .button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
@@ -325,9 +341,18 @@
     @media (max-width: 820px) {
       .app-shell { display: block; }
       .sidebar { position: static; width: 100%; height: auto; display: grid; grid-template-columns: 1fr auto; gap: 20px; padding: 20px; border-right: 0; border-bottom: 1px solid var(--border-subtle); overflow: visible; }
-      .workspace-nav { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 0; overflow-x: auto; }
-      .workspace-nav h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-      .nav-link { min-height: 44px; flex: none; background: var(--surface-hover); border-color: var(--border-subtle); }
+      .sidebar-summary { margin-top: 0; text-align: right; }
+      .summary-number { justify-content: flex-end; margin-top: 4px; }
+      .summary-number strong { font-size: 30px; }
+      .summary-track { display: none; }
+      .workspace-nav { grid-column: 1 / -1; display: grid; gap: 6px; min-width: 0; margin-top: 0; }
+      .workspace-nav h2, .project-filter-list h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      .project-nav-group { display: grid; gap: 6px; min-width: 0; }
+      .project-filter-list { display: flex; gap: 6px; min-width: 0; margin: 0; padding: 0 0 3px; overflow-x: auto; border: 0; }
+      .filter-link { min-height: 44px; flex: none; padding: 0 11px; background: var(--surface-hover); border-color: var(--border-subtle); }
+      .nav-link { min-height: 44px; background: var(--surface-hover); border-color: var(--border-subtle); }
+      .tool-nav { grid-column: 1 / -1; margin-top: 0; padding-top: 14px; }
+      .tool-nav h2 { margin-bottom: 4px; }
       .sidebar-note { margin: 0; padding: 0; border: 0; text-align: right; }
       .sidebar-note-value { justify-content: flex-end; }
       .sidebar-note-copy, .host-status { display: none; }
@@ -351,6 +376,7 @@
     @media (max-width: 520px) {
       .sidebar { grid-template-columns: 1fr; padding: 17px 16px 14px; }
       .brand-mark { width: 34px; height: 34px; }
+      .sidebar-summary { display: none; }
       .sidebar-note { display: none; }
       .workspace-nav { padding-top: 2px; }
       .workspace { padding: 24px 12px 44px; }
@@ -407,23 +433,37 @@
         <span class="brand-copy"><strong>本地项目控制台</strong><span>LOCALHOST / 8765</span></span>
       </a>
 
+      <section class="sidebar-summary" aria-labelledby="summary-heading">
+        <p class="summary-label" id="summary-heading">本地服务运行中</p>
+        <div class="summary-number"><strong id="running-count">0</strong><span>/ <span id="local-count">0</span> 个</span></div>
+        <div class="summary-track" aria-hidden="true"><span id="running-track"></span></div>
+      </section>
+
       <nav class="workspace-nav" aria-label="工作区导航">
         <h2>工作区</h2>
-        <a class="nav-link" href="/">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/></svg>
-          <span>项目控制台</span>
-        </a>
+        <div class="project-nav-group">
+          <a class="nav-link" href="/">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/></svg>
+            <span>项目控制台</span>
+          </a>
+          <div class="project-filter-list" id="project-filter-list" aria-label="项目查看范围">
+            <h3>查看范围</h3>
+            <a class="filter-link" href="/?filter=all"><span>全部项目</span><span data-project-count="all">0</span></a>
+            <a class="filter-link" href="/?filter=running"><span>运行中</span><span data-project-count="running">0</span></a>
+            <a class="filter-link" href="/?filter=stopped"><span>已关闭</span><span data-project-count="stopped">0</span></a>
+            <a class="filter-link" href="/?filter=needs-config"><span>待配置</span><span data-project-count="needs-config">0</span></a>
+            <a class="filter-link" href="/?filter=external"><span>网页入口</span><span data-project-count="external">0</span></a>
+          </div>
+        </div>
+      </nav>
+
+      <nav class="tool-nav" aria-label="自动化工具">
+        <h2>自动化工具</h2>
         <a class="nav-link" href="/watchdog" aria-current="page">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           <span>会话监控</span>
         </a>
       </nav>
-
-      <section class="sidebar-note" aria-labelledby="resume-state-label">
-        <p class="sidebar-note-label" id="resume-state-label">自动续跑</p>
-        <p class="sidebar-note-value"><span class="status-dot warning" aria-hidden="true"></span><span>安全关闭</span></p>
-        <p class="sidebar-note-copy">全局续跑与会话级无人值守审批分别控制，未授权会话保持手动模式。</p>
-      </section>
 
       <div class="theme-controls">
         <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换至深色模式" title="切换至深色模式">
@@ -709,6 +749,7 @@
     const appState = {
       status: { schedulerRunning: false, schedulerEnabled: true, codexConnected: false, resumeActionsEnabled: false, resumeDispatchMode: 'direct_app_server', desktopBridge: {}, nextCheckAt: null },
       settings: { defaultIntervalMinutes: 15, minimumIntervalMinutes: 5, resumeDispatchMode: 'direct_app_server' },
+      projectSummary: { runningCount: 0, localCount: 0, counts: {} },
       sessions: [],
       channels: [],
       runs: [],
@@ -834,6 +875,19 @@
       return appState.channels.find(item => item.id === channelId)?.name || '已删除渠道';
     }
 
+    function renderProjectSidebar() {
+      const summary = appState.projectSummary || {};
+      const running = Number(summary.runningCount || 0);
+      const local = Number(summary.localCount || 0);
+      document.getElementById('running-count').textContent = running;
+      document.getElementById('local-count').textContent = local;
+      document.getElementById('running-track').style.width = `${local ? Math.round(running / local * 100) : 0}%`;
+      Object.entries(summary.counts || {}).forEach(([key, value]) => {
+        const element = document.querySelector(`[data-project-count="${key}"]`);
+        if (element) element.textContent = value;
+      });
+    }
+
     function renderStatus() {
       const enabled = appState.sessions.filter(item => item.enabled).length;
       const running = appState.sessions.filter(item => item.enabled && item.state === 'running').length;
@@ -862,9 +916,6 @@
         ? `全局桥接 · ${Number(bridge.pending || 0)} 待领取 · ${Number(bridge.started || 0)} 运行中`
         : '兼容直连模式';
 
-      const sidebarValue = document.querySelector('.sidebar-note-value');
-      sidebarValue.querySelector('.status-dot').className = `status-dot ${resumeEnabled ? 'running' : 'warning'}`;
-      sidebarValue.querySelector('span:last-child').textContent = resumeEnabled ? '已开启' : '安全关闭';
       const channelHealthy = appState.channels.some(item => item.enabled && item.lastProbeCategory === 'healthy');
       const sessionKnown = appState.sessions.some(item => item.enabled && ['running', 'idle', 'attention'].includes(item.state));
       const steps = [...document.querySelectorAll('.rail-step')];
@@ -1088,15 +1139,22 @@
       renderRuns();
     }
 
+    async function refreshProjectSidebar() {
+      appState.projectSummary = await apiRequest('/api/shell/project-summary');
+      renderProjectSidebar();
+    }
+
     async function loadInitial() {
       try {
-        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs] = await Promise.all([
+        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs, appState.projectSummary] = await Promise.all([
           apiRequest(WATCHDOG_ENDPOINTS.status),
           apiRequest(WATCHDOG_ENDPOINTS.settings),
           apiRequest(WATCHDOG_ENDPOINTS.channels),
           apiRequest(WATCHDOG_ENDPOINTS.sessions),
           apiRequest(`${WATCHDOG_ENDPOINTS.runs}?limit=100`),
+          apiRequest('/api/shell/project-summary'),
         ]);
+        renderProjectSidebar();
         renderAll();
       } catch (error) {
         document.getElementById('sessions-loading').hidden = true;
@@ -1108,7 +1166,7 @@
 
     async function pollWatchdogOverview() {
       if (document.hidden) return;
-      try { await refreshSessionsAndStatus(); }
+      try { await Promise.all([refreshSessionsAndStatus(), refreshProjectSidebar()]); }
       catch { /* Background polling stays silent; the next successful poll repairs state. */ }
     }
 

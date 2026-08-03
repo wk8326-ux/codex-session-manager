@@ -321,6 +321,28 @@ def states_for(projects: list[dict]) -> list[dict]:
     ]
 
 
+def project_summary(projects: list[dict]) -> dict:
+    local = [project for project in projects if project.get("mode") != "external"]
+    counts = {
+        "all": len(projects),
+        "running": 0,
+        "stopped": 0,
+        "needs-config": 0,
+        "external": 0,
+    }
+    for project in projects:
+        if project.get("mode") == "external":
+            counts["external"] += 1
+        state = project.get("state")
+        if state in counts and state != "external":
+            counts[state] += 1
+    return {
+        "runningCount": sum(project.get("state") == "running" for project in local),
+        "localCount": len(local),
+        "counts": counts,
+    }
+
+
 def find_project(project_id: str) -> dict | None:
     return next((project for project in PROJECTS if project["id"] == project_id), None)
 
@@ -517,6 +539,14 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 projects = [dict(project) for project in PROJECTS]
             self.respond_json(HTTPStatus.OK, states_for(projects))
+            return
+        if parsed.path == "/api/shell/project-summary":
+            with LOCK:
+                projects = [dict(project) for project in PROJECTS]
+            self.respond_json(
+                HTTPStatus.OK,
+                project_summary(states_for(projects)),
+            )
             return
         if parsed.path.startswith("/api/projects/") and parsed.path.endswith("/log"):
             project_id = parsed.path.split("/")[3]

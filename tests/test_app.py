@@ -12,6 +12,7 @@ from app import (
     cached_website_health,
     load_projects,
     probe_website,
+    project_summary,
     project_url_is_valid,
     reorder_projects,
     state_for,
@@ -62,6 +63,25 @@ class ProjectReorderTests(unittest.TestCase):
             with self.subTest(ordered_ids=ordered_ids):
                 self.assertFalse(reorder_projects(self.projects, ordered_ids))
                 self.assertEqual([project["id"] for project in self.projects], ["a", "b", "c"])
+
+
+class ProjectSummaryTests(unittest.TestCase):
+    def test_summary_exposes_counts_without_project_configuration(self) -> None:
+        summary = project_summary(
+            [
+                {"mode": "local", "state": "running", "path": "private-a"},
+                {"mode": "local", "state": "stopped", "path": "private-b"},
+                {"mode": "external", "state": "online", "url": "https://private"},
+            ]
+        )
+
+        self.assertEqual(summary["runningCount"], 1)
+        self.assertEqual(summary["localCount"], 2)
+        self.assertEqual(
+            summary["counts"],
+            {"all": 3, "running": 1, "stopped": 1, "needs-config": 0, "external": 1},
+        )
+        self.assertNotIn("projects", summary)
 
 
 class WebsiteProbeTests(unittest.TestCase):

@@ -146,15 +146,23 @@
     .summary-track { height: 3px; margin-top: 18px; overflow: hidden; background: var(--n-200); }
     .summary-track span { display: block; width: 0; height: 100%; background: var(--accent-600); transition: width 250ms ease-out; }
 
-    .filters { display: grid; gap: 4px; margin-top: 38px; }
-    .filters h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
-    .filter-button { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; text-align: left; }
+    .workspace-nav { display: grid; gap: 4px; margin-top: 54px; }
+    .workspace-nav h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+    .nav-link, .nav-section-trigger { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-align: left; text-decoration: none; }
+    .nav-section-trigger { width: 100%; }
+    .nav-link svg, .nav-section-trigger svg { width: 16px; height: 16px; }
+    .nav-link[aria-current="page"], .nav-section-trigger[aria-current="page"] { color: var(--accent-700); background: var(--accent-50); border-color: rgba(45, 113, 91, 0.11); }
+    .nav-section-trigger .nav-chevron { width: 14px; height: 14px; margin-left: auto; transition: transform 140ms ease-out; }
+    .nav-section-trigger[aria-expanded="false"] .nav-chevron { transform: rotate(-90deg); }
+    .project-filter-list { display: grid; gap: 2px; margin: 2px 0 4px 18px; padding: 6px 0 6px 12px; border-left: 1px solid var(--border-subtle); }
+    .project-filter-list h3 { margin: 0 0 3px; color: var(--text-tertiary); font-size: 11px; font-weight: 600; }
+    .filter-button { min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-button); font-size: 12px; text-align: left; }
     .filter-button span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .filter-button[aria-pressed="true"] { color: var(--accent-700); background: var(--accent-50); border-color: rgba(45, 113, 91, 0.11); font-weight: 600; }
 
-    .tool-nav { display: grid; gap: 4px; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
+    .tool-nav { display: grid; gap: 4px; margin-top: 22px; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
     .tool-nav h2 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
-    .tool-link { min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
+    .tool-link { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
     .tool-link svg { width: 16px; height: 16px; }
 
     .theme-controls { margin-top: auto; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
@@ -187,8 +195,7 @@
     .button.ghost { background: transparent; border-color: transparent; box-shadow: none; }
     .button.icon-only { width: 40px; padding: 0; }
     .button:active { transform: scale(0.98); }
-    .button:focus-visible, .filter-button:focus-visible, .theme-toggle:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
-    .tool-link:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
+    .button:focus-visible, .filter-button:focus-visible, .theme-toggle:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span, .nav-link:focus-visible, .nav-section-trigger:focus-visible, .tool-link:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
 
     .board { margin-top: 38px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
     .board-toolbar { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-subtle); }
@@ -304,7 +311,7 @@
       .button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
       .button.danger:hover { background: var(--surface-danger-strong); border-color: rgba(180, 69, 56, 0.4); }
       .button.ghost:hover { background: var(--n-50); border-color: transparent; box-shadow: none; }
-      .filter-button:hover { color: var(--text-primary); background: var(--surface-hover); }
+      .filter-button:hover, .nav-link:hover, .nav-section-trigger:hover { color: var(--text-primary); background: var(--surface-hover); }
       .tool-link:hover { color: var(--accent-700); background: var(--surface-hover); }
       .theme-toggle:hover { color: var(--text-primary); background: var(--surface-hover); }
       .drag-handle:hover { color: var(--n-600); background: var(--n-50); }
@@ -331,8 +338,13 @@
       .summary-number { justify-content: flex-end; margin-top: 4px; }
       .summary-number strong { font-size: 30px; }
       .summary-track { display: none; }
-      .filters { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 0; overflow-x: auto; padding-bottom: 3px; }
-      .filters h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      .workspace-nav { grid-column: 1 / -1; display: grid; gap: 6px; min-width: 0; margin-top: 0; }
+      .workspace-nav h2, .project-filter-list h3 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      .project-nav-group { display: grid; gap: 6px; min-width: 0; }
+      .project-filter-list { display: flex; gap: 6px; min-width: 0; margin: 0; padding: 0 0 3px; overflow-x: auto; border: 0; }
+      .project-filter-list[hidden] { display: none; }
+      .nav-link, .nav-section-trigger { min-height: 44px; background: var(--surface-hover); border-color: var(--border-subtle); }
+      .project-filter-list .filter-button { min-height: 44px; flex: none; padding: 0 11px; background: var(--surface-hover); border-color: var(--border-subtle); }
       .filter-button { flex: none; min-height: 38px; gap: 9px; padding: 0 11px; background: var(--surface-hover); border-color: var(--border-subtle); }
       .tool-nav { grid-column: 1 / -1; margin-top: 0; padding-top: 14px; }
       .tool-nav h2 { margin-bottom: 4px; }
@@ -404,15 +416,22 @@
         <div class="summary-track" aria-hidden="true"><span id="running-track"></span></div>
       </section>
 
-      <nav class="filters" aria-label="项目筛选">
-        <h2>查看范围</h2>
-        <button class="filter-button" type="button" data-filter="all" aria-pressed="true"><span>全部项目</span><span data-count="all">0</span></button>
-        <button class="filter-button" type="button" data-filter="running" aria-pressed="false"><span>运行中</span><span data-count="running">0</span></button>
-        <button class="filter-button" type="button" data-filter="stopped" aria-pressed="false"><span>已关闭</span><span data-count="stopped">0</span></button>
-        <button class="filter-button" type="button" data-filter="needs-config" aria-pressed="false"><span>待配置</span><span data-count="needs-config">0</span></button>
-        <button class="filter-button" type="button" data-filter="external" aria-pressed="false"><span>网页入口</span><span data-count="external">0</span></button>
+      <nav class="workspace-nav" aria-label="工作区导航">
+        <h2>工作区</h2>
+        <div class="project-nav-group">
+          <button class="nav-section-trigger" type="button" aria-current="page" aria-expanded="true" aria-controls="project-filter-list">
+            <span data-icon="layout"></span><span>项目控制台</span><span class="nav-chevron" data-icon="chevron-down"></span>
+          </button>
+          <div class="project-filter-list" id="project-filter-list" aria-label="项目查看范围">
+            <h3>查看范围</h3>
+            <button class="filter-button" type="button" data-filter="all" aria-pressed="true"><span>全部项目</span><span data-count="all">0</span></button>
+            <button class="filter-button" type="button" data-filter="running" aria-pressed="false"><span>运行中</span><span data-count="running">0</span></button>
+            <button class="filter-button" type="button" data-filter="stopped" aria-pressed="false"><span>已关闭</span><span data-count="stopped">0</span></button>
+            <button class="filter-button" type="button" data-filter="needs-config" aria-pressed="false"><span>待配置</span><span data-count="needs-config">0</span></button>
+            <button class="filter-button" type="button" data-filter="external" aria-pressed="false"><span>网页入口</span><span data-count="external">0</span></button>
+          </div>
+        </div>
       </nav>
-
 
       <nav class="tool-nav" aria-label="自动化工具">
         <h2>自动化工具</h2>
@@ -539,6 +558,8 @@
       file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h6"/>',
       globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/>',
       grip: '<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>',
+      layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/>',
+      'chevron-down': '<path d="m6 9 6 6 6-6"/>',
       plus: '<path d="M12 5v14M5 12h14"/>',
       play: '<polygon points="6 3 20 12 6 21 6 3"/>',
       refresh: '<path d="M20 6v6h-6"/><path d="M4 18v-6h6"/><path d="M6.5 9a7 7 0 0 1 11.9-2.6L20 8M4 16l1.6 1.6A7 7 0 0 0 17.5 15"/>',
@@ -548,7 +569,9 @@
       x: '<path d="M18 6 6 18M6 6l12 12"/>'
     };
     const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name] || ''}</svg>`;
-    const state = { projects: [], editing: null, deleting: null, filter: 'all', formBaseline: '', dragging: false, reordering: false };
+    const requestedFilter = new URLSearchParams(window.location.search).get('filter');
+    const initialFilter = ['all', 'running', 'stopped', 'needs-config', 'external'].includes(requestedFilter) ? requestedFilter : 'all';
+    const state = { projects: [], editing: null, deleting: null, filter: initialFilter, formBaseline: '', dragging: false, reordering: false };
     const dragState = { item: null, pointerId: null, moved: false, originalIds: [] };
     const $ = (selector) => document.querySelector(selector);
     const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -764,9 +787,21 @@
 
     hydrateIcons();
     $('#add-project').addEventListener('click', () => openForm());
+    const projectNavTrigger = $('.nav-section-trigger');
+    const projectFilterList = $('#project-filter-list');
+    $$('.filter-button').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.filter === state.filter)));
+    projectNavTrigger.addEventListener('click', () => {
+      const expanded = projectNavTrigger.getAttribute('aria-expanded') === 'true';
+      projectNavTrigger.setAttribute('aria-expanded', String(!expanded));
+      projectFilterList.hidden = expanded;
+    });
     $$('.filter-button').forEach(button => button.addEventListener('click', () => {
       state.filter = button.dataset.filter;
       $$('.filter-button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      const url = new URL(window.location.href);
+      if (state.filter === 'all') url.searchParams.delete('filter');
+      else url.searchParams.set('filter', state.filter);
+      window.history.replaceState(null, '', `${url.pathname}${url.search}`);
       render();
     }));
     $('#projects').addEventListener('pointerdown', event => {

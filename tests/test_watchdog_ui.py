@@ -33,6 +33,22 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertNotIn("执行记录", html)
         self.assertNotIn("添加监控渠道", html)
 
+    def test_project_navigation_stays_expanded_across_both_workspaces(self) -> None:
+        labels = ["全部项目", "运行中", "已关闭", "待配置", "网页入口"]
+
+        for filename in ("index.html", "watchdog.html"):
+            with self.subTest(filename=filename):
+                html = (ROOT / filename).read_text(encoding="utf-8")
+                self.assertIn('class="sidebar-summary"', html)
+                self.assertIn('id="project-filter-list"', html)
+                self.assertIn('aria-label="项目查看范围"', html)
+                for label in labels:
+                    self.assertIn(label, html)
+
+        watchdog_html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
+        self.assertIn('href="/watchdog" aria-current="page"', watchdog_html)
+        self.assertIn('href="/?filter=running"', watchdog_html)
+
     def test_watchdog_page_has_three_horizontal_tabs(self) -> None:
         html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
         labels = ["监控会话", "执行记录", "添加监控渠道"]

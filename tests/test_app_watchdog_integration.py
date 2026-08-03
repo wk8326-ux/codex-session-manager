@@ -67,6 +67,18 @@ class HandlerWatchdogIsolationTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"source": "watchdog"})
         self.assertEqual(self.api.calls, [("GET", "/api/watchdog/status")])
 
+    def test_shell_project_summary_is_read_only_and_skips_watchdog_dispatch(self) -> None:
+        states = [
+            {"mode": "local", "state": "running"},
+            {"mode": "external", "state": "online"},
+        ]
+        with patch.object(app, "states_for", return_value=states):
+            status, body = self.request("GET", "/api/shell/project-summary")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["counts"]["all"], 2)
+        self.assertEqual(self.api.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()
