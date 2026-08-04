@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from app import (
     DEFAULT_PROJECTS,
+    Handler,
     WEBSITE_CACHE,
     cached_website_health,
     load_projects,
@@ -82,6 +83,37 @@ class ProjectSummaryTests(unittest.TestCase):
             {"all": 3, "running": 1, "stopped": 1, "needs-config": 0, "external": 1},
         )
         self.assertNotIn("projects", summary)
+
+
+class HandlerConnectionTests(unittest.TestCase):
+    def test_client_disconnects_are_silent_and_close_the_connection(self) -> None:
+        for error in (
+            BrokenPipeError(),
+            ConnectionAbortedError(),
+            ConnectionResetError(),
+        ):
+            with self.subTest(error=type(error).__name__):
+                handler = Handler.__new__(Handler)
+                handler.close_connection = False
+                with patch.object(
+                    BaseHTTPRequestHandler,
+                    "handle_one_request",
+                    side_effect=error,
+                ):
+                    handler.handle_one_request()
+                self.assertTrue(handler.close_connection)
+
+    def test_unexpected_request_errors_still_propagate(self) -> None:
+        handler = Handler.__new__(Handler)
+        with (
+            patch.object(
+                BaseHTTPRequestHandler,
+                "handle_one_request",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "unexpected"),
+        ):
+            handler.handle_one_request()
 
 
 class WebsiteProbeTests(unittest.TestCase):
