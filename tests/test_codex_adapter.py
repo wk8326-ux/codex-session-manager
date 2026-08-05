@@ -39,6 +39,111 @@ class FakeTransport(RpcTransport):
 
 
 class CodexAdapterTests(unittest.TestCase):
+    def test_send_message_steers_the_active_turn_in_the_same_thread(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "status": {"type": "active"},
+                        "turns": [{"id": "turn-active", "status": "inProgress", "items": []}],
+                    }
+                },
+                "turn/steer": {"turnId": "turn-active"},
+            }
+        )
+
+        result = CodexAppServerAdapter(transport).send_message(THREAD_ID, "继续检查")
+
+        self.assertEqual(result, {"turnId": "turn-active", "delivery": "steered"})
+        self.assertEqual(
+            transport.calls,
+            [
+                ("thread/read", {"threadId": THREAD_ID, "includeTurns": True}),
+                (
+                    "turn/steer",
+                    {
+                        "threadId": THREAD_ID,
+                        "expectedTurnId": "turn-active",
+                        "input": [
+                            {"type": "text", "text": "继续检查", "text_elements": []}
+                        ],
+                    },
+                ),
+            ],
+        )
+
+    def test_send_message_starts_a_turn_only_when_the_thread_is_idle(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "status": {"type": "idle"},
+                        "turns": [{"id": "turn-old", "status": "completed", "items": []}],
+                    }
+                },
+                "thread/resume": {"thread": {"id": THREAD_ID}},
+                "turn/start": {"turn": {"id": "turn-new", "status": "inProgress"}},
+            }
+        )
+
+        result = CodexAppServerAdapter(transport).send_message(THREAD_ID, "继续")
+
+        self.assertEqual(result, {"turnId": "turn-new", "delivery": "started"})
+        self.assertEqual([method for method, _params in transport.calls], ["thread/read", "thread/resume", "turn/start"])
+
+    def test_thread_detail_exposes_conversation_but_not_local_command_data(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "name": "mobile-test",
+                        "status": {"type": "idle"},
+                        "turns": [
+                            {
+                                "id": "turn-1",
+                                "status": "completed",
+                                "items": [
+                                    {
+                                        "id": "u1",
+                                        "type": "userMessage",
+                                        "content": [{"type": "text", "text": "hello"}],
+                                    },
+                                    {"id": "a1", "type": "agentMessage", "text": "done"},
+                                    {
+                                        "id": "c1",
+                                        "type": "commandExecution",
+                                        "command": "type C:\\private\\secret.txt",
+                                        "cwd": "C:\\private",
+                                        "aggregatedOutput": "secret-value",
+                                        "status": "completed",
+                                    },
+                                    {
+                                        "id": "r1",
+                                        "type": "reasoning",
+                                        "summary": ["checked the result"],
+                                        "content": ["private chain"],
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+        detail = CodexAppServerAdapter(transport).read_thread_detail(THREAD_ID)
+
+        serialized = json.dumps(detail)
+        self.assertIn("hello", serialized)
+        self.assertIn("done", serialized)
+        self.assertIn("checked the result", serialized)
+        self.assertNotIn("secret-value", serialized)
+        self.assertNotIn("C:\\\\private", serialized)
+        self.assertNotIn("private chain", serialized)
+
     def test_read_thread_uses_latest_turn_error_as_source_of_truth(self) -> None:
         transport = FakeTransport(
             {

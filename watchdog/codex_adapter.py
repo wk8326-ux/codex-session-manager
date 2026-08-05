@@ -18,6 +18,17 @@ _MESSAGE_HTTP_STATUS = re.compile(
     r"(?:HTTP\s*)?(429|502|503|504)\b|\bHTTP\s+(429|502|503|504)\b",
     re.IGNORECASE,
 )
+_LOCAL_PATH = re.compile(r"(?:[A-Za-z]:\\[^\s\"']+|\\\\[^\s\"']+|/(?:Users|home|workspace|private)/[^\s\"']+)")
+
+
+def _limited_text(value: object, limit: int = 12_000) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value if len(value) <= limit else value[:limit] + "\n[内容已截断]"
+
+
+def _safe_error_text(value: object) -> str:
+    return _limited_text(_LOCAL_PATH.sub("[本地路径]", value) if isinstance(value, str) else "", 4_000)
 
 
 class RpcTransport(Protocol):
@@ -124,20 +135,135 @@ def _session_snapshot(thread: object, *, require_turns: bool) -> SessionSnapshot
     )
 
 
+def _text_input(prompt: str) -> list[dict]:
+    return [{"type": "text", "text": prompt, "text_elements": []}]
+
+
+def _safe_user_text(content: object) -> str:
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        item.get("text", "")
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") == "text"
+        and isinstance(item.get("text"), str)
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _safe_thread_item(item: object) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    item_id = item.get("id")
+    item_type = item.get("type")
+    if not isinstance(item_id, str) or not isinstance(item_type, str):
+        return None
+    safe: dict = {"id": item_id, "type": item_type}
+    if item_type == "userMessage":
+        safe["text"] = _limited_text(_safe_user_text(item.get("content")))
+    elif item_type in {"agentMessage", "plan"}:
+        safe["text"] = _limited_text(item.get("text"))
+    elif item_type == "reasoning":
+        summary = item.get("summary")
+        safe["text"] = _limited_text("\n".join(
+            value for value in summary or [] if isinstance(value, str)
+        ) if isinstance(summary, list) else "")
+    elif item_type == "commandExecution":
+        safe.update({"label": "命令执行", "status": str(item.get("status") or "")})
+    elif item_type == "fileChange":
+        changes = item.get("changes")
+        safe.update(
+            {
+                "label": "文件变更",
+                "status": str(item.get("status") or ""),
+                "count": len(changes) if isinstance(changes, list) else 0,
+            }
+        )
+    elif item_type == "mcpToolCall":
+        safe.update(
+            {
+                "label": "工具调用",
+                "server": str(item.get("server") or ""),
+                "tool": str(item.get("tool") or ""),
+                "status": str(item.get("status") or ""),
+            }
+        )
+    elif item_type == "webSearch":
+        safe.update({"label": "网页搜索", "status": str(item.get("status") or "")})
+    else:
+        safe.update({"label": "任务活动", "status": str(item.get("status") or "")})
+    return safe
+
+
+def _safe_thread_detail(thread: object, *, turn_limit: int) -> dict:
+    if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
+        raise CodexProtocolError("thread/read returned a malformed thread")
+    status, active_flags = _thread_state(thread.get("status"))
+    raw_turns = thread.get("turns")
+    if not isinstance(raw_turns, list):
+        raise CodexProtocolError("thread/read returned a malformed turns list")
+    turns = []
+    for raw_turn in raw_turns[-turn_limit:]:
+        if not isinstance(raw_turn, dict):
+            continue
+        turn_id = raw_turn.get("id")
+        turn_status = raw_turn.get("status")
+        if not isinstance(turn_id, str) or not isinstance(turn_status, str):
+            continue
+        items = [
+            safe
+            for safe in (_safe_thread_item(item) for item in raw_turn.get("items", []))
+            if safe is not None
+        ] if isinstance(raw_turn.get("items", []), list) else []
+        error = raw_turn.get("error")
+        error_message = error.get("message") if isinstance(error, dict) else ""
+        turns.append(
+            {
+                "id": turn_id,
+                "status": turn_status,
+                "items": items,
+                "error": _safe_error_text(error_message),
+            }
+        )
+    return {
+        "threadId": thread["id"],
+        "name": thread.get("name") if isinstance(thread.get("name"), str) else "",
+        "status": status,
+        "activeFlags": list(active_flags),
+        "turns": turns,
+    }
+
+
 class CodexAppServerAdapter:
     def __init__(self, transport: RpcTransport) -> None:
         self._transport = transport
 
     def read_thread(self, thread_id: str) -> SessionSnapshot:
-        response = self._transport.request(
-            "thread/read", {"threadId": thread_id, "includeTurns": True}
-        )
+        response = self._read_thread_response(thread_id)
         if not isinstance(response, dict):
             raise CodexProtocolError("thread/read returned a non-object response")
         snapshot = _session_snapshot(response.get("thread"), require_turns=True)
         if snapshot.thread_id != thread_id:
             raise CodexProtocolError("thread/read returned a different thread id")
         return snapshot
+
+    def _read_thread_response(self, thread_id: str) -> dict:
+        response = self._transport.request(
+            "thread/read", {"threadId": thread_id, "includeTurns": True}
+        )
+        if not isinstance(response, dict):
+            raise CodexProtocolError("thread/read returned a non-object response")
+        return response
+
+    def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
+        response = self._read_thread_response(thread_id)
+        detail = _safe_thread_detail(
+            response.get("thread"), turn_limit=max(1, min(int(turn_limit), 100))
+        )
+        if detail["threadId"] != thread_id:
+            raise CodexProtocolError("thread/read returned a different thread id")
+        return detail
 
     def list_threads(self, limit: int = 5) -> list[SessionSnapshot]:
         response = self._transport.request("thread/list", {"limit": limit})
@@ -173,13 +299,7 @@ class CodexAppServerAdapter:
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    "input": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                            "text_elements": [],
-                        }
-                    ],
+                    "input": _text_input(prompt),
                 },
             )
         except (DefiniteSendFailure, UncertainSendFailure, CodexProtocolError):
@@ -195,6 +315,42 @@ class CodexAppServerAdapter:
         if not isinstance(turn_id, str):
             raise CodexProtocolError("turn/start returned no valid turn id")
         return turn_id
+
+    def send_message(self, thread_id: str, prompt: str) -> dict:
+        normalized_prompt = prompt.strip()
+        if not normalized_prompt:
+            raise DefiniteSendFailure("message cannot be empty")
+        response = self._read_thread_response(thread_id)
+        thread = response.get("thread")
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise CodexProtocolError("thread/read returned a different thread id")
+        turns = thread.get("turns")
+        if not isinstance(turns, list):
+            raise CodexProtocolError("thread/read returned a malformed turns list")
+        latest = turns[-1] if turns else None
+        latest_id = latest.get("id") if isinstance(latest, dict) else None
+        latest_status = latest.get("status") if isinstance(latest, dict) else None
+        if latest_status == "inProgress" and isinstance(latest_id, str):
+            try:
+                steered = self._transport.request(
+                    "turn/steer",
+                    {
+                        "threadId": thread_id,
+                        "expectedTurnId": latest_id,
+                        "input": _text_input(normalized_prompt),
+                    },
+                )
+            except (DefiniteSendFailure, UncertainSendFailure, CodexProtocolError):
+                raise
+            except (TimeoutError, EOFError, ChildProcessError, ConnectionError, OSError) as error:
+                raise UncertainSendFailure(
+                    "turn/steer outcome could not be confirmed"
+                ) from error
+            turn_id = steered.get("turnId") if isinstance(steered, dict) else None
+            if not isinstance(turn_id, str) or turn_id != latest_id:
+                raise CodexProtocolError("turn/steer returned no matching turn id")
+            return {"turnId": turn_id, "delivery": "steered"}
+        return {"turnId": self.start_turn(thread_id, normalized_prompt), "delivery": "started"}
 
     def close(self) -> None:
         self._transport.close()

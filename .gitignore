@@ -1,4 +1,5 @@
 .superpowers/
+.playwright-cli/
 .codegraph/
 .ui-craft/
 __pycache__/

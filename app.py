@@ -7,6 +7,7 @@ Open:     http://127.0.0.1:8765
 from __future__ import annotations
 
 import json
+import os
 import socket
 import ssl
 import subprocess
@@ -22,6 +23,11 @@ from urllib.error import HTTPError, URLError
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+
+from remote.application import RemoteApplication
+from remote.events import RemoteEventHub
+from remote.router import AdminRemoteApi, RemoteHttpApi, RemoteResponse
+from remote.store import RemoteStore
 
 from watchdog.application import WatchdogApplication
 from watchdog.channels import probe_channel
@@ -41,7 +47,9 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "projects.json"
 LOG_DIR = ROOT / "logs"
 HOST = "127.0.0.1"
-PORT = 8765
+PORT = int(os.environ.get("LPC_ADMIN_PORT", "8765"))
+REMOTE_HOST = os.environ.get("LPC_REMOTE_HOST", "0.0.0.0")
+REMOTE_PORT = int(os.environ.get("LPC_REMOTE_PORT", "8766"))
 LOCK = threading.RLock()
 WEBSITE_CACHE_LOCK = threading.RLock()
 WEBSITE_CACHE: dict[str, dict] = {}
@@ -49,6 +57,8 @@ WEBSITE_CACHE_TTL = 15.0
 WEBSITE_TIMEOUT = 3.0
 WEBSITE_FAILURE_THRESHOLD = 3
 WATCHDOG_API: WatchdogHttpApi | None = None
+REMOTE_ADMIN_API: AdminRemoteApi | None = None
+REMOTE_HTTP_API: RemoteHttpApi | None = None
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -422,6 +432,8 @@ class ConsoleRuntime:
     api: WatchdogHttpApi
     scheduler: WatchdogScheduler
     adapter: object
+    remote_admin_api: AdminRemoteApi
+    remote_http_api: RemoteHttpApi
 
 
 class UnavailableCodexAdapter:
@@ -434,8 +446,33 @@ class UnavailableCodexAdapter:
     def start_turn(self, thread_id: str, prompt: str) -> str:
         raise CodexAdapterError("Codex App Server is unavailable")
 
+    def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
+        raise CodexAdapterError("Codex App Server is unavailable")
+
+    def send_message(self, thread_id: str, prompt: str) -> dict:
+        raise CodexAdapterError("Codex App Server is unavailable")
+
     def close(self) -> None:
         return
+
+
+def _default_remote_base_url() -> str:
+    addresses = []
+    try:
+        addresses = socket.gethostbyname_ex(socket.gethostname())[2]
+    except OSError:
+        pass
+    host = next(
+        (address for address in addresses if not address.startswith("127.")),
+        "127.0.0.1",
+    )
+    return f"http://{host}:{REMOTE_PORT}"
+
+
+def _remote_projects() -> list[dict]:
+    with LOCK:
+        projects = [dict(project) for project in PROJECTS]
+    return states_for(projects)
 
 
 def create_console_runtime(base_path: Path) -> ConsoleRuntime:
@@ -459,8 +496,19 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     monitor_service = WatchdogService(
         store, secrets, probe_channel, adapter
     )
+    remote_store = RemoteStore(base_path / "watchdog.db")
+    remote_store.initialize()
+    event_hub = RemoteEventHub(
+        lambda: {session["threadId"] for session in store.list_sessions()}
+    )
     if codex_connected:
-        client.set_event_handler(monitor_service.handle_app_server_event)
+        def handle_event(method: str, params: dict) -> None:
+            try:
+                monitor_service.handle_app_server_event(method, params)
+            finally:
+                event_hub.publish(method, params)
+
+        client.set_event_handler(handle_event)
     scheduler = WatchdogScheduler(monitor_service, store=store)
     application = WatchdogApplication(
         store,
@@ -471,8 +519,21 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         scheduler,
         codex_connected=codex_connected,
     )
+    remote_application = RemoteApplication(
+        remote_store,
+        store,
+        adapter,
+        event_hub,
+        _remote_projects,
+        default_base_url=_default_remote_base_url(),
+        codex_connected=codex_connected,
+    )
     return ConsoleRuntime(
-        WatchdogHttpApi(application), scheduler, adapter
+        WatchdogHttpApi(application),
+        scheduler,
+        adapter,
+        AdminRemoteApi(remote_application),
+        RemoteHttpApi(remote_application),
     )
 
 
@@ -510,6 +571,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.respond_json(response.status, response.body)
 
+    def respond_remote_response(self, response: RemoteResponse) -> None:
+        if response.status == HTTPStatus.NO_CONTENT:
+            self.send_response(response.status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.respond_json(response.status, response.body)
+
+    def dispatch_remote_admin(self, method: str, path: str, payload: object) -> bool:
+        if path != "/api/remote" and not path.startswith("/api/remote/"):
+            return False
+        if REMOTE_ADMIN_API is None:
+            self.respond_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"message": "Remote workspace is unavailable."},
+            )
+            return True
+        response = REMOTE_ADMIN_API.dispatch(method, path, payload)
+        if response is None:
+            self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+        else:
+            self.respond_remote_response(response)
+        return True
+
     def dispatch_watchdog(
         self, method: str, parsed: object, payload: object
     ) -> bool:
@@ -541,6 +626,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if self.dispatch_watchdog("GET", parsed, None):
             return
+        if self.dispatch_remote_admin("GET", self.path, None):
+            return
         if parsed.path == "/api/projects":
             with LOCK:
                 projects = [dict(project) for project in PROJECTS]
@@ -563,6 +650,27 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in {"/watchdog", "/watchdog/"}:
             self.respond_file(ROOT / "watchdog.html", "text/html; charset=utf-8")
             return
+        if parsed.path in {"/remote", "/remote/"}:
+            self.respond_file(ROOT / "remote.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/remote.css":
+            self.respond_file(ROOT / "remote.css", "text/css; charset=utf-8")
+            return
+        if parsed.path == "/remote.js":
+            self.respond_file(ROOT / "remote.js", "text/javascript; charset=utf-8")
+            return
+        if parsed.path == "/assets/vendor/qrcode.min.js":
+            self.respond_file(ROOT / "assets" / "vendor" / "qrcode.min.js", "text/javascript; charset=utf-8")
+            return
+        if parsed.path == "/manifest.webmanifest":
+            self.respond_file(ROOT / "manifest.webmanifest", "application/manifest+json")
+            return
+        if parsed.path == "/service-worker.js":
+            self.respond_file(ROOT / "service-worker.js", "text/javascript; charset=utf-8")
+            return
+        if parsed.path == "/assets/project-console-icon.png":
+            self.respond_file(ROOT / "assets" / "project-console-icon.png", "image/png")
+            return
         if parsed.path == "/":
             body = (ROOT / "index.html").read_bytes()
             self.send_response(HTTPStatus.OK)
@@ -581,6 +689,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         if self.dispatch_watchdog("POST", parsed, payload):
+            return
+        if self.dispatch_remote_admin("POST", parsed.path, payload):
             return
         with LOCK:
             if parsed.path == "/api/projects/reorder":
@@ -691,6 +801,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if self.dispatch_watchdog("DELETE", parsed, None):
             return
+        if self.dispatch_remote_admin("DELETE", parsed.path, None):
+            return
         project_id = urlparse(self.path).path.split("/")[-1]
         with LOCK:
             project = find_project(project_id)
@@ -705,21 +817,133 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.NO_CONTENT, {})
 
 
+class RemoteHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            self.close_connection = True
+
+    def _headers(self, content_type: str, length: int, *, cache: str = "no-store") -> None:
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+
+    def respond_json(self, status: int, payload: object) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self._headers("application/json; charset=utf-8", len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def respond_file(self, path: Path, content_type: str, *, cache: str = "public, max-age=3600") -> None:
+        body = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self._headers(content_type, len(body), cache=cache)
+        if path.name == "service-worker.js":
+            self.send_header("Service-Worker-Allowed", "/")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 256_000:
+            raise ValueError("request too large")
+        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        return value if isinstance(value, dict) else {}
+
+    def dispatch_api(self, method: str, payload: object = None) -> bool:
+        if not self.path.startswith("/api/remote/"):
+            return False
+        if REMOTE_HTTP_API is None:
+            self.respond_json(HTTPStatus.SERVICE_UNAVAILABLE, {"message": "Remote workspace is unavailable."})
+            return True
+        headers = {key: value for key, value in self.headers.items()}
+        response = REMOTE_HTTP_API.dispatch(method, self.path, headers, payload)
+        if response is None:
+            self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+        elif response.status == HTTPStatus.NO_CONTENT:
+            self.send_response(response.status)
+            self._headers("application/json; charset=utf-8", 0)
+            self.end_headers()
+        else:
+            self.respond_json(response.status, response.body)
+        return True
+
+    def do_GET(self) -> None:
+        if self.dispatch_api("GET"):
+            return
+        path = urlparse(self.path).path
+        static = {
+            "/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+            "/remote": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+            "/remote/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+            "/pair": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+            "/remote.css": ("remote.css", "text/css; charset=utf-8", "public, max-age=3600"),
+            "/remote.js": ("remote.js", "text/javascript; charset=utf-8", "public, max-age=3600"),
+            "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "no-cache"),
+            "/service-worker.js": ("service-worker.js", "text/javascript; charset=utf-8", "no-cache"),
+            "/assets/project-console-icon.png": ("assets/project-console-icon.png", "image/png", "public, max-age=86400"),
+            "/assets/vendor/qrcode.min.js": ("assets/vendor/qrcode.min.js", "text/javascript; charset=utf-8", "public, max-age=86400"),
+        }
+        asset = static.get(path)
+        if asset is None:
+            self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+            return
+        self.respond_file(ROOT / asset[0], asset[1], cache=asset[2])
+
+    def do_POST(self) -> None:
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.respond_json(HTTPStatus.BAD_REQUEST, {"message": "请求格式错误。"})
+            return
+        if not self.dispatch_api("POST", payload):
+            self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+
+
 def run_console(base_path: Path = ROOT) -> None:
-    global WATCHDOG_API
+    global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API
     LOG_DIR.mkdir(exist_ok=True)
     runtime = create_console_runtime(base_path)
     WATCHDOG_API = runtime.api
+    REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
+    REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
+    remote_server = None
+    remote_thread = None
+    if REMOTE_HTTP_API is not None:
+        remote_server = ThreadingHTTPServer((REMOTE_HOST, REMOTE_PORT), RemoteHandler)
+        remote_thread = threading.Thread(
+            target=remote_server.serve_forever,
+            name="remote-workspace-http",
+            daemon=True,
+        )
+        remote_thread.start()
     runtime.scheduler.start()
     print(f"Local Project Console is running at http://{HOST}:{PORT}")
+    if remote_server is not None:
+        print(f"Remote workspace is listening on {REMOTE_HOST}:{REMOTE_PORT}")
     try:
         server.serve_forever()
     finally:
         runtime.scheduler.stop()
         runtime.adapter.close()
+        if remote_server is not None:
+            remote_server.shutdown()
+            remote_server.server_close()
+        if remote_thread is not None:
+            remote_thread.join(timeout=2)
         server.server_close()
         WATCHDOG_API = None
+        REMOTE_ADMIN_API = None
+        REMOTE_HTTP_API = None
 
 
 if __name__ == "__main__":

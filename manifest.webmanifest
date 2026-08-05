@@ -1,0 +1,19 @@
+{
+  "name": "本地项目控制台 · 远程会话",
+  "short_name": "远程会话",
+  "description": "安全访问已登记的本地 Codex 会话与项目状态",
+  "start_url": "/remote",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#eef1ef",
+  "theme_color": "#2d715b",
+  "icons": [
+    {
+      "src": "/assets/project-console-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
