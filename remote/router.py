@@ -47,6 +47,28 @@ class AdminRemoteApi:
                 return RemoteResponse(HTTPStatus.NO_CONTENT, {})
             if method == "GET" and route == "/api/remote/sessions":
                 return RemoteResponse(HTTPStatus.OK, self.application.list_sessions())
+            if method == "GET" and route == "/api/remote/local-sessions":
+                query = parse_qs(parsed.query)
+                limit = max(1, min(100, int(query.get("limit", ["50"])[0])))
+                return RemoteResponse(
+                    HTTPStatus.OK, self.application.list_local_sessions(limit)
+                )
+            if route == "/api/remote/synced-sessions":
+                if method == "GET":
+                    return RemoteResponse(
+                        HTTPStatus.OK, self.application.list_sessions()
+                    )
+                if method == "POST":
+                    return RemoteResponse(
+                        HTTPStatus.CREATED,
+                        self.application.create_synced_session(
+                            payload if isinstance(payload, dict) else {}
+                        ),
+                    )
+            synced_prefix = "/api/remote/synced-sessions/"
+            if method == "DELETE" and route.startswith(synced_prefix):
+                self.application.delete_synced_session(route[len(synced_prefix):])
+                return RemoteResponse(HTTPStatus.NO_CONTENT, {})
             session_prefix = "/api/remote/sessions/"
             if route.startswith(session_prefix):
                 remainder = route[len(session_prefix):]

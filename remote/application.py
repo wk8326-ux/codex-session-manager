@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import sqlite3
 from urllib.parse import urlparse
 
 from watchdog.codex_adapter import CodexAdapterError
+from watchdog.validation import (
+    ValidationError,
+    validate_required_text,
+    validate_thread_id,
+)
 
 from .events import RemoteEventHub
 from .store import PairingRejected, RemoteStore
@@ -24,7 +30,6 @@ class RemoteApplication:
     def __init__(
         self,
         remote_store: RemoteStore,
-        session_store: object,
         adapter: object,
         event_hub: RemoteEventHub,
         project_provider,
@@ -33,7 +38,6 @@ class RemoteApplication:
         codex_connected: bool,
     ) -> None:
         self.remote_store = remote_store
-        self.session_store = session_store
         self.adapter = adapter
         self.event_hub = event_hub
         self.project_provider = project_provider
@@ -97,9 +101,9 @@ class RemoteApplication:
         return self.remote_store.authenticate(token)
 
     def _session(self, session_id: str) -> dict:
-        session = self.session_store.get_session(session_id)
+        session = self.remote_store.get_synced_session(session_id)
         if session is None:
-            raise RemoteNotFound("监控会话不存在。")
+            raise RemoteNotFound("远程同步会话不存在。")
         return session
 
     @staticmethod
@@ -108,14 +112,56 @@ class RemoteApplication:
             "id": session["id"],
             "name": session["name"],
             "threadId": session["threadId"],
-            "monitoringEnabled": bool(session.get("enabled")),
-            "lastSessionState": session.get("lastSessionState") or "unknown",
-            "lastCheckResult": session.get("lastCheckResult") or "",
-            "lastCheckedAt": session.get("lastCheckedAt") or "",
+            "createdAt": session.get("createdAt") or "",
         }
 
     def list_sessions(self) -> list[dict]:
-        return [self._session_summary(session) for session in self.session_store.list_sessions()]
+        return [
+            self._session_summary(session)
+            for session in self.remote_store.list_synced_sessions()
+        ]
+
+    def list_local_sessions(self, limit: int) -> list[dict]:
+        try:
+            snapshots = self.adapter.list_threads(limit=limit)
+        except CodexAdapterError as error:
+            raise RemoteApplicationError("Codex 本机会话当前不可读取。") from error
+        synced_ids = {
+            session["threadId"] for session in self.remote_store.list_synced_sessions()
+        }
+        return [
+            {
+                "threadId": item.thread_id,
+                "name": item.name,
+                "threadStatus": item.thread_status,
+                "activeFlags": list(item.active_flags),
+                "synced": item.thread_id in synced_ids,
+            }
+            for item in snapshots
+        ]
+
+    def create_synced_session(self, payload: dict) -> dict:
+        unknown = set(payload) - {"name", "threadId"}
+        if unknown:
+            raise RemoteValidationError("远程同步会话包含不支持的字段。")
+        try:
+            name = validate_required_text(payload.get("name"), "name")
+            thread_id = validate_thread_id(payload.get("threadId"))
+        except ValidationError as error:
+            raise RemoteValidationError(str(error)) from error
+        if len(name) > 120:
+            raise RemoteValidationError("会话名称不能超过 120 个字符。")
+        try:
+            session = self.remote_store.create_synced_session(
+                name=name, thread_id=thread_id
+            )
+        except sqlite3.IntegrityError as error:
+            raise RemoteValidationError("该 Codex 会话已在远程同步目录中。") from error
+        return self._session_summary(session)
+
+    def delete_synced_session(self, session_id: str) -> None:
+        if not self.remote_store.delete_synced_session(session_id):
+            raise RemoteNotFound("远程同步会话不存在。")
 
     def read_session(self, session_id: str) -> dict:
         session = self._session(session_id)

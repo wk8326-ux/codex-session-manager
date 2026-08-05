@@ -15,7 +15,7 @@ def _string(value: object) -> str:
 
 
 class RemoteEventHub:
-    """Bounded, sanitized App Server event stream for monitored sessions."""
+    """Bounded, sanitized App Server event stream for remote-synced sessions."""
 
     def __init__(self, allowed_thread_ids: Callable[[], set[str]]) -> None:
         self._allowed_thread_ids = allowed_thread_ids
@@ -60,4 +60,3 @@ class RemoteEventHub:
             events = [event for event in self._events if event["sequence"] > after]
             cursor = events[-1]["sequence"] if events else max(after, self._sequence)
             return {"events": events, "cursor": cursor}
-

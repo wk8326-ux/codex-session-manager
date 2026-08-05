@@ -72,10 +72,18 @@ class RemoteStore:
                     last_seen_at TEXT NOT NULL,
                     revoked_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS remote_synced_sessions (
+                    id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS remote_pairings_expiry
                     ON remote_pairings(expires_at, claimed_at);
                 CREATE INDEX IF NOT EXISTS remote_devices_active
                     ON remote_devices(revoked_at, last_seen_at);
+                CREATE INDEX IF NOT EXISTS remote_synced_sessions_created
+                    ON remote_synced_sessions(created_at, name);
                 INSERT OR IGNORE INTO remote_settings(id, public_base_url)
                     VALUES (1, '');
                 """
@@ -206,3 +214,48 @@ class RemoteStore:
             )
         return cursor.rowcount == 1
 
+    @staticmethod
+    def _synced_session(row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "threadId": row["thread_id"],
+            "name": row["name"],
+            "createdAt": row["created_at"],
+        }
+
+    def create_synced_session(self, *, name: str, thread_id: str) -> dict:
+        session_id = str(uuid4())
+        created_at = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO remote_synced_sessions(id, thread_id, name, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (session_id, thread_id, name, created_at),
+            )
+            row = connection.execute(
+                "SELECT * FROM remote_synced_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        assert row is not None
+        return self._synced_session(row)
+
+    def list_synced_sessions(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM remote_synced_sessions
+                   ORDER BY created_at, name, id"""
+            ).fetchall()
+        return [self._synced_session(row) for row in rows]
+
+    def get_synced_session(self, session_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM remote_synced_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        return self._synced_session(row) if row is not None else None
+
+    def delete_synced_session(self, session_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM remote_synced_sessions WHERE id = ?", (session_id,)
+            )
+        return cursor.rowcount == 1

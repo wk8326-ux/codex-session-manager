@@ -32,7 +32,7 @@
     <div class="pair-panel">
       <p class="eyebrow">设备配对</p>
       <h1 id="pair-title">连接这台设备</h1>
-      <p class="pair-copy">为这台手机命名，完成后即可查看已登记会话并发送消息。</p>
+      <p class="pair-copy">为这台手机命名，完成后即可查看已同步会话并发送消息。</p>
       <label for="pair-device-name">设备名称</label>
       <input id="pair-device-name" maxlength="80" value="我的手机" autocomplete="off">
       <button class="button primary wide" id="claim-pairing" type="button">确认配对</button>
@@ -87,13 +87,16 @@
         <section class="conversation" aria-live="polite">
           <header class="conversation-head">
             <div class="session-picker">
-              <label for="session-select">监控会话</label>
+              <label for="session-select">同步会话</label>
               <select id="session-select" aria-describedby="conversation-meta">
-                <option value="">选择已登记会话</option>
+                <option value="">选择同步会话</option>
               </select>
-              <p id="conversation-meta">只显示会话监控中登记的任务</p>
+              <p id="conversation-meta">尚未选择会话</p>
             </div>
-            <span class="status-badge" id="conversation-status">未选择</span>
+            <div class="conversation-actions">
+              <button class="button compact admin-only" id="manage-synced-sessions" type="button" hidden><span aria-hidden="true">＋</span> 管理同步</button>
+              <span class="status-badge" id="conversation-status">未选择</span>
+            </div>
           </header>
           <div class="transcript" id="transcript">
             <div class="conversation-empty"><strong>等待选择会话</strong><span>消息会保留在原 Codex 会话中</span></div>
@@ -135,7 +138,7 @@
           </div>
           <section class="trusted-devices">
             <header class="section-heading"><div><p class="eyebrow">TRUSTED DEVICES</p><h2>已配对设备</h2></div><span>撤销后立即失效</span></header>
-            <p class="section-copy">只同步会话监控中登记的任务；跨公网访问需使用 Tailscale 或其他受信任的 HTTPS 通道。</p>
+            <p class="section-copy">移动设备只能访问已加入远程同步目录的会话；跨公网访问需使用 Tailscale 或其他受信任的 HTTPS 通道。</p>
             <div class="device-list" id="device-list"></div>
           </section>
         </div>
@@ -148,6 +151,32 @@
       <button class="admin-only" type="button" data-mobile-view="devices"><span>●</span>设备</button>
     </nav>
   </div>
+
+  <dialog class="sync-dialog admin-only" id="sync-session-dialog" aria-labelledby="sync-session-title" hidden>
+    <form method="dialog" class="dialog-shell">
+      <header class="dialog-head">
+        <div><p class="eyebrow">REMOTE CATALOG</p><h2 id="sync-session-title">远程同步会话</h2></div>
+        <button class="icon-button dialog-close" type="submit" aria-label="关闭" title="关闭">×</button>
+      </header>
+      <div class="dialog-body">
+        <section class="sync-picker" aria-labelledby="add-sync-title">
+          <h3 id="add-sync-title">从本机 Codex 选择</h3>
+          <div class="sync-form-row">
+            <label class="sr-only" for="local-session-select">本机会话</label>
+            <select id="local-session-select"><option value="">正在读取本机会话</option></select>
+            <label class="sr-only" for="sync-session-name">同步名称</label>
+            <input id="sync-session-name" maxlength="120" autocomplete="off" placeholder="同步名称">
+            <button class="button primary" id="add-synced-session" type="button" disabled>加入同步</button>
+          </div>
+          <p class="form-error" id="sync-session-error" role="alert"></p>
+        </section>
+        <section class="synced-catalog" aria-labelledby="synced-catalog-title">
+          <div class="catalog-heading"><h3 id="synced-catalog-title">已同步会话</h3><span id="synced-session-count">0 个</span></div>
+          <div class="synced-session-list" id="synced-session-list"></div>
+        </section>
+      </div>
+    </form>
+  </dialog>
 
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="/assets/vendor/qrcode.min.js"></script>

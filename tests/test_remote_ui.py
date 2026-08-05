@@ -18,8 +18,20 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn('id="create-pairing"', html)
         self.assertIn('id="desktop-comparison-code"', html)
         self.assertIn('id="session-select"', html)
+        self.assertIn('id="manage-synced-sessions"', html)
+        self.assertIn('id="sync-session-dialog"', html)
+        self.assertIn('id="local-session-select"', html)
+        self.assertIn('id="synced-session-list"', html)
         self.assertNotIn('id="session-list"', html)
+        self.assertNotIn("只显示会话监控中登记的任务", html)
         self.assertLess(html.index('id="create-pairing"'), html.index('id="device-list"'))
+
+    def test_sync_manager_uses_the_independent_remote_catalog_api(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("/api/remote/local-sessions?limit=50", script)
+        self.assertIn("/api/remote/synced-sessions", script)
+        self.assertIn("method: 'DELETE'", script)
 
     def test_transcript_is_a_fixed_scrollable_latest_message_viewport(self) -> None:
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")

@@ -594,7 +594,9 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     remote_store = RemoteStore(base_path / "watchdog.db")
     remote_store.initialize()
     event_hub = RemoteEventHub(
-        lambda: {session["threadId"] for session in store.list_sessions()}
+        lambda: {
+            session["threadId"] for session in remote_store.list_synced_sessions()
+        }
     )
     if codex_connected:
         def handle_event(method: str, params: dict) -> None:
@@ -616,7 +618,6 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     )
     remote_application = RemoteApplication(
         remote_store,
-        store,
         adapter,
         event_hub,
         _remote_projects,

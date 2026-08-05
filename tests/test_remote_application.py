@@ -3,8 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
-from remote.application import RemoteApplication, RemoteNotFound
+from remote.application import RemoteApplication, RemoteNotFound, RemoteValidationError
 from remote.events import RemoteEventHub
 from remote.store import RemoteStore
 
@@ -46,18 +47,28 @@ class Adapter:
         self.sent.append((thread_id, prompt))
         return {"turnId": "turn-2", "delivery": "started"}
 
+    def list_threads(self, limit: int) -> list[object]:
+        return [
+            SimpleNamespace(
+                thread_id=THREAD_ID,
+                name="Local Woxsheet",
+                thread_status="active",
+                active_flags=("waiting",),
+            )
+        ][:limit]
+
 
 class RemoteApplicationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         remote_store = RemoteStore(Path(self.temporary_directory.name) / "watchdog.db")
         remote_store.initialize()
+        self.remote_store = remote_store
         self.sessions = SessionStore()
         self.adapter = Adapter()
         self.hub = RemoteEventHub(lambda: {THREAD_ID})
         self.application = RemoteApplication(
             remote_store,
-            self.sessions,
             self.adapter,
             self.hub,
             lambda: [
@@ -79,7 +90,10 @@ class RemoteApplicationTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def test_message_is_sent_to_the_exact_registered_thread(self) -> None:
-        response = self.application.send_message("session-1", {"message": "继续"})
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        response = self.application.send_message(synced["id"], {"message": "继续"})
 
         self.assertEqual(response["threadId"], THREAD_ID)
         self.assertEqual(self.adapter.sent, [(THREAD_ID, "继续")])
@@ -87,10 +101,36 @@ class RemoteApplicationTests(unittest.TestCase):
             self.application.send_message("unknown", {"message": "continue"})
 
     def test_session_detail_is_limited_to_recent_turns(self) -> None:
-        detail = self.application.read_session("session-1")
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        detail = self.application.read_session(synced["id"])
 
         self.assertEqual(detail["threadId"], THREAD_ID)
         self.assertEqual(self.adapter.last_turn_limit, 12)
+
+    def test_local_sessions_can_be_selected_without_entering_monitoring_catalog(self) -> None:
+        local = self.application.list_local_sessions(limit=50)
+
+        self.assertEqual(local[0]["threadId"], THREAD_ID)
+        self.assertEqual(local[0]["threadStatus"], "active")
+        self.assertEqual(self.sessions.list_sessions()[0]["name"], "woxsheet")
+        self.assertEqual(self.application.list_sessions(), [])
+
+        synced = self.application.create_synced_session(
+            {"name": local[0]["name"], "threadId": local[0]["threadId"]}
+        )
+        self.assertEqual(self.application.list_sessions(), [synced])
+
+        self.application.delete_synced_session(synced["id"])
+        self.assertEqual(self.application.list_sessions(), [])
+
+    def test_duplicate_synced_thread_is_rejected(self) -> None:
+        payload = {"name": "Woxsheet", "threadId": THREAD_ID}
+        self.application.create_synced_session(payload)
+
+        with self.assertRaises(RemoteValidationError):
+            self.application.create_synced_session(payload)
 
     def test_project_overview_omits_paths_commands_and_urls(self) -> None:
         projects = self.application.list_projects()

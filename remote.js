@@ -8,6 +8,7 @@
     token: '',
     pendingToken: '',
     sessions: [],
+    localSessions: [],
     projects: [],
     devices: [],
     selectedSessionId: '',
@@ -144,16 +145,140 @@
     select.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = state.sessions.length ? '选择已登记会话' : '尚未登记监控会话';
+    placeholder.textContent = state.sessions.length ? '选择同步会话' : '尚未添加同步会话';
     select.append(placeholder);
     for (const session of state.sessions) {
       const option = document.createElement('option');
       option.value = session.id;
-      option.textContent = `${session.name} · ${stateLabel(session.lastSessionState)}`;
+      option.textContent = session.name;
       select.append(option);
     }
     select.disabled = state.sessions.length === 0;
     select.value = state.selectedSessionId;
+  }
+
+  function clearConversation() {
+    $('#conversation-meta').textContent = '尚未选择会话';
+    $('#conversation-status').textContent = '未选择';
+    $('#conversation-status').className = 'status-badge';
+    $('#message-input').disabled = true;
+    $('#send-button').disabled = true;
+    const transcript = $('#transcript');
+    transcript.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'conversation-empty';
+    const title = document.createElement('strong');
+    title.textContent = state.sessions.length ? '等待选择会话' : '尚未添加同步会话';
+    const copy = document.createElement('span');
+    copy.textContent = state.admin ? '使用“管理同步”从本机 Codex 选择' : '请在电脑端添加需要同步的会话';
+    empty.append(title, copy);
+    transcript.append(empty);
+  }
+
+  function renderSyncManager() {
+    const localSelect = $('#local-session-select');
+    localSelect.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = state.localSessions.length ? '选择本机 Codex 会话' : '没有可读取的本机会话';
+    localSelect.append(placeholder);
+    for (const session of state.localSessions) {
+      const option = document.createElement('option');
+      option.value = session.threadId;
+      option.textContent = `${session.name || session.threadId} · ${stateLabel(session.threadStatus)}`;
+      option.disabled = Boolean(session.synced);
+      localSelect.append(option);
+    }
+    $('#add-synced-session').disabled = true;
+    $('#sync-session-name').value = '';
+    $('#synced-session-count').textContent = `${state.sessions.length} 个`;
+    const list = $('#synced-session-list');
+    list.replaceChildren();
+    if (!state.sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = '尚未添加远程同步会话。';
+      list.append(empty);
+      return;
+    }
+    for (const session of state.sessions) {
+      const row = document.createElement('div');
+      row.className = 'synced-session-row';
+      const meta = document.createElement('div');
+      meta.className = 'synced-session-meta';
+      const name = document.createElement('strong');
+      name.textContent = session.name;
+      const threadId = document.createElement('small');
+      threadId.textContent = session.threadId;
+      meta.append(name, threadId);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'text-button';
+      remove.textContent = '移除';
+      remove.addEventListener('click', () => removeSyncedSession(session));
+      row.append(meta, remove);
+      list.append(row);
+    }
+  }
+
+  async function openSyncManager() {
+    const dialog = $('#sync-session-dialog');
+    $('#sync-session-error').textContent = '';
+    dialog.showModal();
+    try {
+      const [localSessions, syncedSessions] = await Promise.all([
+        api('/api/remote/local-sessions?limit=50'),
+        api('/api/remote/synced-sessions'),
+      ]);
+      state.localSessions = localSessions;
+      state.sessions = syncedSessions;
+      renderSessions();
+      renderSyncManager();
+    } catch (error) {
+      $('#sync-session-error').textContent = error.message;
+    }
+  }
+
+  async function addSyncedSession() {
+    const threadId = $('#local-session-select').value;
+    const selected = state.localSessions.find(session => session.threadId === threadId);
+    const name = $('#sync-session-name').value.trim();
+    if (!selected || !name) return;
+    const button = $('#add-synced-session');
+    button.disabled = true;
+    $('#sync-session-error').textContent = '';
+    try {
+      const created = await api('/api/remote/synced-sessions', {
+        method: 'POST', body: JSON.stringify({ threadId, name }),
+      });
+      state.sessions = await api('/api/remote/synced-sessions');
+      state.localSessions = await api('/api/remote/local-sessions?limit=50');
+      state.selectedSessionId = created.id;
+      renderSessions();
+      renderSyncManager();
+      await selectSession(created.id, true);
+      showToast('会话已加入远程同步。');
+    } catch (error) {
+      $('#sync-session-error').textContent = error.message;
+      button.disabled = false;
+    }
+  }
+
+  async function removeSyncedSession(session) {
+    if (!confirm(`移除“${session.name}”的远程同步？原 Codex 会话不会被删除。`)) return;
+    try {
+      await api(`/api/remote/synced-sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+      state.sessions = await api('/api/remote/synced-sessions');
+      state.localSessions = await api('/api/remote/local-sessions?limit=50');
+      if (state.selectedSessionId === session.id) state.selectedSessionId = state.sessions[0]?.id || '';
+      renderSessions();
+      renderSyncManager();
+      if (state.selectedSessionId) await selectSession(state.selectedSessionId, true);
+      else clearConversation();
+      showToast('已移除远程同步，原 Codex 会话保持不变。');
+    } catch (error) {
+      $('#sync-session-error').textContent = error.message;
+    }
   }
 
   function messageNode(role, label, text) {
@@ -312,6 +437,7 @@
     renderProjects();
     if (state.admin) renderDevices();
     if (state.selectedSessionId) await selectSession(state.selectedSessionId, true);
+    else clearConversation();
     setConnected(true);
   }
 
@@ -427,7 +553,21 @@
     $('#composer').addEventListener('submit', sendMessage);
     $('#session-select').addEventListener('change', event => {
       if (event.target.value) selectSession(event.target.value);
+      else {
+        state.selectedSessionId = '';
+        clearConversation();
+      }
     });
+    $('#manage-synced-sessions').addEventListener('click', openSyncManager);
+    $('#local-session-select').addEventListener('change', event => {
+      const selected = state.localSessions.find(session => session.threadId === event.target.value);
+      $('#sync-session-name').value = selected?.name || '';
+      $('#add-synced-session').disabled = !selected;
+    });
+    $('#sync-session-name').addEventListener('input', event => {
+      $('#add-synced-session').disabled = !$('#local-session-select').value || !event.target.value.trim();
+    });
+    $('#add-synced-session').addEventListener('click', addSyncedSession);
     $('#refresh-button').addEventListener('click', () => loadWorkspaceData().catch(error => showToast(error.message)));
     $('#message-input').addEventListener('input', event => {
       event.target.style.height = 'auto';

@@ -62,7 +62,23 @@ class RemoteStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.authenticate(devices[0]["deviceToken"]))
         self.assertIsNotNone(self.store.authenticate(devices[1]["deviceToken"]))
 
+    def test_synced_sessions_are_persisted_independently_and_thread_ids_are_unique(self) -> None:
+        created = self.store.create_synced_session(
+            name="Woxsheet",
+            thread_id="00000000-0000-4000-8000-000000000001",
+        )
+
+        self.assertEqual(self.store.list_synced_sessions(), [created])
+        self.assertEqual(self.store.get_synced_session(created["id"]), created)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.create_synced_session(
+                name="Duplicate",
+                thread_id="00000000-0000-4000-8000-000000000001",
+            )
+
+        self.assertTrue(self.store.delete_synced_session(created["id"]))
+        self.assertEqual(self.store.list_synced_sessions(), [])
+
 
 if __name__ == "__main__":
     unittest.main()
-
