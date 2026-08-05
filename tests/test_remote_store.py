@@ -36,6 +36,11 @@ class RemoteStoreTests(unittest.TestCase):
         self.assertNotEqual(pairing_hash, pairing["secret"])
         self.assertNotEqual(token_hash, claimed["deviceToken"])
         self.assertIsNotNone(self.store.authenticate(claimed["deviceToken"]))
+        reopened_store = RemoteStore(self.database)
+        reopened_store.initialize()
+        self.assertEqual(
+            reopened_store.authenticate(claimed["deviceToken"])["name"], "My phone"
+        )
         with self.assertRaises(PairingRejected):
             self.store.claim_pairing(pairing["id"], pairing["secret"], "Other")
 

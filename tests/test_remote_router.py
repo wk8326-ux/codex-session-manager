@@ -150,6 +150,19 @@ class RemoteRouterTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in response.body], [created.body["id"]])
         self.assertNotIn("resumePrompt", response.body[0])
 
+    def test_authenticated_device_can_restore_its_persisted_identity(self) -> None:
+        token = self.pair()
+        response = self.remote.dispatch(
+            "GET",
+            "/api/remote/device",
+            {"Authorization": f"Bearer {token}"},
+            None,
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body["name"], "Phone")
+        self.assertIn("createdAt", response.body)
+
     def test_remote_router_has_no_admin_or_project_crud_routes(self) -> None:
         token = self.pair()
         headers = {"Authorization": f"Bearer {token}"}

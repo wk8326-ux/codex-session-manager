@@ -115,6 +115,9 @@ class RemoteApplicationTests(unittest.TestCase):
 
         self.assertTrue(status["tunnel"]["running"])
         self.assertEqual(status["tunnel"]["provider"], "frp")
+        self.assertEqual(
+            status["projectSummary"], {"runningCount": 1, "localCount": 1}
+        )
 
     def test_session_detail_is_limited_to_recent_turns(self) -> None:
         synced = self.application.create_synced_session(

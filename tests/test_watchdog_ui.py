@@ -6,50 +6,92 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WatchdogUiTests(unittest.TestCase):
-    def test_both_workspaces_support_persistent_system_aware_theming(self) -> None:
-        for filename in ("index.html", "watchdog.html"):
+    def test_all_workspaces_reuse_one_persistent_system_aware_theme_control(self) -> None:
+        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
+        for filename in ("index.html", "watchdog.html", "remote.html"):
             with self.subTest(filename=filename):
                 html = (ROOT / filename).read_text(encoding="utf-8")
 
-                self.assertEqual(html.count('id="theme-toggle"'), 1)
-                self.assertIn(':root[data-theme="dark"]', html)
+                self.assertNotIn('id="theme-toggle"', html)
+                self.assertEqual(html.count('src="/assets/console-sidebar.js?v=9"'), 1)
                 self.assertIn("prefers-color-scheme: dark", html)
                 self.assertIn("localhost-project-console.theme", html)
-                self.assertIn("localStorage.setItem(key, next)", html)
-                self.assertIn("window.addEventListener('storage'", html)
-                self.assertIn('aria-label="切换至深色模式"', html)
-                self.assertIn('title="切换至深色模式"', html)
-                self.assertIn('aria-pressed="false"', html)
                 self.assertLess(
                     html.index("document.documentElement.dataset.theme"),
-                    html.index("<style>"),
+                    html.index("</head>"),
                     "theme must resolve before styles are parsed to avoid a light-mode flash",
                 )
 
+        self.assertIn("localStorage.setItem(THEME_KEY, next)", sidebar_script)
+        self.assertIn("addEventListener('storage'", sidebar_script)
+        self.assertIn('aria-label="切换至深色模式"', sidebar_script)
+        self.assertIn('aria-pressed="false"', sidebar_script)
+
     def test_project_page_adds_only_one_watchdog_navigation_link(self) -> None:
         html = (ROOT / "index.html").read_text(encoding="utf-8")
+        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
 
-        self.assertEqual(html.count('href="/watchdog"'), 1)
+        self.assertEqual(html.count('href="/watchdog"'), 0)
+        self.assertEqual(
+            sidebar_script.count("navLink('watchdog', '/watchdog'"), 1
+        )
         self.assertNotIn("执行记录", html)
         self.assertNotIn("添加监控渠道", html)
 
     def test_sidebar_navigation_has_only_three_primary_entries(self) -> None:
         removed_labels = ["查看范围", "全部项目", "工作区", "自动化工具"]
+        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
+        expected_active = {
+            "index.html": "projects",
+            "watchdog.html": "watchdog",
+            "remote.html": "remote",
+        }
 
-        for filename in ("index.html", "watchdog.html", "remote.html"):
+        for filename, active in expected_active.items():
             with self.subTest(filename=filename):
                 html = (ROOT / filename).read_text(encoding="utf-8")
-                summary_class = "host-summary" if filename == "remote.html" else "sidebar-summary"
-                self.assertIn(f'class="{summary_class}"', html)
-                nav_start = html.index('<nav class="workspace-nav"')
-                nav = html[nav_start:html.index("</nav>", nav_start)]
-                for label in ("项目控制台", "会话监控", "远程会话"):
-                    self.assertEqual(nav.count(f">{label}<"), 1)
+                self.assertIn(
+                    f'<aside class="sidebar" data-console-sidebar data-active="{active}"',
+                    html,
+                )
+                self.assertEqual(html.count('data-console-sidebar'), 1)
                 for label in removed_labels:
-                    self.assertNotIn(f">{label}<", nav)
+                    self.assertNotIn(f">{label}<", sidebar_script)
 
-        watchdog_html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
-        self.assertIn('href="/watchdog" aria-current="page"', watchdog_html)
+        for route in (
+            "navLink('projects', '/', 'layout', '项目控制台')",
+            "navLink('watchdog', '/watchdog', 'activity', '会话监控')",
+            "navLink('remote', '/remote', 'globe', '远程会话')",
+        ):
+            self.assertEqual(sidebar_script.count(route), 1)
+
+    def test_shared_sidebar_owns_all_fixed_layout_and_copy(self) -> None:
+        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
+        sidebar_css = (ROOT / "assets" / "console-sidebar.css").read_text(encoding="utf-8")
+        remote_stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        server = (ROOT / "app.py").read_text(encoding="utf-8")
+
+        for text in (
+            "本地项目控制台",
+            "LOCALHOST / 8765",
+            "本地服务运行中",
+            "控制台在线",
+            "127.0.0.1:8765",
+            "每 5 秒同步一次状态",
+        ):
+            self.assertIn(text, sidebar_script)
+        self.assertIn(".sidebar[data-console-sidebar]", sidebar_css)
+        self.assertIn("/api/shell/project-summary", sidebar_script)
+        self.assertIn("setInterval(refreshProjectSummary, 5000)", sidebar_script)
+        self.assertIn("sessionStorage.setItem(SUMMARY_KEY", sidebar_script)
+        self.assertIn("top: 50%", sidebar_css)
+        self.assertIn("place-items: center", sidebar_css)
+        self.assertIn("translateX(22px)", sidebar_css)
+        self.assertNotIn(".theme-switch span", remote_stylesheet)
+        self.assertIn("grid-template-rows: auto auto auto 1fr auto auto", sidebar_css)
+        self.assertIn("font-size: 13px", sidebar_css)
+        self.assertEqual(server.count('"/assets/console-sidebar.css"'), 2)
+        self.assertEqual(server.count('"/assets/console-sidebar.js"'), 2)
 
     def test_watchdog_page_has_four_horizontal_tabs(self) -> None:
         html = (ROOT / "watchdog.html").read_text(encoding="utf-8")

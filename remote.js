@@ -1,31 +1,41 @@
 (() => {
   const TOKEN_KEY = 'localhost-project-console.remote-token';
-  const THEME_KEY = 'localhost-project-console.theme';
+  const DEVICE_KEY = 'localhost-project-console.remote-device';
   const ACTIVE_REFRESH_MS = 1200;
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
+  const LIVE_ACTIVITY_GRACE_MS = 180000;
+  const INITIAL_LIVE_TURN_MAX_AGE_MS = 7200000;
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
   const state = {
     admin: false,
     token: '',
     pendingToken: '',
+    device: null,
+    pendingDevice: null,
     sessions: [],
     localSessions: [],
-    projects: [],
     devices: [],
     selectedSessionId: '',
     cursor: 0,
     polling: false,
     pairingSecret: '',
     pairingId: '',
+    pairingUrl: '',
+    qrStream: null,
+    qrScanFrame: 0,
     conversation: null,
     conversationSignature: '',
     conversationRefreshTimer: 0,
+    conversationLoadingTimer: 0,
+    conversationSelectionVersion: 0,
     conversationRefreshInFlight: false,
     followTail: true,
     lastUpdatedAt: 0,
     lastEvent: null,
+    lastEventAt: 0,
+    lastConversationActivityAt: 0,
     adminStatus: null,
   };
 
@@ -41,6 +51,36 @@
     state.token = value;
   }
 
+  function readStoredDevice() {
+    try { return JSON.parse(localStorage.getItem(DEVICE_KEY) || 'null'); } catch { return null; }
+  }
+
+  function storeRememberedDevice(device) {
+    try {
+      if (device) localStorage.setItem(DEVICE_KEY, JSON.stringify(device));
+      else localStorage.removeItem(DEVICE_KEY);
+    } catch {}
+    state.device = device;
+  }
+
+  function forgetRememberedDevice() {
+    storeToken('');
+    storeRememberedDevice(null);
+  }
+
+  async function requestPersistentStorage() {
+    try {
+      if (navigator.storage?.persist) await navigator.storage.persist();
+    } catch {}
+  }
+
+  function renderDeviceIdentity() {
+    const identity = $('#device-identity');
+    const device = state.device || readStoredDevice();
+    identity.hidden = state.admin || !device?.name;
+    identity.textContent = device?.name ? `已配对设备 · ${device.name}` : '';
+  }
+
   function showToast(message) {
     const toast = $('#toast');
     toast.textContent = message;
@@ -51,9 +91,6 @@
 
   function setConnected(connected, detail = '') {
     $('#offline-banner').hidden = connected;
-    $('.connection-dot')?.classList.toggle('offline', !connected);
-    $('#connection-label').textContent = connected ? '主机已连接' : '主机连接中断';
-    $('#connection-detail').textContent = detail || (connected ? '事件通道已连接' : '等待重新连接');
     $('#sync-state').textContent = connected ? '已同步' : '重新连接中';
   }
 
@@ -65,48 +102,119 @@
       ? null
       : await response.json().catch(() => ({ message: '服务返回了无法读取的响应。' }));
     if (response.status === 401 && !state.admin) {
-      storeToken('');
+      forgetRememberedDevice();
       throw new Error('设备授权已失效，请重新扫码配对。');
     }
     if (!response.ok) throw new Error(payload?.message || `请求失败 (${response.status})`);
     return payload;
   }
 
-  function applyTheme(theme, persist = false) {
-    const next = theme === 'dark' ? 'dark' : 'light';
-    document.documentElement.dataset.theme = next;
-    document.documentElement.style.colorScheme = next;
-    document.querySelector('meta[name="theme-color"]').content = next === 'dark' ? '#0f1513' : '#e9eeeb';
-    const dark = next === 'dark';
-    $('#theme-toggle').setAttribute('aria-pressed', String(dark));
-    $('#theme-label').textContent = dark ? '夜间模式' : '日间模式';
-    if (persist) {
-      try { localStorage.setItem(THEME_KEY, next); } catch {}
-    }
+  function stopQrScanner() {
+    cancelAnimationFrame(state.qrScanFrame);
+    state.qrScanFrame = 0;
+    state.qrStream?.getTracks().forEach(track => track.stop());
+    state.qrStream = null;
+    $('#qr-video').srcObject = null;
+    $('#qr-scanner').hidden = true;
   }
 
-  function setupTheme() {
-    applyTheme(document.documentElement.dataset.theme);
-    $('#theme-toggle').addEventListener('click', () => {
-      applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
-    });
+  function showPairingStep() {
+    const ready = Boolean(state.pairingId && state.pairingSecret);
+    $('#pair-start').hidden = ready;
+    $('#pair-details').hidden = !ready;
+    $('#mobile-comparison').hidden = true;
+    $('#claim-pairing').hidden = false;
+    $('#claim-pairing').disabled = !ready;
+    $('#pair-device-name').disabled = false;
+    if (ready) $('#pair-device-name').focus();
+  }
+
+  function acceptPairingUrl(value) {
+    try {
+      const url = new URL(String(value || '').trim(), location.href);
+      const pairingId = url.searchParams.get('pairing') || '';
+      const secret = new URLSearchParams(url.hash.slice(1)).get('secret') || '';
+      if (!pairingId || !secret) throw new Error('没有识别到有效的配对信息。');
+      if (url.origin !== location.origin) {
+        location.assign(url.href);
+        return false;
+      }
+      state.pairingId = pairingId;
+      state.pairingSecret = secret;
+      stopQrScanner();
+      history.replaceState(null, '', `${location.pathname}?pairing=${encodeURIComponent(pairingId)}`);
+      $('#pair-error').textContent = '';
+      showPairingStep();
+      return true;
+    } catch (error) {
+      $('#pair-error').textContent = error.message || '配对链接无法读取。';
+      return false;
+    }
   }
 
   function parsePairingLink() {
     const query = new URLSearchParams(location.search);
     const fragment = new URLSearchParams(location.hash.slice(1));
-    state.pairingId = query.get('pairing') || '';
-    state.pairingSecret = fragment.get('secret') || '';
-    if (state.pairingSecret) history.replaceState(null, '', `${location.pathname}?pairing=${encodeURIComponent(state.pairingId)}`);
+    const pairingId = query.get('pairing') || '';
+    const secret = fragment.get('secret') || '';
+    if (pairingId && secret) acceptPairingUrl(location.href);
+  }
+
+  function resetPairing() {
+    stopQrScanner();
+    state.pairingId = '';
+    state.pairingSecret = '';
+    state.pendingToken = '';
+    state.pendingDevice = null;
+    $('#pair-link-input').value = '';
+    $('#pair-error').textContent = '';
+    history.replaceState(null, '', location.pathname);
+    showPairingStep();
+  }
+
+  async function scanQrFrame(detector) {
+    if (!state.qrStream) return;
+    try {
+      const codes = await detector.detect($('#qr-video'));
+      const value = codes.find(code => code.rawValue)?.rawValue;
+      if (value && acceptPairingUrl(value)) return;
+    } catch {}
+    state.qrScanFrame = requestAnimationFrame(() => scanQrFrame(detector));
+  }
+
+  async function startQrScanner() {
+    $('#pair-error').textContent = '';
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !('BarcodeDetector' in window)) {
+      $('#pair-error').textContent = '当前浏览器无法直接调用摄像头扫码，请粘贴电脑端的配对链接。';
+      $('#pair-link-input').focus();
+      return;
+    }
+    try {
+      const supported = BarcodeDetector.getSupportedFormats
+        ? await BarcodeDetector.getSupportedFormats()
+        : ['qr_code'];
+      if (!supported.includes('qr_code')) throw new Error('当前浏览器不支持二维码识别。');
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      state.qrStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }, audio: false,
+      });
+      $('#qr-video').srcObject = state.qrStream;
+      $('#qr-scanner').hidden = false;
+      await $('#qr-video').play();
+      scanQrFrame(detector);
+    } catch (error) {
+      stopQrScanner();
+      $('#pair-error').textContent = error?.name === 'NotAllowedError'
+        ? '相机权限未开启。允许使用相机后重新点击扫描，或粘贴配对链接。'
+        : (error.message || '摄像头暂时无法使用，请粘贴配对链接。');
+    }
   }
 
   function showPairScreen(message = '') {
     $('#app-shell').hidden = true;
     $('#pair-screen').hidden = false;
     $('#pair-error').textContent = message;
-    const validLink = Boolean(state.pairingId && state.pairingSecret);
-    $('#claim-pairing').disabled = !validLink;
-    if (!validLink && !message) $('#pair-error').textContent = '请在电脑端生成二维码后重新扫码。';
+    showPairingStep();
   }
 
   async function claimPairing() {
@@ -122,7 +230,9 @@
         }),
       });
       state.pendingToken = result.deviceToken;
+      state.pendingDevice = { id: result.deviceId, name: result.deviceName };
       state.pairingSecret = '';
+      $('#pair-details').hidden = true;
       $('#claim-pairing').hidden = true;
       $('#pair-device-name').disabled = true;
       $('#mobile-comparison-code').textContent = result.comparisonCode;
@@ -135,17 +245,22 @@
 
   async function enterAfterPairing() {
     storeToken(state.pendingToken);
+    storeRememberedDevice(state.pendingDevice);
+    await requestPersistentStorage();
     state.pendingToken = '';
+    state.pendingDevice = null;
     $('#pair-screen').hidden = true;
     $('#app-shell').hidden = false;
+    renderDeviceIdentity();
     await startWorkspace();
+    showToast('这台设备已记住，后续打开将自动连接。');
   }
 
   function stateLabel(value) {
     const labels = {
-      active: '运行中', inProgress: '运行中', idle: '空闲', completed: '已完成',
-      failed: '失败', interrupted: '已中断', systemError: '系统错误', notLoaded: '未载入',
-      running: '运行中', online: '在线', stopped: '已关闭', offline: '离线',
+      active: '正在运行', inProgress: '正在运行', idle: '已停止', completed: '已完成',
+      failed: '运行失败', interrupted: '已中断', systemError: '系统错误', notLoaded: '已停止',
+      running: '正在运行', started: '正在运行', online: '在线', stopped: '已停止', offline: '离线',
     };
     return labels[value] || value || '未知';
   }
@@ -169,13 +284,17 @@
 
   function clearConversation() {
     clearTimeout(state.conversationRefreshTimer);
+    clearTimeout(state.conversationLoadingTimer);
     state.conversation = null;
     state.conversationSignature = '';
     state.lastEvent = null;
+    state.lastEventAt = 0;
+    state.lastConversationActivityAt = 0;
     state.followTail = true;
     $('#conversation-meta').textContent = '尚未选择会话';
     $('#conversation-status').textContent = '未选择';
-    $('#conversation-status').className = 'status-badge';
+    $('#conversation-status').className = 'status-badge stopped';
+    $('#session-select').setAttribute('aria-busy', 'false');
     $('#message-input').disabled = true;
     $('#send-button').disabled = true;
     $('#runtime-strip').className = 'runtime-strip';
@@ -192,7 +311,7 @@
     const title = document.createElement('strong');
     title.textContent = state.sessions.length ? '等待选择会话' : '尚未添加同步会话';
     const copy = document.createElement('span');
-    copy.textContent = state.admin ? '使用“管理同步”从本机 Codex 选择' : '请在电脑端添加需要同步的会话';
+    copy.textContent = state.admin ? '使用“添加同步会话”从本机 Codex 选择' : '请在电脑端添加需要同步的会话';
     empty.append(title, copy);
     transcript.append(empty);
   }
@@ -404,15 +523,25 @@
     if (!container.childNodes.length) container.textContent = text;
   }
 
-  function messageNode(role, label, text) {
+  function appendStreamCaret(body) {
+    const textBlocks = [...body.querySelectorAll('p, li, h3, blockquote')];
+    const target = textBlocks.at(-1) || body;
+    const caret = document.createElement('span');
+    caret.className = 'stream-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    target.append(caret);
+  }
+
+  function messageNode(role, label, text, streaming = false) {
     const message = document.createElement('article');
-    message.className = `message ${role}`;
+    message.className = `message ${role}${streaming ? ' streaming' : ''}`;
     const heading = document.createElement('span');
     heading.className = 'message-label';
     heading.textContent = label;
     const body = document.createElement('div');
     body.className = 'message-body';
     appendRichText(body, text);
+    if (streaming) appendStreamCaret(body);
     message.append(heading, body);
     return message;
   }
@@ -420,12 +549,52 @@
   function conversationStatus(detail) {
     const turns = detail?.turns || [];
     const latest = turns.at(-1);
+    const latestItem = (latest?.items || []).at(-1);
     const activeStates = ['active', 'inProgress', 'running', 'started'];
     if (activeStates.includes(latest?.status)) return 'inProgress';
+    if (activeStates.includes(latestItem?.status)) return 'inProgress';
     if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
     if (activeStates.includes(detail?.status)) return 'inProgress';
+    if (latest?.status === 'completed') return 'completed';
+    const recentContent = Date.now() - state.lastConversationActivityAt < LIVE_ACTIVITY_GRACE_MS;
+    const recentEvent = Date.now() - state.lastEventAt < LIVE_ACTIVITY_GRACE_MS;
+    if (recentContent || recentEvent) return 'inProgress';
     if (latest?.status) return latest.status;
     return detail?.status === 'notLoaded' ? 'idle' : (detail?.status || 'idle');
+  }
+
+  function uuidV7Timestamp(value) {
+    const compact = String(value || '').replaceAll('-', '');
+    if (!/^[0-9a-f]{32}$/i.test(compact) || compact[12].toLowerCase() !== '7') return 0;
+    const timestamp = Number.parseInt(compact.slice(0, 12), 16);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  function conversationLooksRecentlyActive(detail) {
+    const latest = (detail?.turns || []).at(-1);
+    if (!latest || latest.error || latest.status === 'completed') return false;
+    const lastItem = (latest.items || []).at(-1);
+    const activeStates = ['active', 'inProgress', 'running', 'started'];
+    const terminalStates = ['completed', 'failed', 'interrupted', 'cancelled'];
+    if (activeStates.includes(lastItem?.status)) return true;
+    if (terminalStates.includes(lastItem?.status)) return false;
+    const unfinishedTypes = new Set([
+      'reasoning', 'commandExecution', 'fileChange', 'mcpToolCall', 'webSearch',
+      'plan', 'subAgentActivity', 'contextCompaction',
+    ]);
+    const startedAt = uuidV7Timestamp(latest.id);
+    const age = Date.now() - startedAt;
+    return unfinishedTypes.has(lastItem?.type)
+      && startedAt > 0
+      && age >= -60000
+      && age < INITIAL_LIVE_TURN_MAX_AGE_MS;
+  }
+
+  function conversationStatusClass(status) {
+    if (status === 'inProgress') return 'running';
+    if (['failed', 'interrupted', 'systemError'].includes(status)) return 'failed';
+    if (status === 'completed') return 'completed';
+    return 'stopped';
   }
 
   function activityLabel(item) {
@@ -503,12 +672,60 @@
     transcript.scrollTo({ top: transcript.scrollHeight, behavior });
   }
 
+  function renderConversationLoading(session) {
+    if (!session || session.id !== state.selectedSessionId || state.conversation) return;
+    $('#conversation-meta').textContent = session.threadId;
+    $('#conversation-status').textContent = '载入中';
+    $('#conversation-status').className = 'status-badge loading';
+    $('#runtime-strip').className = 'runtime-strip loading';
+    $('#runtime-signal').className = 'runtime-signal runtime-rotor loading';
+    $('#runtime-activity').textContent = '正在载入会话';
+    $('#runtime-detail').textContent = '同步最近的任务回合与运行状态';
+    $('#runtime-metrics').textContent = '读取中';
+    const transcript = $('#transcript');
+    transcript.setAttribute('aria-busy', 'true');
+    transcript.replaceChildren();
+    const skeleton = document.createElement('div');
+    skeleton.className = 'conversation-skeleton';
+    skeleton.setAttribute('aria-label', '正在载入会话内容');
+    for (const width of ['58%', '92%', '74%', '42%']) {
+      const line = document.createElement('span');
+      line.style.setProperty('--skeleton-width', width);
+      skeleton.append(line);
+    }
+    transcript.append(skeleton);
+  }
+
+  function renderConversationReadError(session, error) {
+    $('#conversation-meta').textContent = session?.threadId || '会话读取失败';
+    $('#conversation-status').textContent = '读取失败';
+    $('#conversation-status').className = 'status-badge failed';
+    $('#runtime-strip').className = 'runtime-strip failed';
+    $('#runtime-signal').className = 'runtime-signal runtime-rotor failed';
+    $('#runtime-activity').textContent = '暂时无法读取会话';
+    $('#runtime-detail').textContent = '系统会继续自动重试，也可以点击右上角刷新';
+    $('#runtime-metrics').textContent = '连接异常';
+    const transcript = $('#transcript');
+    transcript.setAttribute('aria-busy', 'false');
+    transcript.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'conversation-empty error';
+    const title = document.createElement('strong');
+    title.textContent = '会话读取失败';
+    const detail = document.createElement('span');
+    detail.textContent = error?.message || '等待下一次自动同步';
+    empty.append(title, detail);
+    transcript.append(empty);
+  }
+
   function renderRuntime(detail) {
     const status = conversationStatus(detail);
-    const running = status === 'inProgress';
-    const failed = ['failed', 'interrupted', 'systemError'].includes(status);
-    $('#runtime-strip').className = `runtime-strip${running ? ' running' : ''}${failed ? ' failed' : ''}`;
-    $('#runtime-signal').className = `runtime-signal runtime-rotor${running ? ' running' : ''}${failed ? ' failed' : ''}`;
+    const statusClass = conversationStatusClass(status);
+    const running = statusClass === 'running';
+    $('#conversation-status').textContent = stateLabel(status);
+    $('#conversation-status').className = `status-badge ${statusClass}`;
+    $('#runtime-strip').className = `runtime-strip ${statusClass}`;
+    $('#runtime-signal').className = `runtime-signal runtime-rotor ${statusClass}`;
     $('#runtime-activity').textContent = conversationActivity(detail);
     const time = state.lastUpdatedAt
       ? new Date(state.lastUpdatedAt).toLocaleTimeString('zh-CN', { hour12: false })
@@ -520,10 +737,10 @@
   }
 
   function renderConversation(session, detail) {
+    clearTimeout(state.conversationLoadingTimer);
+    state.conversationLoadingTimer = 0;
     $('#conversation-meta').textContent = session.threadId;
     const status = conversationStatus(detail);
-    $('#conversation-status').textContent = stateLabel(status);
-    $('#conversation-status').className = `status-badge${status === 'inProgress' ? ' running' : ''}`;
     $('#message-input').disabled = false;
     $('#send-button').disabled = false;
     renderRuntime(detail);
@@ -555,7 +772,12 @@
           && turnIndex === turns.length - 1
           && itemIndex === items.length - 1;
         if (item.type === 'userMessage' && item.text) section.append(messageNode('user', '你', item.text));
-        else if (['agentMessage', 'plan'].includes(item.type) && item.text) section.append(messageNode('agent', 'Codex', item.text));
+        else if (['agentMessage', 'plan'].includes(item.type) && item.text) {
+          const streaming = status === 'inProgress'
+            && turnIndex === turns.length - 1
+            && itemIndex === items.length - 1;
+          section.append(messageNode('agent', 'Codex', item.text, streaming));
+        }
         else if (item.type === 'reasoning' && item.text) section.append(reasoningNode(item, latestRunningReasoning));
         else section.append(activityNode(item));
       });
@@ -592,13 +814,23 @@
   async function refreshSelectedSession({ force = false, quiet = true } = {}) {
     if (!state.selectedSessionId || state.conversationRefreshInFlight) return;
     const sessionId = state.selectedSessionId;
+    const selectionVersion = state.conversationSelectionVersion;
     state.conversationRefreshInFlight = true;
     if (!quiet) $('#sync-state').textContent = '读取会话中';
     try {
       const result = await api(`/api/remote/sessions/${encodeURIComponent(sessionId)}?turnLimit=6`);
-      if (sessionId !== state.selectedSessionId) return;
+      if (sessionId !== state.selectedSessionId || selectionVersion !== state.conversationSelectionVersion) return;
+      clearTimeout(state.conversationLoadingTimer);
+      $('#session-select').setAttribute('aria-busy', 'false');
       const session = state.sessions.find(item => item.id === sessionId) || result;
       const signature = JSON.stringify(result.conversation || {});
+      const signatureChanged = Boolean(state.conversationSignature)
+        && signature !== state.conversationSignature;
+      if (signatureChanged || (
+        !state.conversationSignature && conversationLooksRecentlyActive(result.conversation)
+      )) {
+        state.lastConversationActivityAt = Date.now();
+      }
       state.lastUpdatedAt = Date.now();
       state.conversation = result.conversation;
       if (force || signature !== state.conversationSignature) {
@@ -609,6 +841,12 @@
       }
       setConnected(true);
     } catch (error) {
+      clearTimeout(state.conversationLoadingTimer);
+      if (sessionId === state.selectedSessionId && selectionVersion === state.conversationSelectionVersion) {
+        $('#session-select').setAttribute('aria-busy', 'false');
+        const session = state.sessions.find(item => item.id === sessionId);
+        if (!state.conversation || $('#transcript .conversation-skeleton')) renderConversationReadError(session, error);
+      }
       if (!quiet) showToast(error.message);
       setConnected(false, '会话读取失败');
     } finally {
@@ -621,32 +859,25 @@
 
   async function selectSession(sessionId, quiet = false) {
     clearTimeout(state.conversationRefreshTimer);
+    clearTimeout(state.conversationLoadingTimer);
+    state.conversationSelectionVersion += 1;
     state.selectedSessionId = sessionId;
     state.conversation = null;
     state.conversationSignature = '';
     state.lastEvent = null;
+    state.lastEventAt = 0;
+    state.lastConversationActivityAt = 0;
     state.followTail = true;
     renderSessions();
+    $('#session-select').setAttribute('aria-busy', 'true');
+    $('#message-input').disabled = true;
+    $('#send-button').disabled = true;
+    const session = state.sessions.find(item => item.id === sessionId);
+    const selectionVersion = state.conversationSelectionVersion;
+    state.conversationLoadingTimer = setTimeout(() => {
+      if (selectionVersion === state.conversationSelectionVersion) renderConversationLoading(session);
+    }, 180);
     await refreshSelectedSession({ force: true, quiet });
-  }
-
-  function renderProjects() {
-    const list = $('#project-list');
-    list.replaceChildren();
-    $('#project-count').textContent = `${state.projects.length} 个项目`;
-    for (const project of state.projects) {
-      const row = document.createElement('div');
-      row.className = 'project-row';
-      const name = document.createElement('strong');
-      name.textContent = project.name;
-      const mode = document.createElement('small');
-      mode.textContent = project.mode === 'external' ? '网页入口' : '本地项目';
-      const status = document.createElement('span');
-      status.className = `project-state ${project.state}`;
-      status.textContent = project.stateLabel;
-      row.append(name, mode, status);
-      list.append(row);
-    }
   }
 
   function formatDate(value) {
@@ -657,6 +888,7 @@
 
   function renderRemoteAccess(status) {
     state.adminStatus = status;
+    window.consoleSidebar?.setProjectSummary(status?.projectSummary);
     const tunnel = status?.tunnel || {};
     const labels = {
       running: ['FRP 隧道运行中', `客户端进程 ${tunnel.pid || '已连接'} · 随控制台启动和关闭`],
@@ -725,16 +957,14 @@
   }
 
   async function loadWorkspaceData() {
-    const tasks = [api('/api/remote/sessions'), api('/api/remote/projects')];
+    const tasks = [api('/api/remote/sessions')];
     if (state.admin) tasks.push(api('/api/remote/devices'));
-    const [sessions, projects, devices = []] = await Promise.all(tasks);
+    const [sessions, devices = []] = await Promise.all(tasks);
     state.sessions = sessions;
-    state.projects = projects;
     state.devices = devices;
     if (state.selectedSessionId && !sessions.some(item => item.id === state.selectedSessionId)) state.selectedSessionId = '';
     if (!state.selectedSessionId && sessions.length) state.selectedSessionId = sessions[0].id;
     renderSessions();
-    renderProjects();
     if (state.admin) renderDevices();
     if (state.selectedSessionId) await selectSession(state.selectedSessionId, true);
     else clearConversation();
@@ -749,6 +979,7 @@
     const button = $('#send-button');
     button.disabled = true;
     state.followTail = true;
+    state.lastConversationActivityAt = Date.now();
     $('#runtime-strip').className = 'runtime-strip running';
     $('#runtime-signal').className = 'runtime-signal runtime-rotor running';
     $('#runtime-activity').textContent = '等待 Codex 响应';
@@ -777,6 +1008,9 @@
     const relevant = [...events].reverse().find(event => event.threadId === selected?.threadId);
     if (!relevant) return;
     state.lastEvent = relevant;
+    const terminalTurn = relevant.method === 'turn/completed';
+    const eventTime = Date.parse(relevant.timestamp || '');
+    state.lastEventAt = !terminalTurn && Number.isFinite(eventTime) ? eventTime : 0;
     clearTimeout(state.conversationRefreshTimer);
     scheduleConversationRefresh(60);
   }
@@ -810,6 +1044,8 @@
         method: 'POST',
         body: JSON.stringify({ baseUrl: $('#public-base-url').value.trim() }),
       });
+      state.pairingUrl = result.pairingUrl;
+      $('#copy-pairing-link').disabled = false;
       const code = qrcode(0, 'M');
       code.addData(result.pairingUrl);
       code.make();
@@ -821,13 +1057,27 @@
       const updateExpiry = () => {
         const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
         $('#pairing-expiry').textContent = seconds ? `${seconds} 秒后失效` : '二维码已失效';
-        if (!seconds) clearInterval(createPairing.timer);
+        if (!seconds) {
+          clearInterval(createPairing.timer);
+          state.pairingUrl = '';
+          $('#copy-pairing-link').disabled = true;
+        }
       };
       updateExpiry();
       createPairing.timer = setInterval(updateExpiry, 1000);
     } catch (error) {
       showToast(error.message);
     } finally { button.disabled = false; }
+  }
+
+  async function copyPairingLink() {
+    if (!state.pairingUrl) return;
+    try {
+      await navigator.clipboard.writeText(state.pairingUrl);
+      showToast('配对链接已复制。');
+    } catch {
+      showToast('无法访问剪贴板，请直接使用二维码。');
+    }
   }
 
   function switchView(view) {
@@ -846,15 +1096,22 @@
   function switchMobileView(view) {
     document.body.dataset.mobileView = view;
     $$('.mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.mobileView === view));
-    if (view === 'projects') switchView('projects');
-    else if (view === 'devices') switchView('devices');
+    if (view === 'devices') switchView('devices');
     else switchView('sessions');
   }
 
   function setupInteractions() {
+    $('#start-qr-scan').addEventListener('click', startQrScanner);
+    $('#stop-qr-scan').addEventListener('click', stopQrScanner);
+    $('#reset-pairing').addEventListener('click', resetPairing);
+    $('#pair-link-form').addEventListener('submit', event => {
+      event.preventDefault();
+      acceptPairingUrl($('#pair-link-input').value);
+    });
     $('#claim-pairing').addEventListener('click', claimPairing);
     $('#confirm-pairing').addEventListener('click', enterAfterPairing);
     $('#create-pairing').addEventListener('click', createPairing);
+    $('#copy-pairing-link').addEventListener('click', copyPairingLink);
     $('#composer').addEventListener('submit', sendMessage);
     $('#session-select').addEventListener('change', event => {
       if (event.target.value) selectSession(event.target.value);
@@ -890,6 +1147,7 @@
     addEventListener('online', () => setConnected(true));
     addEventListener('offline', () => setConnected(false));
     document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') stopQrScanner();
       if (!state.selectedSessionId) return;
       clearTimeout(state.conversationRefreshTimer);
       scheduleConversationRefresh(document.visibilityState === 'hidden' ? HIDDEN_REFRESH_MS : 80);
@@ -912,10 +1170,10 @@
   }
 
   async function initialize() {
-    setupTheme();
     setupInteractions();
     parsePairingLink();
     state.token = readToken();
+    state.device = readStoredDevice();
     let status = null;
     try {
       status = await refreshAdminStatus(true);
@@ -923,16 +1181,22 @@
     state.admin = Boolean(status);
     document.body.classList.toggle('admin-mode', state.admin);
     document.body.classList.toggle('remote-mode', !state.admin);
+    renderDeviceIdentity();
     $$('.admin-only').forEach(element => {
       if (!state.admin) element.hidden = true;
       else if (!element.hasAttribute('data-view-panel')) element.hidden = false;
     });
     if (state.admin) {
-      $('#host-label').textContent = 'LOCALHOST / 8765';
       await startWorkspace();
       setInterval(() => refreshAdminStatus().catch(() => {}), 5000);
     } else if (state.token) {
-      await startWorkspace();
+      try {
+        storeRememberedDevice(await api('/api/remote/device'));
+        renderDeviceIdentity();
+        await startWorkspace();
+      } catch (error) {
+        showPairScreen(error.message);
+      }
     } else {
       showPairScreen();
     }

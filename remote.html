@@ -9,6 +9,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/assets/project-console-icon.png">
   <link rel="stylesheet" href="/remote.css">
+  <link rel="stylesheet" href="/assets/console-sidebar.css?v=8">
   <script>
     (() => {
       const key = 'localhost-project-console.theme';
@@ -31,46 +32,55 @@
     <div class="pair-brand"><img src="/assets/project-console-icon.png" alt=""><span>LOCAL PROJECT CONSOLE</span></div>
     <div class="pair-panel">
       <p class="eyebrow">设备配对</p>
-      <h1 id="pair-title">连接这台设备</h1>
-      <p class="pair-copy">为这台手机命名，完成后即可查看已同步会话并发送消息。</p>
-      <label for="pair-device-name">设备名称</label>
-      <input id="pair-device-name" maxlength="80" value="我的手机" autocomplete="off">
-      <button class="button primary wide" id="claim-pairing" type="button">确认配对</button>
+      <h1 id="pair-title">连接到工作台</h1>
+      <p class="pair-copy">首次连接需要扫描电脑端生成的二维码。配对成功后，这台设备会被记住。</p>
+
+      <div class="pair-start" id="pair-start">
+        <div class="pair-memory">
+          <span class="pair-memory-mark" aria-hidden="true"></span>
+          <div><strong>配对一次，保持登录</strong><small>除非在电脑端撤销设备或清除本机数据，否则无需再次扫码。</small></div>
+        </div>
+        <button class="button primary wide scan-button" id="start-qr-scan" type="button"><span class="scan-icon" aria-hidden="true"></span>扫描电脑二维码</button>
+        <div class="pair-divider"><span>或粘贴配对链接</span></div>
+        <form class="pair-link-form" id="pair-link-form">
+          <label for="pair-link-input">配对链接</label>
+          <div class="pair-link-row">
+            <input id="pair-link-input" name="pairing-link" type="url" inputmode="url" autocomplete="off" aria-describedby="pair-error" placeholder="https://console.example.com/pair?...">
+            <button class="button" type="submit">读取</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="qr-scanner" id="qr-scanner" hidden>
+        <div class="scanner-head"><strong>扫描电脑二维码</strong><button class="icon-button" id="stop-qr-scan" type="button" aria-label="关闭扫码" title="关闭扫码">×</button></div>
+        <div class="scanner-viewport"><video id="qr-video" autoplay playsinline muted></video><span class="scanner-frame" aria-hidden="true"></span></div>
+        <p id="scan-status" role="status">将二维码完整放入取景框</p>
+      </div>
+
+      <div class="pair-details" id="pair-details" hidden>
+        <div class="pair-ready"><span aria-hidden="true">✓</span><div><strong>已读取配对二维码</strong><small>为这台设备命名，然后完成安全核对。</small></div></div>
+        <label for="pair-device-name">设备名称</label>
+        <input id="pair-device-name" name="device-name" maxlength="80" value="我的手机" autocomplete="name" aria-describedby="pair-error">
+        <button class="button primary wide" id="claim-pairing" type="button">确认配对</button>
+        <button class="button wide" id="reset-pairing" type="button">重新扫描</button>
+      </div>
       <div class="comparison" id="mobile-comparison" hidden>
         <span>核对桌面验证码</span>
         <strong id="mobile-comparison-code">000000</strong>
         <button class="button primary wide" id="confirm-pairing" type="button">验证码一致，进入工作台</button>
+        <small>确认后会安全保存此设备身份，下次直接进入。</small>
       </div>
       <p class="form-error" id="pair-error" role="alert"></p>
     </div>
   </section>
 
   <div class="app-shell" id="app-shell" hidden>
-    <aside class="sidebar" aria-label="控制台主导航">
-      <a class="brand" href="/" id="brand-home">
-        <img src="/assets/project-console-icon.png" alt="">
-        <span><strong>本地项目控制台</strong><small id="host-label">REMOTE / 8766</small></span>
-      </a>
-
-      <section class="host-summary" aria-label="远程连接状态">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <div><strong id="connection-label">主机已连接</strong><small id="connection-detail">事件通道准备中</small></div>
-      </section>
-
-      <nav class="workspace-nav" aria-label="主导航">
-        <a class="nav-link" href="/" id="project-console-link"><span class="nav-icon">▦</span><span>项目控制台</span></a>
-        <a class="nav-link" href="/watchdog" id="watchdog-link"><span class="nav-icon">⌁</span><span>会话监控</span></a>
-        <a class="nav-link current" href="/remote" aria-current="page"><span class="nav-icon">⌁</span><span>远程会话</span></a>
-      </nav>
-
-      <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false">
-        <span id="theme-label">日间模式</span><span class="theme-switch"><span></span></span>
-      </button>
-    </aside>
+    <aside class="sidebar" data-console-sidebar data-active="remote" aria-label="控制台主导航"></aside>
+    <script src="/assets/console-sidebar.js?v=9"></script>
 
     <main class="main" id="remote-main">
       <header class="topbar">
-        <div><p class="eyebrow">REMOTE WORKSPACE</p><h1>远程会话</h1></div>
+        <div><p class="eyebrow">REMOTE WORKSPACE</p><h1>远程会话</h1><p class="device-identity" id="device-identity" hidden></p></div>
         <div class="top-actions">
           <span class="sync-state" id="sync-state">正在同步</span>
           <button class="icon-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
@@ -79,7 +89,6 @@
 
       <nav class="view-tabs" aria-label="远程工作区视图">
         <button class="view-tab active" type="button" data-view="sessions" aria-pressed="true">会话</button>
-        <button class="view-tab" type="button" data-view="projects" aria-pressed="false">项目概览</button>
         <button class="view-tab admin-only" type="button" data-view="devices" aria-pressed="false">配对设备</button>
       </nav>
 
@@ -94,8 +103,8 @@
               <p id="conversation-meta">尚未选择会话</p>
             </div>
             <div class="conversation-actions">
-              <button class="button compact admin-only" id="manage-synced-sessions" type="button" hidden><span aria-hidden="true">＋</span> 管理同步</button>
-              <span class="status-badge" id="conversation-status">未选择</span>
+              <button class="button compact admin-only" id="manage-synced-sessions" type="button" hidden><span aria-hidden="true">＋</span> 添加同步会话</button>
+              <span class="status-badge stopped" id="conversation-status">未选择</span>
             </div>
           </header>
           <section class="runtime-strip" id="runtime-strip">
@@ -118,11 +127,6 @@
             <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">↑</button>
           </form>
         </section>
-      </section>
-
-      <section class="projects-view view" data-view-panel="projects" hidden>
-        <header class="section-heading"><div><p class="eyebrow">PROJECT STATUS</p><h2>项目概览</h2></div><span id="project-count">0 个项目</span></header>
-        <div class="project-table" id="project-list"></div>
       </section>
 
       <section class="devices-view view admin-only" data-view-panel="devices" hidden>
@@ -159,6 +163,7 @@
                 <span>桌面验证码</span>
                 <strong id="desktop-comparison-code">000000</strong>
                 <small id="pairing-expiry"></small>
+                <button class="button compact" id="copy-pairing-link" type="button">复制配对链接</button>
               </div>
             </section>
           </div>
@@ -173,7 +178,6 @@
 
     <nav class="mobile-nav" aria-label="移动端视图导航">
       <button class="active" type="button" data-mobile-view="sessions"><span>⌁</span>会话</button>
-      <button type="button" data-mobile-view="projects"><span>▦</span>项目</button>
       <button class="admin-only" type="button" data-mobile-view="devices"><span>●</span>设备</button>
     </nav>
   </div>
@@ -206,6 +210,6 @@
 
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="/assets/vendor/qrcode.min.js"></script>
-  <script src="/remote.js" defer></script>
+  <script src="/remote.js?v=8" defer></script>
 </body>
 </html>

@@ -64,6 +64,10 @@ class RemoteApplication:
 
     def admin_status(self) -> dict:
         base_url = self.remote_store.get_public_base_url() or self.default_base_url
+        projects = self.project_provider()
+        local_projects = [
+            project for project in projects if project.get("mode") != "external"
+        ]
         tunnel = (
             self.tunnel_status_provider()
             if self.tunnel_status_provider is not None
@@ -82,6 +86,12 @@ class RemoteApplication:
             "codexConnected": self.codex_connected,
             "baseUrl": base_url,
             "deviceCount": len(self.remote_store.list_devices()),
+            "projectSummary": {
+                "runningCount": sum(
+                    project.get("state") == "running" for project in local_projects
+                ),
+                "localCount": len(local_projects),
+            },
             "tunnel": tunnel,
         }
 

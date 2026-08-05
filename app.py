@@ -760,6 +760,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/remote.js":
             self.respond_file(ROOT / "remote.js", "text/javascript; charset=utf-8")
             return
+        if parsed.path == "/assets/console-sidebar.css":
+            self.respond_file(
+                ROOT / "assets" / "console-sidebar.css", "text/css; charset=utf-8"
+            )
+            return
+        if parsed.path == "/assets/console-sidebar.js":
+            self.respond_file(
+                ROOT / "assets" / "console-sidebar.js", "text/javascript; charset=utf-8"
+            )
+            return
         if parsed.path == "/assets/vendor/qrcode.min.js":
             self.respond_file(ROOT / "assets" / "vendor" / "qrcode.min.js", "text/javascript; charset=utf-8")
             return
@@ -988,6 +998,8 @@ class RemoteHandler(BaseHTTPRequestHandler):
             "/pair": ("remote.html", "text/html; charset=utf-8", "no-cache"),
             "/remote.css": ("remote.css", "text/css; charset=utf-8", "public, max-age=3600"),
             "/remote.js": ("remote.js", "text/javascript; charset=utf-8", "public, max-age=3600"),
+            "/assets/console-sidebar.css": ("assets/console-sidebar.css", "text/css; charset=utf-8", "public, max-age=3600"),
+            "/assets/console-sidebar.js": ("assets/console-sidebar.js", "text/javascript; charset=utf-8", "public, max-age=3600"),
             "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "no-cache"),
             "/service-worker.js": ("service-worker.js", "text/javascript; charset=utf-8", "no-cache"),
             "/assets/project-console-icon.png": ("assets/project-console-icon.png", "image/png", "public, max-age=86400"),

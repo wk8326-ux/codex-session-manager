@@ -166,15 +166,6 @@
     .tool-link { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; }
     .tool-link svg { width: 16px; height: 16px; }
 
-    .theme-controls { margin-top: auto; padding-top: 24px; border-top: 1px solid var(--border-subtle); }
-    .theme-toggle { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-button); font-size: 12px; font-weight: 600; text-align: left; }
-    .theme-toggle-copy { flex: 1; }
-    .theme-switch { position: relative; width: 48px; height: 26px; flex: none; color: var(--text-tertiary); background: var(--n-100); border: 1px solid var(--border-default); border-radius: 999px; }
-    .theme-switch svg { position: absolute; top: 6px; width: 12px; height: 12px; stroke-width: 2; }
-    .theme-switch .sun { left: 6px; }
-    .theme-switch .moon { right: 6px; }
-    .theme-thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: 50%; box-shadow: 0 1px 3px rgba(24, 34, 31, 0.16); transform: translateX(0); transition: transform 160ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out; }
-    :root[data-theme="dark"] .theme-thumb { transform: translateX(22px); }
 
     .host-status { margin-top: 16px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
     .host-line { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 12px; font-weight: 600; }
@@ -314,7 +305,7 @@
       .button.ghost:hover { background: var(--n-50); border-color: transparent; box-shadow: none; }
       .filter-button:hover, .nav-link:hover, .nav-section-trigger:hover { color: var(--text-primary); background: var(--surface-hover); }
       .tool-link:hover { color: var(--accent-700); background: var(--surface-hover); }
-      .theme-toggle:hover { color: var(--text-primary); background: var(--surface-hover); }
+
       .drag-handle:hover { color: var(--n-600); background: var(--n-50); }
       .service-row:hover { background-color: var(--n-25); }
       .service-row[data-state="running"]:hover, .service-row[data-state="online"]:hover { background-color: rgba(45, 113, 91, 0.055); }
@@ -351,7 +342,7 @@
       .tool-nav h2 { margin-bottom: 4px; }
       .tool-link { width: fit-content; min-height: 44px; background: var(--surface-hover); border-color: var(--border-subtle); }
       .theme-controls { grid-column: 1 / -1; margin-top: 0; padding-top: 12px; }
-      .theme-toggle { width: min(240px, 100%); background: var(--surface-hover); border-color: var(--border-subtle); }
+
       .host-status { display: none; }
       .workspace { padding: 30px 20px 52px; }
       .page-head { align-items: center; }
@@ -401,43 +392,13 @@
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
     }
   </style>
+  <link rel="stylesheet" href="/assets/console-sidebar.css?v=8">
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到项目列表</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="控制台主导航">
-      <a class="brand" href="/" aria-label="本地项目控制台首页">
-        <span class="brand-mark" id="brand-icon"></span>
-        <span class="brand-copy"><strong>本地项目控制台</strong><span>LOCALHOST / 8765</span></span>
-      </a>
-
-      <section class="sidebar-summary" aria-labelledby="summary-heading">
-        <p class="summary-label" id="summary-heading">本地服务运行中</p>
-        <div class="summary-number"><strong id="running-count">0</strong><span>/ <span id="local-count">0</span> 个</span></div>
-        <div class="summary-track" aria-hidden="true"><span id="running-track"></span></div>
-      </section>
-
-      <nav class="workspace-nav" aria-label="主导航">
-        <a class="nav-link" href="/" aria-current="page"><span data-icon="layout"></span><span>项目控制台</span></a>
-        <a class="nav-link" href="/watchdog"><span data-icon="activity"></span><span>会话监控</span></a>
-        <a class="nav-link" href="/remote"><span data-icon="globe"></span><span>远程会话</span></a>
-      </nav>
-      <div class="theme-controls">
-        <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换至深色模式" title="切换至深色模式">
-          <span class="theme-toggle-copy">日间模式</span>
-          <span class="theme-switch" aria-hidden="true">
-            <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/></svg>
-            <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
-            <span class="theme-thumb"></span>
-          </span>
-        </button>
-      </div>
-      <div class="host-status">
-        <div class="host-line"><span class="light" aria-hidden="true"></span><span>控制台在线</span></div>
-        <p class="host-address">127.0.0.1:8765</p>
-        <p class="refresh-state"><span id="refresh-icon"></span><span>每 5 秒同步一次状态</span></p>
-      </div>
-    </aside>
+    <aside class="sidebar" data-console-sidebar data-active="projects" aria-label="控制台主导航"></aside>
+    <script src="/assets/console-sidebar.js?v=9"></script>
 
     <main class="workspace" id="main-content">
       <div class="workspace-inner">
@@ -499,42 +460,6 @@
   <div id="toast" role="status" aria-live="polite"><span id="toast-icon"></span><span id="toast-message"></span></div>
 
   <script>
-    (() => {
-      const key = 'localhost-project-console.theme';
-      const button = document.getElementById('theme-toggle');
-      const label = button.querySelector('.theme-toggle-copy');
-      const media = window.matchMedia('(prefers-color-scheme: dark)');
-      let explicitPreference = false;
-      try { explicitPreference = ['light', 'dark'].includes(localStorage.getItem(key)); } catch { /* Keep the resolved theme without persistence. */ }
-
-      const applyTheme = (theme, persist = false) => {
-        const next = theme === 'dark' ? 'dark' : 'light';
-        document.documentElement.dataset.theme = next;
-        document.documentElement.style.colorScheme = next;
-        document.querySelector('meta[name="theme-color"]').content = next === 'dark' ? '#0f1513' : '#e9eeeb';
-        const dark = next === 'dark';
-        button.setAttribute('aria-pressed', String(dark));
-        button.setAttribute('aria-label', dark ? '切换至浅色模式' : '切换至深色模式');
-        button.title = dark ? '切换至浅色模式' : '切换至深色模式';
-        label.textContent = dark ? '夜间模式' : '日间模式';
-        if (persist) {
-          explicitPreference = true;
-          try { localStorage.setItem(key, next); } catch { /* The visual toggle still works for this page. */ }
-        }
-      };
-
-      applyTheme(document.documentElement.dataset.theme);
-      button.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true));
-      media.addEventListener?.('change', event => { if (!explicitPreference) applyTheme(event.matches ? 'dark' : 'light'); });
-      window.addEventListener('storage', event => {
-        if (event.key !== key || !['light', 'dark'].includes(event.newValue)) return;
-        explicitPreference = true;
-        applyTheme(event.newValue);
-      });
-    })();
-  </script>
-
-  <script>
     const iconPaths = {
       activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
       check: '<path d="m20 6-11 11-5-5"/>',
@@ -562,9 +487,7 @@
     const safeHref = (value = '') => { try { const parsed = new URL(value); return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : ''; } catch { return ''; } };
 
     function hydrateIcons() {
-      $('#brand-icon').innerHTML = icon('activity');
       $('#add-icon').innerHTML = icon('plus');
-      $('#refresh-icon').innerHTML = icon('refresh');
       $('#updated-icon').innerHTML = icon('refresh');
       $('#delete-icon').innerHTML = icon('trash');
       $('#toast-icon').innerHTML = icon('check');

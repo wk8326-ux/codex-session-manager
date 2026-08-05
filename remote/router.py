@@ -137,6 +137,8 @@ class RemoteHttpApi:
             device = self.application.authenticate(_bearer(headers))
             if device is None:
                 return RemoteResponse(HTTPStatus.UNAUTHORIZED, {"message": "设备未配对或授权已撤销。"})
+            if method == "GET" and path == "/api/remote/device":
+                return RemoteResponse(HTTPStatus.OK, device)
             if method == "GET" and path == "/api/remote/sessions":
                 return RemoteResponse(HTTPStatus.OK, self.application.list_sessions())
             session_prefix = "/api/remote/sessions/"
