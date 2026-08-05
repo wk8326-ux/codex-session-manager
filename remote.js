@@ -26,6 +26,7 @@
     followTail: true,
     lastUpdatedAt: 0,
     lastEvent: null,
+    adminStatus: null,
   };
 
   function readToken() {
@@ -654,6 +655,34 @@
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
   }
 
+  function renderRemoteAccess(status) {
+    state.adminStatus = status;
+    const tunnel = status?.tunnel || {};
+    const labels = {
+      running: ['FRP 隧道运行中', `客户端进程 ${tunnel.pid || '已连接'} · 随控制台启动和关闭`],
+      failed: ['FRP 隧道启动失败', tunnel.detail || '查看 .runtime/frp/frpc.log 获取错误信息'],
+      stopped: ['FRP 隧道已停止', '本地配置存在，但客户端进程当前未运行'],
+      'not-configured': ['FRP 隧道未配置', '添加本地 frpc 程序和私密配置后自动启用'],
+    };
+    const [label, detail] = labels[tunnel.state] || ['正在检查隧道', '等待本机状态更新'];
+    $('#tunnel-state-label').textContent = label;
+    $('#tunnel-state-detail').textContent = detail;
+    $('#tunnel-provider').textContent = tunnel.provider === 'frp' ? 'FRP' : (tunnel.provider || '未配置');
+    $('#tunnel-started-at').textContent = tunnel.startedAt ? formatDate(tunnel.startedAt) : '尚未启动';
+    $('#remote-public-url').textContent = status?.baseUrl || '未配置';
+    $('#tunnel-status-dot').className = `tunnel-status-dot ${tunnel.state || ''}`;
+  }
+
+  async function refreshAdminStatus(updateInput = false) {
+    const response = await fetch('/api/remote/status', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`远程访问状态读取失败 (${response.status})`);
+    const status = await response.json();
+    renderRemoteAccess(status);
+    if (updateInput) $('#public-base-url').value = status.baseUrl || '';
+    $('#codex-state').textContent = status.codexConnected ? 'App Server 已连接' : 'App Server 不可用';
+    return status;
+  }
+
   function renderDevices() {
     const list = $('#device-list');
     list.replaceChildren();
@@ -889,8 +918,7 @@
     state.token = readToken();
     let status = null;
     try {
-      const response = await fetch('/api/remote/status', { cache: 'no-store' });
-      if (response.ok) status = await response.json();
+      status = await refreshAdminStatus(true);
     } catch {}
     state.admin = Boolean(status);
     document.body.classList.toggle('admin-mode', state.admin);
@@ -901,9 +929,8 @@
     });
     if (state.admin) {
       $('#host-label').textContent = 'LOCALHOST / 8765';
-      $('#public-base-url').value = status.baseUrl || '';
-      $('#codex-state').textContent = status.codexConnected ? 'App Server 已连接' : 'App Server 不可用';
       await startWorkspace();
+      setInterval(() => refreshAdminStatus().catch(() => {}), 5000);
     } else if (state.token) {
       await startWorkspace();
     } else {

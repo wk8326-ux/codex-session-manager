@@ -31,11 +31,13 @@ http://<电脑局域网 IP>:8766
 
 ### 跨网络
 
-建议先建立私有网络，再通过 HTTPS 访问，例如 Tailscale HTTPS。也可以使用带 TLS 的可信反向代理。把手机实际能够访问的根地址填入配对页面，例如：
+推荐通过自建 VPS、FRP 和 Nginx 提供稳定的 HTTPS 地址；也可以使用 Tailscale、ZeroTier 或其他可信隧道。把手机实际能够访问的根地址填入配对页面，例如：
 
 ```text
 https://console.example.ts.net
 ```
+
+自建方案和控制台自动管理 `frpc` 的步骤见 [使用自建 VPS 和 FRP 远程访问](frp-remote-access.md)。
 
 二维码中的一次性密钥位于 URL fragment，即 `#secret=...`，浏览器不会在 HTTP 请求中把 fragment 发送给服务器。不要在聊天、截图或仓库中公开完整配对链接。
 

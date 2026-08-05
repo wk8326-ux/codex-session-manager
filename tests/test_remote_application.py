@@ -100,6 +100,22 @@ class RemoteApplicationTests(unittest.TestCase):
         with self.assertRaises(RemoteNotFound):
             self.application.send_message("unknown", {"message": "continue"})
 
+    def test_admin_status_includes_local_tunnel_state(self) -> None:
+        self.application.tunnel_status_provider = lambda: {
+            "provider": "frp",
+            "configured": True,
+            "running": True,
+            "state": "running",
+            "pid": 1234,
+            "startedAt": "2026-08-05T00:00:00Z",
+            "detail": "",
+        }
+
+        status = self.application.admin_status()
+
+        self.assertTrue(status["tunnel"]["running"])
+        self.assertEqual(status["tunnel"]["provider"], "frp")
+
     def test_session_detail_is_limited_to_recent_turns(self) -> None:
         synced = self.application.create_synced_session(
             {"name": "Woxsheet", "threadId": THREAD_ID}

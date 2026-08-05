@@ -1,0 +1,20 @@
+serverAddr = "203.0.113.10"
+serverPort = 7000
+loginFailExit = false
+
+[auth]
+method = "token"
+token = "replace-with-the-same-random-token-as-frps"
+
+[transport]
+protocol = "tcp"
+
+[transport.tls]
+enable = true
+
+[[proxies]]
+name = "local-project-console-remote"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8766
+remotePort = 18766

@@ -16,6 +16,8 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn('id="composer"', html)
         self.assertIn('class="mobile-nav"', html)
         self.assertIn('id="create-pairing"', html)
+        self.assertIn('id="tunnel-state-label"', html)
+        self.assertIn('id="remote-public-url"', html)
         self.assertIn('id="desktop-comparison-code"', html)
         self.assertIn('id="session-select"', html)
         self.assertIn('id="manage-synced-sessions"', html)
@@ -36,6 +38,15 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn("/api/remote/local-sessions?limit=50", script)
         self.assertIn("/api/remote/synced-sessions", script)
         self.assertIn("method: 'DELETE'", script)
+
+    def test_admin_view_reports_local_frp_lifecycle(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        self.assertIn("function renderRemoteAccess", script)
+        self.assertIn("function refreshAdminStatus", script)
+        self.assertIn("tunnel-status-dot", stylesheet)
+        self.assertIn("prefers-reduced-motion", stylesheet)
 
     def test_transcript_is_a_fixed_scrollable_latest_message_viewport(self) -> None:
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")

@@ -36,6 +36,7 @@ class RemoteApplication:
         *,
         default_base_url: str,
         codex_connected: bool,
+        tunnel_status_provider=None,
     ) -> None:
         self.remote_store = remote_store
         self.adapter = adapter
@@ -43,6 +44,7 @@ class RemoteApplication:
         self.project_provider = project_provider
         self.default_base_url = default_base_url
         self.codex_connected = codex_connected
+        self.tunnel_status_provider = tunnel_status_provider
 
     @staticmethod
     def _base_url(value: object) -> str:
@@ -62,11 +64,25 @@ class RemoteApplication:
 
     def admin_status(self) -> dict:
         base_url = self.remote_store.get_public_base_url() or self.default_base_url
+        tunnel = (
+            self.tunnel_status_provider()
+            if self.tunnel_status_provider is not None
+            else {
+                "provider": "frp",
+                "configured": False,
+                "running": False,
+                "state": "not-configured",
+                "pid": None,
+                "startedAt": "",
+                "detail": "",
+            }
+        )
         return {
             "enabled": True,
             "codexConnected": self.codex_connected,
             "baseUrl": base_url,
             "deviceCount": len(self.remote_store.list_devices()),
+            "tunnel": tunnel,
         }
 
     def create_pairing(self, payload: dict) -> dict:

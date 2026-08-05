@@ -41,7 +41,7 @@ python app.py
 ## 手机远程访问
 
 1. 启动控制台，打开 <http://127.0.0.1:8765/remote>。
-2. 确认“手机可访问地址”。同一局域网通常使用页面自动识别的 `http://<电脑局域网 IP>:8766`。
+2. 确认“公网 HTTPS 地址”。同一局域网也可以临时使用页面自动识别的 `http://<电脑局域网 IP>:8766`。
 3. 点击“生成配对二维码”，用手机扫码。
 4. 在手机上填写设备名称并确认配对。
 5. 核对手机和电脑显示的六位验证码，一致后进入工作台。
@@ -58,7 +58,9 @@ python app.py
 
 消息会写入相同的 Codex `threadId`。同步页面采用 App Server 事件长轮询与主动读取组合：事件到达时立即读取，任务运行中约每 1.2 秒读取一次，空闲时约每 5 秒读取一次，页面进入后台后自动降频。界面会持续显示当前活动、工具状态、本轮活动数、文件变更数和最近同步时间；新内容默认跟随到底部，向上滚动后暂停跟随。由于控制台和 Codex Desktop GUI 使用的是不同 App Server 进程，桌面 GUI 有时需要切换会话、重新打开或刷新后才显示手机发送的新内容。
 
-局域网 HTTP 可以直接在手机浏览器中使用。PWA 安装和 Service Worker 在非 `localhost` 地址上要求 HTTPS；跨网络访问建议使用 Tailscale HTTPS、可信反向代理或其他私有网络方案，并把对应的 HTTPS 根地址填入配对页面。不要把 8766 端口无认证地映射到公网，设备令牌虽然提供访问控制，但当前版本不是多用户公网服务。
+局域网 HTTP 可以直接在手机浏览器中使用。PWA 安装和 Service Worker 在非 `localhost` 地址上要求 HTTPS。跨网络访问推荐使用自建 VPS、FRP 和 Nginx：电脑主动建立加密隧道，手机只访问稳定的 HTTPS 域名。不要直接把本机 `8766` 映射到公网，更不能暴露管理端 `8765`。
+
+当 `.runtime/frp/frpc-lpc.exe` 与 `.runtime/frp/frpc.toml` 同时存在时，控制台会自动管理 FRP 客户端。隧道随控制台启动和关闭，状态显示在“远程会话 > 配对设备”。完整部署步骤见 [使用自建 VPS 和 FRP 远程访问](docs/frp-remote-access.md)。
 
 远程监听地址和端口可以在启动前通过环境变量调整：
 
@@ -258,6 +260,7 @@ python scripts/probe_codex_app_server.py --list --limit 5
 - [会话监控配置与运维](docs/watchdog-configuration.md)
 - [Codex Desktop 实时桥接](docs/codex-desktop-bridge.md)
 - [手机远程访问与会话同步](docs/remote-access.md)
+- [使用自建 VPS 和 FRP 远程访问](docs/frp-remote-access.md)
 
 常用只读诊断接口：
 

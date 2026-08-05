@@ -29,6 +29,7 @@ from remote.application import RemoteApplication
 from remote.events import RemoteEventHub
 from remote.router import AdminRemoteApi, RemoteHttpApi, RemoteResponse
 from remote.store import RemoteStore
+from remote.tunnel import FrpTunnelManager
 
 from watchdog.application import WatchdogApplication
 from watchdog.channels import probe_channel
@@ -529,6 +530,7 @@ class ConsoleRuntime:
     adapter: object
     remote_admin_api: AdminRemoteApi
     remote_http_api: RemoteHttpApi
+    tunnel: FrpTunnelManager
 
 
 class UnavailableCodexAdapter:
@@ -593,6 +595,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     )
     remote_store = RemoteStore(base_path / "watchdog.db")
     remote_store.initialize()
+    tunnel = FrpTunnelManager.from_base_path(base_path)
     event_hub = RemoteEventHub(
         lambda: {
             session["threadId"] for session in remote_store.list_synced_sessions()
@@ -623,6 +626,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         _remote_projects,
         default_base_url=_default_remote_base_url(),
         codex_connected=codex_connected,
+        tunnel_status_provider=tunnel.status,
     )
     return ConsoleRuntime(
         WatchdogHttpApi(application),
@@ -630,6 +634,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         adapter,
         AdminRemoteApi(remote_application),
         RemoteHttpApi(remote_application),
+        tunnel,
     )
 
 
@@ -1014,6 +1019,7 @@ def run_console(base_path: Path = ROOT) -> None:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     remote_server = None
     remote_thread = None
+    tunnel = getattr(runtime, "tunnel", None)
     if REMOTE_HTTP_API is not None:
         remote_server = ThreadingHTTPServer((REMOTE_HOST, REMOTE_PORT), RemoteHandler)
         remote_thread = threading.Thread(
@@ -1022,6 +1028,8 @@ def run_console(base_path: Path = ROOT) -> None:
             daemon=True,
         )
         remote_thread.start()
+    if tunnel is not None:
+        tunnel.start()
     runtime.scheduler.start()
     print(f"Local Project Console is running at http://{HOST}:{PORT}")
     if remote_server is not None:
@@ -1030,6 +1038,8 @@ def run_console(base_path: Path = ROOT) -> None:
         server.serve_forever()
     finally:
         runtime.scheduler.stop()
+        if tunnel is not None:
+            tunnel.stop()
         runtime.adapter.close()
         if remote_server is not None:
             remote_server.shutdown()

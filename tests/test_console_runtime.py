@@ -57,6 +57,61 @@ class ConsoleRuntimeTests(unittest.TestCase):
             ["start", "serve", "stop", "adapter-close", "server-close"],
         )
 
+    def test_console_owns_optional_tunnel_lifecycle(self) -> None:
+        events: list[str] = []
+
+        class Scheduler:
+            def start(self) -> None:
+                events.append("scheduler-start")
+
+            def stop(self) -> None:
+                events.append("scheduler-stop")
+
+        class Tunnel:
+            def start(self) -> None:
+                events.append("tunnel-start")
+
+            def stop(self) -> None:
+                events.append("tunnel-stop")
+
+        class Adapter:
+            def close(self) -> None:
+                events.append("adapter-close")
+
+        class Server:
+            def serve_forever(self) -> None:
+                events.append("serve")
+                raise RuntimeError("server failed")
+
+            def server_close(self) -> None:
+                events.append("server-close")
+
+        runtime = SimpleNamespace(
+            api=object(),
+            scheduler=Scheduler(),
+            adapter=Adapter(),
+            tunnel=Tunnel(),
+        )
+        with (
+            patch.object(app, "create_console_runtime", return_value=runtime),
+            patch.object(app, "ThreadingHTTPServer", return_value=Server()),
+            self.assertRaises(RuntimeError),
+        ):
+            app.run_console(Path("."))
+
+        self.assertEqual(
+            events,
+            [
+                "tunnel-start",
+                "scheduler-start",
+                "serve",
+                "scheduler-stop",
+                "tunnel-stop",
+                "adapter-close",
+                "server-close",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

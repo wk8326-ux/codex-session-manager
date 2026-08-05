@@ -134,10 +134,25 @@
               <div class="track-copy"><strong>工作台</strong><small>远程服务 / 8766</small></div>
               <div class="track-copy"><strong>Codex</strong><small id="codex-state">检查连接中</small></div>
             </section>
+            <section class="remote-access-status" aria-labelledby="remote-access-title">
+              <header class="remote-access-head">
+                <h2 id="remote-access-title">远程访问</h2>
+                <span class="tunnel-status-dot" id="tunnel-status-dot" aria-hidden="true"></span>
+              </header>
+              <div class="tunnel-state-line" aria-live="polite">
+                <strong id="tunnel-state-label">正在检查隧道</strong>
+                <small id="tunnel-state-detail">读取本机 FRP 客户端状态</small>
+              </div>
+              <dl class="tunnel-facts">
+                <div><dt>公网入口</dt><dd id="remote-public-url">未配置</dd></div>
+                <div><dt>接入方式</dt><dd id="tunnel-provider">FRP</dd></div>
+                <div><dt>本次启动</dt><dd id="tunnel-started-at">尚未启动</dd></div>
+              </dl>
+            </section>
             <section class="pairing-admin">
               <div class="section-heading"><div><p class="eyebrow">PAIR DEVICE</p><h2>添加移动设备</h2></div></div>
-              <label for="public-base-url">手机可访问地址</label>
-              <input id="public-base-url" type="url" inputmode="url" placeholder="http://192.168.1.10:8766">
+              <label for="public-base-url">公网 HTTPS 地址</label>
+              <input id="public-base-url" type="url" inputmode="url" placeholder="https://console.example.com">
               <button class="button primary wide" id="create-pairing" type="button">生成配对二维码</button>
               <div class="qr-result" id="qr-result" hidden>
                 <img id="pairing-qr" alt="手机配对二维码">
@@ -149,7 +164,7 @@
           </div>
           <section class="trusted-devices">
             <header class="section-heading"><div><p class="eyebrow">TRUSTED DEVICES</p><h2>已配对设备</h2></div><span>撤销后立即失效</span></header>
-            <p class="section-copy">移动设备只能访问已加入远程同步目录的会话；跨公网访问需使用 Tailscale 或其他受信任的 HTTPS 通道。</p>
+            <p class="section-copy">移动设备只能访问已加入远程同步目录的会话。公网地址通过受信任的 HTTPS 隧道接入，管理端口不会对外开放。</p>
             <div class="device-list" id="device-list"></div>
           </section>
         </div>
