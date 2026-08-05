@@ -22,6 +22,10 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn('id="sync-session-dialog"', html)
         self.assertIn('id="local-session-select"', html)
         self.assertIn('id="synced-session-list"', html)
+        self.assertIn('id="runtime-strip"', html)
+        self.assertIn('id="runtime-activity"', html)
+        self.assertIn('id="runtime-metrics"', html)
+        self.assertIn('id="jump-latest"', html)
         self.assertNotIn('id="session-list"', html)
         self.assertNotIn("只显示会话监控中登记的任务", html)
         self.assertLess(html.index('id="create-pairing"'), html.index('id="device-list"'))
@@ -39,7 +43,20 @@ class RemoteUiContractTests(unittest.TestCase):
 
         self.assertIn("height: clamp(", stylesheet)
         self.assertIn("overflow-y: auto", stylesheet)
-        self.assertIn("transcript.scrollTop = transcript.scrollHeight", script)
+        self.assertIn("ACTIVE_REFRESH_MS = 1200", script)
+        self.assertIn("IDLE_REFRESH_MS = 5000", script)
+        self.assertIn("document.visibilityState", script)
+        self.assertIn("followTail", script)
+        self.assertIn("scrollToLatest", script)
+        self.assertIn("aria-busy", (ROOT / "remote.html").read_text(encoding="utf-8"))
+
+    def test_runtime_activity_uses_structured_tool_and_reasoning_rows(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("reasoningNode", script)
+        self.assertIn("activityNode", script)
+        self.assertIn("conversationActivity", script)
+        self.assertIn("stream-tail", script)
 
     def test_service_worker_never_caches_api_responses(self) -> None:
         script = (ROOT / "service-worker.js").read_text(encoding="utf-8")

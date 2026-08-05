@@ -33,12 +33,16 @@ class RemoteEventHub:
         turn = params.get("turn")
         item = params.get("item")
         turn_id = _string(params.get("turnId"))
+        item_id = ""
+        item_type = ""
         status = _string(params.get("status"))
         if isinstance(turn, dict):
             turn_id = turn_id or _string(turn.get("id"))
             status = status or _string(turn.get("status"))
-        if not status and isinstance(item, dict):
-            status = _string(item.get("status"))
+        if isinstance(item, dict):
+            item_id = _string(item.get("id"))
+            item_type = _string(item.get("type"))
+            status = status or _string(item.get("status"))
         with self._condition:
             self._sequence += 1
             self._events.append(
@@ -47,6 +51,8 @@ class RemoteEventHub:
                     "method": method,
                     "threadId": thread_id,
                     "turnId": turn_id,
+                    "itemId": item_id,
+                    "itemType": item_type,
                     "status": status,
                     "timestamp": _timestamp(),
                 }

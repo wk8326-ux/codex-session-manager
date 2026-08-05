@@ -109,6 +109,9 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(detail["threadId"], THREAD_ID)
         self.assertEqual(self.adapter.last_turn_limit, 12)
 
+        self.application.read_session(synced["id"], turn_limit=6)
+        self.assertEqual(self.adapter.last_turn_limit, 6)
+
     def test_local_sessions_can_be_selected_without_entering_monitoring_catalog(self) -> None:
         local = self.application.list_local_sessions(limit=50)
 
@@ -154,6 +157,29 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(len(batch["events"]), 1)
         self.assertEqual(batch["events"][0]["threadId"], THREAD_ID)
         self.assertNotIn("delta", batch["events"][0])
+
+    def test_event_hub_exposes_safe_activity_metadata_without_command_content(self) -> None:
+        self.hub.publish(
+            "item/started",
+            {
+                "threadId": THREAD_ID,
+                "turnId": "turn-1",
+                "item": {
+                    "id": "item-1",
+                    "type": "commandExecution",
+                    "status": "inProgress",
+                    "command": "type C:\\private\\secret.txt",
+                },
+            },
+        )
+
+        event = self.hub.wait(0, 0)["events"][0]
+
+        self.assertEqual(event["itemId"], "item-1")
+        self.assertEqual(event["itemType"], "commandExecution")
+        self.assertEqual(event["status"], "inProgress")
+        self.assertNotIn("command", event)
+        self.assertNotIn("secret", str(event))
 
 
 if __name__ == "__main__":

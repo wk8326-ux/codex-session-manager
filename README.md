@@ -56,7 +56,7 @@ python app.py
 - 目标会话空闲：调用 `thread/resume` 后再调用 `turn/start`。
 - App Server 无法确认发送结果：不盲目重试，避免同一消息被重复提交。
 
-消息会写入相同的 Codex `threadId`，手机端通过 App Server 事件长轮询近实时更新。由于控制台和 Codex Desktop GUI 使用的是不同 App Server 进程，桌面 GUI 有时需要切换会话、重新打开或刷新后才显示手机发送的新内容。
+消息会写入相同的 Codex `threadId`。同步页面采用 App Server 事件长轮询与主动读取组合：事件到达时立即读取，任务运行中约每 1.2 秒读取一次，空闲时约每 5 秒读取一次，页面进入后台后自动降频。界面会持续显示当前活动、工具状态、本轮活动数、文件变更数和最近同步时间；新内容默认跟随到底部，向上滚动后暂停跟随。由于控制台和 Codex Desktop GUI 使用的是不同 App Server 进程，桌面 GUI 有时需要切换会话、重新打开或刷新后才显示手机发送的新内容。
 
 局域网 HTTP 可以直接在手机浏览器中使用。PWA 安装和 Service Worker 在非 `localhost` 地址上要求 HTTPS；跨网络访问建议使用 Tailscale HTTPS、可信反向代理或其他私有网络方案，并把对应的 HTTPS 根地址填入配对页面。不要把 8766 端口无认证地映射到公网，设备令牌虽然提供访问控制，但当前版本不是多用户公网服务。
 

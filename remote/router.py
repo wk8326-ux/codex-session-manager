@@ -24,6 +24,11 @@ def _bearer(headers: dict[str, str]) -> str:
     return value[len(prefix):].strip() if value.startswith(prefix) else ""
 
 
+def _turn_limit(parsed) -> int:
+    raw = parse_qs(parsed.query).get("turnLimit", ["12"])[0]
+    return max(1, min(30, int(raw)))
+
+
 class AdminRemoteApi:
     def __init__(self, application: RemoteApplication) -> None:
         self.application = application
@@ -82,7 +87,8 @@ class AdminRemoteApi:
                     )
                 if method == "GET" and "/" not in remainder:
                     return RemoteResponse(
-                        HTTPStatus.OK, self.application.read_session(remainder)
+                        HTTPStatus.OK,
+                        self.application.read_session(remainder, _turn_limit(parsed)),
                     )
             if method == "GET" and route == "/api/remote/projects":
                 return RemoteResponse(HTTPStatus.OK, self.application.list_projects())
@@ -146,7 +152,8 @@ class RemoteHttpApi:
                     )
                 if method == "GET" and "/" not in remainder:
                     return RemoteResponse(
-                        HTTPStatus.OK, self.application.read_session(remainder)
+                        HTTPStatus.OK,
+                        self.application.read_session(remainder, _turn_limit(parsed)),
                     )
             if method == "GET" and path == "/api/remote/projects":
                 return RemoteResponse(HTTPStatus.OK, self.application.list_projects())

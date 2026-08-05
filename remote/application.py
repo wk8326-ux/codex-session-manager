@@ -163,10 +163,13 @@ class RemoteApplication:
         if not self.remote_store.delete_synced_session(session_id):
             raise RemoteNotFound("远程同步会话不存在。")
 
-    def read_session(self, session_id: str) -> dict:
+    def read_session(self, session_id: str, turn_limit: int = 12) -> dict:
         session = self._session(session_id)
+        bounded_limit = max(1, min(int(turn_limit), 30))
         try:
-            detail = self.adapter.read_thread_detail(session["threadId"], turn_limit=12)
+            detail = self.adapter.read_thread_detail(
+                session["threadId"], turn_limit=bounded_limit
+            )
         except CodexAdapterError as error:
             raise RemoteApplicationError("Codex 会话当前不可读取。") from error
         return {**self._session_summary(session), "conversation": detail}

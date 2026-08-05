@@ -1,6 +1,9 @@
 (() => {
   const TOKEN_KEY = 'localhost-project-console.remote-token';
   const THEME_KEY = 'localhost-project-console.theme';
+  const ACTIVE_REFRESH_MS = 1200;
+  const IDLE_REFRESH_MS = 5000;
+  const HIDDEN_REFRESH_MS = 12000;
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
   const state = {
@@ -16,7 +19,13 @@
     polling: false,
     pairingSecret: '',
     pairingId: '',
-    refreshTimer: 0,
+    conversation: null,
+    conversationSignature: '',
+    conversationRefreshTimer: 0,
+    conversationRefreshInFlight: false,
+    followTail: true,
+    lastUpdatedAt: 0,
+    lastEvent: null,
   };
 
   function readToken() {
@@ -158,12 +167,23 @@
   }
 
   function clearConversation() {
+    clearTimeout(state.conversationRefreshTimer);
+    state.conversation = null;
+    state.conversationSignature = '';
+    state.lastEvent = null;
+    state.followTail = true;
     $('#conversation-meta').textContent = '尚未选择会话';
     $('#conversation-status').textContent = '未选择';
     $('#conversation-status').className = 'status-badge';
     $('#message-input').disabled = true;
     $('#send-button').disabled = true;
+    $('#runtime-signal').className = 'runtime-signal';
+    $('#runtime-activity').textContent = '等待选择会话';
+    $('#runtime-detail').textContent = '选择后将持续同步 Codex 的最新活动';
+    $('#runtime-metrics').textContent = '未连接';
+    $('#jump-latest').hidden = true;
     const transcript = $('#transcript');
+    transcript.setAttribute('aria-busy', 'false');
     transcript.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'conversation-empty';
@@ -294,23 +314,116 @@
     return message;
   }
 
+  function conversationStatus(detail) {
+    const turns = detail?.turns || [];
+    const latest = turns.at(-1);
+    const activeStates = ['active', 'inProgress', 'running', 'started'];
+    if (activeStates.includes(latest?.status)) return 'inProgress';
+    if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
+    if (activeStates.includes(detail?.status)) return 'inProgress';
+    if (latest?.status) return latest.status;
+    return detail?.status === 'notLoaded' ? 'idle' : (detail?.status || 'idle');
+  }
+
+  function activityLabel(item) {
+    const labels = {
+      commandExecution: '执行命令', fileChange: '修改文件', mcpToolCall: '调用工具',
+      webSearch: '搜索网页', reasoning: '分析任务', agentMessage: '生成回复',
+      plan: '更新计划', userMessage: '收到消息',
+    };
+    if (item?.type === 'mcpToolCall') return [item.server, item.tool].filter(Boolean).join(' / ') || labels.mcpToolCall;
+    return item?.label || labels[item?.type] || '任务活动';
+  }
+
+  function conversationActivity(detail) {
+    const turns = detail?.turns || [];
+    const latest = turns.at(-1);
+    const items = latest?.items || [];
+    const item = items.at(-1);
+    const status = conversationStatus(detail);
+    if (!item) return status === 'inProgress' ? 'Codex 正在处理' : '暂无运行活动';
+    if (status === 'inProgress') return activityLabel(item);
+    return `最近：${activityLabel(item)}`;
+  }
+
+  function conversationMetrics(detail) {
+    const latest = (detail?.turns || []).at(-1);
+    const items = latest?.items || [];
+    const fileCount = items
+      .filter(item => item.type === 'fileChange')
+      .reduce((total, item) => total + (Number(item.count) || 1), 0);
+    const parts = [`本轮 ${items.length} 项`];
+    if (fileCount) parts.push(`文件 ${fileCount} 处`);
+    return parts.join(' · ');
+  }
+
+  function reasoningNode(item, isLatestRunningReasoning = false) {
+    const details = document.createElement('details');
+    details.className = 'reasoning-trace';
+    details.open = isLatestRunningReasoning;
+    const summary = document.createElement('summary');
+    const signal = document.createElement('span');
+    signal.className = `activity-signal${isLatestRunningReasoning ? ' running' : ' completed'}`;
+    signal.setAttribute('aria-hidden', 'true');
+    const title = document.createElement('span');
+    title.textContent = isLatestRunningReasoning ? '正在分析' : '分析摘要';
+    summary.append(signal, title);
+    const body = document.createElement('div');
+    body.className = 'reasoning-body';
+    body.textContent = item.text;
+    details.append(summary, body);
+    return details;
+  }
+
   function activityNode(item) {
     const row = document.createElement('div');
-    row.className = 'activity-row';
-    const detail = [item.label || '任务活动', item.tool, item.status && stateLabel(item.status)]
-      .filter(Boolean).join(' · ');
-    row.textContent = detail;
+    const itemStatus = item.status || 'completed';
+    row.className = `activity-row ${itemStatus}`;
+    const signal = document.createElement('span');
+    signal.className = `activity-signal ${['active', 'inProgress', 'running', 'started'].includes(itemStatus) ? 'running' : itemStatus}`;
+    signal.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.className = 'activity-label';
+    label.textContent = activityLabel(item);
+    const status = document.createElement('span');
+    status.className = 'activity-status';
+    status.textContent = stateLabel(itemStatus);
+    row.append(signal, label, status);
     return row;
+  }
+
+  function scrollToLatest(behavior = 'smooth') {
+    const transcript = $('#transcript');
+    state.followTail = true;
+    $('#jump-latest').hidden = true;
+    transcript.scrollTo({ top: transcript.scrollHeight, behavior });
+  }
+
+  function renderRuntime(detail) {
+    const status = conversationStatus(detail);
+    const running = status === 'inProgress';
+    const failed = ['failed', 'interrupted', 'systemError'].includes(status);
+    $('#runtime-signal').className = `runtime-signal${running ? ' running' : ''}${failed ? ' failed' : ''}`;
+    $('#runtime-activity').textContent = conversationActivity(detail);
+    const time = state.lastUpdatedAt
+      ? new Date(state.lastUpdatedAt).toLocaleTimeString('zh-CN', { hour12: false })
+      : '--:--:--';
+    const eventHint = state.lastEvent?.itemType ? ` · ${activityLabel({ type: state.lastEvent.itemType })}` : '';
+    $('#runtime-detail').textContent = `${stateLabel(status)} · 最近同步 ${time}${eventHint}`;
+    $('#runtime-metrics').textContent = conversationMetrics(detail);
+    $('#transcript').setAttribute('aria-busy', String(running));
   }
 
   function renderConversation(session, detail) {
     $('#conversation-meta').textContent = session.threadId;
-    const status = detail.status || session.lastSessionState;
+    const status = conversationStatus(detail);
     $('#conversation-status').textContent = stateLabel(status);
-    $('#conversation-status').className = `status-badge${['active', 'inProgress'].includes(status) ? ' running' : ''}`;
+    $('#conversation-status').className = `status-badge${status === 'inProgress' ? ' running' : ''}`;
     $('#message-input').disabled = false;
     $('#send-button').disabled = false;
+    renderRuntime(detail);
     const transcript = $('#transcript');
+    const previousScrollTop = transcript.scrollTop;
     transcript.replaceChildren();
     const turns = detail.turns || [];
     if (!turns.length) {
@@ -324,38 +437,92 @@
       transcript.append(empty);
       return;
     }
-    for (const turn of turns) {
+    turns.forEach((turn, turnIndex) => {
       const section = document.createElement('section');
       section.className = 'turn';
       const divider = document.createElement('div');
       divider.className = 'turn-divider';
       divider.textContent = `${stateLabel(turn.status)} · ${turn.id.slice(0, 8)}`;
       section.append(divider);
-      for (const item of turn.items || []) {
+      const items = turn.items || [];
+      items.forEach((item, itemIndex) => {
+        const latestRunningReasoning = status === 'inProgress'
+          && turnIndex === turns.length - 1
+          && itemIndex === items.length - 1;
         if (item.type === 'userMessage' && item.text) section.append(messageNode('user', '你', item.text));
         else if (['agentMessage', 'plan'].includes(item.type) && item.text) section.append(messageNode('agent', 'Codex', item.text));
-        else if (item.type === 'reasoning' && item.text) section.append(messageNode('agent', '过程摘要', item.text));
+        else if (item.type === 'reasoning' && item.text) section.append(reasoningNode(item, latestRunningReasoning));
         else section.append(activityNode(item));
-      }
+      });
       if (turn.error) section.append(messageNode('agent', '任务错误', turn.error));
+      if (status === 'inProgress' && turnIndex === turns.length - 1) {
+        const tail = document.createElement('div');
+        tail.className = 'stream-tail';
+        const tailSignal = document.createElement('span');
+        tailSignal.setAttribute('aria-hidden', 'true');
+        const tailLabel = document.createElement('span');
+        tailLabel.textContent = 'Codex 正在继续';
+        tail.append(tailSignal, tailLabel);
+        section.append(tail);
+      }
       transcript.append(section);
-    }
-    requestAnimationFrame(() => { transcript.scrollTop = transcript.scrollHeight; });
+    });
+    requestAnimationFrame(() => {
+      if (state.followTail) scrollToLatest('auto');
+      else transcript.scrollTop = previousScrollTop;
+    });
   }
 
-  async function selectSession(sessionId, quiet = false) {
-    state.selectedSessionId = sessionId;
-    renderSessions();
+  function refreshDelay() {
+    if (document.visibilityState === 'hidden') return HIDDEN_REFRESH_MS;
+    return conversationStatus(state.conversation) === 'inProgress' ? ACTIVE_REFRESH_MS : IDLE_REFRESH_MS;
+  }
+
+  function scheduleConversationRefresh(delay = refreshDelay()) {
+    clearTimeout(state.conversationRefreshTimer);
+    if (!state.selectedSessionId) return;
+    state.conversationRefreshTimer = setTimeout(() => refreshSelectedSession(), delay);
+  }
+
+  async function refreshSelectedSession({ force = false, quiet = true } = {}) {
+    if (!state.selectedSessionId || state.conversationRefreshInFlight) return;
+    const sessionId = state.selectedSessionId;
+    state.conversationRefreshInFlight = true;
     if (!quiet) $('#sync-state').textContent = '读取会话中';
     try {
-      const result = await api(`/api/remote/sessions/${encodeURIComponent(sessionId)}`);
+      const result = await api(`/api/remote/sessions/${encodeURIComponent(sessionId)}?turnLimit=6`);
+      if (sessionId !== state.selectedSessionId) return;
       const session = state.sessions.find(item => item.id === sessionId) || result;
-      renderConversation(session, result.conversation);
+      const signature = JSON.stringify(result.conversation || {});
+      state.lastUpdatedAt = Date.now();
+      state.conversation = result.conversation;
+      if (force || signature !== state.conversationSignature) {
+        state.conversationSignature = signature;
+        renderConversation(session, result.conversation);
+      } else {
+        renderRuntime(result.conversation);
+      }
       setConnected(true);
     } catch (error) {
       if (!quiet) showToast(error.message);
       setConnected(false, '会话读取失败');
+    } finally {
+      state.conversationRefreshInFlight = false;
+      if (state.selectedSessionId) {
+        scheduleConversationRefresh(sessionId === state.selectedSessionId ? refreshDelay() : 80);
+      }
     }
+  }
+
+  async function selectSession(sessionId, quiet = false) {
+    clearTimeout(state.conversationRefreshTimer);
+    state.selectedSessionId = sessionId;
+    state.conversation = null;
+    state.conversationSignature = '';
+    state.lastEvent = null;
+    state.followTail = true;
+    renderSessions();
+    await refreshSelectedSession({ force: true, quiet });
   }
 
   function renderProjects() {
@@ -448,6 +615,12 @@
     if (!message || !state.selectedSessionId) return;
     const button = $('#send-button');
     button.disabled = true;
+    state.followTail = true;
+    $('#runtime-signal').className = 'runtime-signal running';
+    $('#runtime-activity').textContent = '等待 Codex 响应';
+    $('#runtime-detail').textContent = '消息已提交，正在确认新的任务轮次';
+    $('#transcript').setAttribute('aria-busy', 'true');
+    scrollToLatest('smooth');
     try {
       const result = await api(`/api/remote/sessions/${encodeURIComponent(state.selectedSessionId)}/messages`, {
         method: 'POST', body: JSON.stringify({ message }),
@@ -455,7 +628,8 @@
       input.value = '';
       input.style.height = '';
       showToast(result.delivery === 'steered' ? '消息已加入当前运行中的任务。' : '消息已启动新的任务轮次。');
-      setTimeout(() => selectSession(state.selectedSessionId, true), 450);
+      clearTimeout(state.conversationRefreshTimer);
+      scheduleConversationRefresh(150);
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -464,16 +638,13 @@
     }
   }
 
-  function scheduleEventRefresh() {
-    clearTimeout(state.refreshTimer);
-    state.refreshTimer = setTimeout(async () => {
-      try {
-        const sessions = await api('/api/remote/sessions');
-        state.sessions = sessions;
-        renderSessions();
-        if (state.selectedSessionId) await selectSession(state.selectedSessionId, true);
-      } catch {}
-    }, 300);
+  function scheduleEventRefresh(events = []) {
+    const selected = state.sessions.find(session => session.id === state.selectedSessionId);
+    const relevant = [...events].reverse().find(event => event.threadId === selected?.threadId);
+    if (!relevant) return;
+    state.lastEvent = relevant;
+    clearTimeout(state.conversationRefreshTimer);
+    scheduleConversationRefresh(60);
   }
 
   async function pollEvents() {
@@ -483,7 +654,7 @@
       try {
         const batch = await api(`/api/remote/events?after=${state.cursor}&timeout=25`);
         state.cursor = batch.cursor;
-        if (batch.events?.length) scheduleEventRefresh();
+        if (batch.events?.length) scheduleEventRefresh(batch.events);
         setConnected(true);
       } catch (error) {
         setConnected(false);
@@ -569,6 +740,13 @@
     });
     $('#add-synced-session').addEventListener('click', addSyncedSession);
     $('#refresh-button').addEventListener('click', () => loadWorkspaceData().catch(error => showToast(error.message)));
+    $('#jump-latest').addEventListener('click', () => scrollToLatest());
+    $('#transcript').addEventListener('scroll', event => {
+      const transcript = event.currentTarget;
+      const distance = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+      state.followTail = distance < 72;
+      $('#jump-latest').hidden = state.followTail;
+    }, { passive: true });
     $('#message-input').addEventListener('input', event => {
       event.target.style.height = 'auto';
       event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
@@ -577,6 +755,11 @@
     $$('.mobile-nav button').forEach(button => button.addEventListener('click', () => switchMobileView(button.dataset.mobileView)));
     addEventListener('online', () => setConnected(true));
     addEventListener('offline', () => setConnected(false));
+    document.addEventListener('visibilitychange', () => {
+      if (!state.selectedSessionId) return;
+      clearTimeout(state.conversationRefreshTimer);
+      scheduleConversationRefresh(document.visibilityState === 'hidden' ? HIDDEN_REFRESH_MS : 80);
+    });
   }
 
   async function startWorkspace() {

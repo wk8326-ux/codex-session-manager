@@ -30,7 +30,11 @@ class Sessions:
 
 
 class Adapter:
+    def __init__(self) -> None:
+        self.last_turn_limit: int | None = None
+
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
+        self.last_turn_limit = turn_limit
         return {"threadId": thread_id, "status": "idle", "turns": []}
 
     def send_message(self, thread_id: str, prompt: str) -> dict:
@@ -53,9 +57,10 @@ class RemoteRouterTests(unittest.TestCase):
         self.store = RemoteStore(Path(self.directory.name) / "watchdog.db")
         self.store.initialize()
         sessions = Sessions()
+        self.adapter = Adapter()
         application = RemoteApplication(
             self.store,
-            Adapter(),
+            self.adapter,
             RemoteEventHub(lambda: {THREAD_ID}),
             lambda: [],
             default_base_url="http://192.0.2.10:8766",
@@ -107,6 +112,25 @@ class RemoteRouterTests(unittest.TestCase):
             "DELETE", f"/api/remote/synced-sessions/{created.body['id']}", None
         )
         self.assertEqual(deleted.status, 204)
+
+    def test_session_detail_route_accepts_a_bounded_turn_limit(self) -> None:
+        created = self.admin.dispatch(
+            "POST",
+            "/api/remote/synced-sessions",
+            {"name": "Remote Woxsheet", "threadId": THREAD_ID},
+        )
+
+        response = self.admin.dispatch(
+            "GET", f"/api/remote/sessions/{created.body['id']}?turnLimit=6", None
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.adapter.last_turn_limit, 6)
+
+        invalid = self.admin.dispatch(
+            "GET", f"/api/remote/sessions/{created.body['id']}?turnLimit=bad", None
+        )
+        self.assertEqual(invalid.status, 400)
 
     def test_authenticated_device_only_sees_synced_sessions(self) -> None:
         created = self.admin.dispatch(

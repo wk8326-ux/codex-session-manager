@@ -84,7 +84,7 @@
       </nav>
 
       <section class="sessions-workspace view active" data-view-panel="sessions">
-        <section class="conversation" aria-live="polite">
+        <section class="conversation">
           <header class="conversation-head">
             <div class="session-picker">
               <label for="session-select">同步会话</label>
@@ -98,8 +98,19 @@
               <span class="status-badge" id="conversation-status">未选择</span>
             </div>
           </header>
-          <div class="transcript" id="transcript">
-            <div class="conversation-empty"><strong>等待选择会话</strong><span>消息会保留在原 Codex 会话中</span></div>
+          <section class="runtime-strip" id="runtime-strip">
+            <span class="runtime-signal" id="runtime-signal" aria-hidden="true"></span>
+            <div class="runtime-copy">
+              <strong id="runtime-activity" aria-live="polite">等待选择会话</strong>
+              <small id="runtime-detail">选择后将持续同步 Codex 的最新活动</small>
+            </div>
+            <span class="runtime-metrics" id="runtime-metrics">未连接</span>
+          </section>
+          <div class="transcript-shell">
+            <div class="transcript" id="transcript" aria-live="polite" aria-busy="false">
+              <div class="conversation-empty"><strong>等待选择会话</strong><span>消息会保留在原 Codex 会话中</span></div>
+            </div>
+            <button class="jump-latest" id="jump-latest" type="button" hidden>↓ 回到最新</button>
           </div>
           <form class="composer" id="composer">
             <label class="sr-only" for="message-input">发送到当前 Codex 会话</label>
