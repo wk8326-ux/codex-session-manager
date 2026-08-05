@@ -6,6 +6,7 @@ Open:     http://127.0.0.1:8765
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import socket
@@ -53,6 +54,7 @@ REMOTE_PORT = int(os.environ.get("LPC_REMOTE_PORT", "8766"))
 LOCK = threading.RLock()
 WEBSITE_CACHE_LOCK = threading.RLock()
 WEBSITE_CACHE: dict[str, dict] = {}
+WEBSITE_REFRESHING: set[str] = set()
 WEBSITE_CACHE_TTL = 15.0
 WEBSITE_TIMEOUT = 3.0
 WEBSITE_FAILURE_THRESHOLD = 3
@@ -207,6 +209,13 @@ def cached_website_health(value: object) -> dict:
             return dict(cached["health"])
 
     health = probe_website(url)
+    return store_website_health(url, health, refreshed_at=current)
+
+
+def store_website_health(
+    url: str, health: dict, *, refreshed_at: float | None = None
+) -> dict:
+    current = time.monotonic() if refreshed_at is None else refreshed_at
     with WEBSITE_CACHE_LOCK:
         previous = WEBSITE_CACHE.get(url)
         if health.get("online"):
@@ -232,6 +241,42 @@ def cached_website_health(value: object) -> dict:
             "failures": failures,
         }
     return dict(displayed)
+
+
+def background_website_health(value: object) -> dict:
+    """Return cached reachability immediately and refresh stale URLs in the background."""
+    url = str(value or "").strip()
+    current = time.monotonic()
+    should_refresh = False
+    with WEBSITE_CACHE_LOCK:
+        cached = WEBSITE_CACHE.get(url)
+        if cached and current - cached["refreshedAt"] < WEBSITE_CACHE_TTL:
+            return dict(cached["health"])
+        if url not in WEBSITE_REFRESHING:
+            WEBSITE_REFRESHING.add(url)
+            should_refresh = True
+        displayed = dict(cached["health"]) if cached else {
+            "online": False,
+            "pending": True,
+            "status": None,
+            "detail": "检测中",
+            "checkedAt": "",
+        }
+
+    if should_refresh:
+        def refresh() -> None:
+            try:
+                store_website_health(url, probe_website(url))
+            finally:
+                with WEBSITE_CACHE_LOCK:
+                    WEBSITE_REFRESHING.discard(url)
+
+        threading.Thread(
+            target=refresh,
+            name=f"website-probe-{abs(hash(url))}",
+            daemon=True,
+        ).start()
+    return displayed
 
 
 def port_is_open(value: object) -> bool:
@@ -263,16 +308,59 @@ def pid_is_running(value: object) -> bool:
     return str(pid) in result.stdout
 
 
-def state_for(project: dict, *, website_health: dict | None = None) -> dict:
+def running_pids(values: list[object]) -> set[int]:
+    requested: set[int] = set()
+    for value in values:
+        try:
+            pid = int(value)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0:
+            requested.add(pid)
+    if not requested:
+        return set()
+    if len(requested) == 1:
+        pid = next(iter(requested))
+        return {pid} if pid_is_running(pid) else set()
+    result = subprocess.run(
+        ["tasklist", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        check=False,
+    )
+    active: set[int] = set()
+    for row in csv.reader(result.stdout.splitlines()):
+        if len(row) < 2:
+            continue
+        try:
+            pid = int(row[1].replace(",", ""))
+        except ValueError:
+            continue
+        if pid in requested:
+            active.add(pid)
+    return active
+
+
+def state_for(
+    project: dict,
+    *,
+    website_health: dict | None = None,
+    pid_active: bool | None = None,
+    port_active: bool | None = None,
+) -> dict:
     external = project.get("mode") == "external"
     external_ready = project_url_is_valid(project.get("url"), external=True)
-    pid_active = pid_is_running(project.get("pid"))
-    port_active = port_is_open(project.get("port"))
+    pid_active = pid_is_running(project.get("pid")) if pid_active is None else pid_active
+    port_active = port_is_open(project.get("port")) if port_active is None else port_active
     configured = bool(project.get("startCommand", "").strip())
     health = website_health or {}
     if external and not external_ready:
         state = "needs-config"
         label = "待配置"
+    elif external and health.get("pending"):
+        state = "checking"
+        label = "检测中"
     elif external:
         health = website_health or cached_website_health(project.get("url"))
         if health.get("online"):
@@ -300,33 +388,40 @@ def state_for(project: dict, *, website_health: dict | None = None) -> dict:
         "websiteStatus": health.get("status") if external_ready else None,
         "websiteDetail": health.get("detail", "") if external_ready else "",
         "websiteCheckedAt": health.get("checkedAt", "") if external_ready else "",
+        "websitePending": bool(health.get("pending")) if external_ready else False,
         "state": state,
         "stateLabel": label,
     }
 
 
 def states_for(projects: list[dict]) -> list[dict]:
-    external_projects = [
-        project
+    health_by_id = {
+        project["id"]: background_website_health(project.get("url"))
         for project in projects
         if project.get("mode") == "external"
         and project_url_is_valid(project.get("url"), external=True)
-    ]
-    health_by_id: dict[str, dict] = {}
-    if external_projects:
-        with ThreadPoolExecutor(max_workers=min(4, len(external_projects))) as executor:
-            futures = {
-                project["id"]: executor.submit(
-                    cached_website_health, project.get("url")
-                )
-                for project in external_projects
-            }
-            health_by_id = {
-                project_id: future.result()
-                for project_id, future in futures.items()
-            }
+    }
+    active_pids = running_pids([project.get("pid") for project in projects])
+    local_projects = [project for project in projects if project.get("mode") != "external"]
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(local_projects)))) as executor:
+        port_by_id = {
+            project["id"]: is_open
+            for project, is_open in zip(
+                local_projects,
+                executor.map(port_is_open, [project.get("port") for project in local_projects]),
+            )
+        }
     return [
-        state_for(project, website_health=health_by_id.get(project.get("id")))
+        state_for(
+            project,
+            website_health=health_by_id.get(project.get("id")),
+            port_active=port_by_id.get(project.get("id"), False),
+            pid_active=(
+                int(project["pid"]) in active_pids
+                if str(project.get("pid") or "").isdigit()
+                else False
+            ),
+        )
         for project in projects
     ]
 

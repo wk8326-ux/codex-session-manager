@@ -140,28 +140,20 @@
   }
 
   function renderSessions() {
-    const list = $('#session-list');
-    list.replaceChildren();
-    $('#session-count').textContent = String(state.sessions.length);
-    $('#session-empty').hidden = state.sessions.length > 0;
+    const select = $('#session-select');
+    select.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = state.sessions.length ? '选择已登记会话' : '尚未登记监控会话';
+    select.append(placeholder);
     for (const session of state.sessions) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = `session-item${session.id === state.selectedSessionId ? ' active' : ''}`;
-      button.dataset.sessionId = session.id;
-      const marker = document.createElement('span');
-      marker.className = `session-marker${['active', 'inProgress'].includes(session.lastSessionState) ? ' running' : ''}`;
-      const copy = document.createElement('span');
-      copy.className = 'session-item-copy';
-      const name = document.createElement('strong');
-      name.textContent = session.name;
-      const meta = document.createElement('small');
-      meta.textContent = `${stateLabel(session.lastSessionState)} · ${session.monitoringEnabled ? '监控开启' : '监控暂停'}`;
-      copy.append(name, meta);
-      button.append(marker, copy);
-      button.addEventListener('click', () => selectSession(session.id));
-      list.append(button);
+      const option = document.createElement('option');
+      option.value = session.id;
+      option.textContent = `${session.name} · ${stateLabel(session.lastSessionState)}`;
+      select.append(option);
     }
+    select.disabled = state.sessions.length === 0;
+    select.value = state.selectedSessionId;
   }
 
   function messageNode(role, label, text) {
@@ -187,7 +179,6 @@
   }
 
   function renderConversation(session, detail) {
-    $('#conversation-title').textContent = session.name;
     $('#conversation-meta').textContent = session.threadId;
     const status = detail.status || session.lastSessionState;
     $('#conversation-status').textContent = stateLabel(status);
@@ -425,10 +416,8 @@
     document.body.dataset.mobileView = view;
     $$('.mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.mobileView === view));
     if (view === 'projects') switchView('projects');
-    else {
-      switchView('sessions');
-      $('.context-rail').classList.toggle('mobile-visible', view === 'context');
-    }
+    else if (view === 'devices') switchView('devices');
+    else switchView('sessions');
   }
 
   function setupInteractions() {
@@ -436,6 +425,9 @@
     $('#confirm-pairing').addEventListener('click', enterAfterPairing);
     $('#create-pairing').addEventListener('click', createPairing);
     $('#composer').addEventListener('submit', sendMessage);
+    $('#session-select').addEventListener('change', event => {
+      if (event.target.value) selectSession(event.target.value);
+    });
     $('#refresh-button').addEventListener('click', () => loadWorkspaceData().catch(error => showToast(error.message)));
     $('#message-input').addEventListener('input', event => {
       event.target.style.height = 'auto';

@@ -46,7 +46,7 @@
   </section>
 
   <div class="app-shell" id="app-shell" hidden>
-    <aside class="sidebar" aria-label="控制台工作区">
+    <aside class="sidebar" aria-label="控制台主导航">
       <a class="brand" href="/" id="brand-home">
         <img src="/assets/project-console-icon.png" alt="">
         <span><strong>本地项目控制台</strong><small id="host-label">REMOTE / 8766</small></span>
@@ -57,14 +57,8 @@
         <div><strong id="connection-label">主机已连接</strong><small id="connection-detail">事件通道准备中</small></div>
       </section>
 
-      <nav class="workspace-nav" aria-label="工作区导航">
-        <h2>工作区</h2>
-        <div class="project-nav-group">
-          <a class="nav-link" href="/" id="project-console-link"><span class="nav-icon">▦</span><span>项目控制台</span></a>
-          <div class="project-filter-list" aria-label="项目查看范围">
-            <span>全部项目</span><span>运行中</span><span>已关闭</span><span>待配置</span><span>网页入口</span>
-          </div>
-        </div>
+      <nav class="workspace-nav" aria-label="主导航">
+        <a class="nav-link" href="/" id="project-console-link"><span class="nav-icon">▦</span><span>项目控制台</span></a>
         <a class="nav-link" href="/watchdog" id="watchdog-link"><span class="nav-icon">⌁</span><span>会话监控</span></a>
         <a class="nav-link current" href="/remote" aria-current="page"><span class="nav-icon">⌁</span><span>远程会话</span></a>
       </nav>
@@ -90,15 +84,15 @@
       </nav>
 
       <section class="sessions-workspace view active" data-view-panel="sessions">
-        <aside class="session-rail" aria-label="已登记会话">
-          <div class="rail-heading"><span>监控目录</span><strong id="session-count">0</strong></div>
-          <div class="session-list" id="session-list"></div>
-          <div class="empty-state" id="session-empty" hidden>尚未在“会话监控”中登记会话。</div>
-        </aside>
-
         <section class="conversation" aria-live="polite">
           <header class="conversation-head">
-            <div><h2 id="conversation-title">选择一个会话</h2><p id="conversation-meta">从左侧监控目录中选择</p></div>
+            <div class="session-picker">
+              <label for="session-select">监控会话</label>
+              <select id="session-select" aria-describedby="conversation-meta">
+                <option value="">选择已登记会话</option>
+              </select>
+              <p id="conversation-meta">只显示会话监控中登记的任务</p>
+            </div>
             <span class="status-badge" id="conversation-status">未选择</span>
           </header>
           <div class="transcript" id="transcript">
@@ -110,34 +104,6 @@
             <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">↑</button>
           </form>
         </section>
-
-        <aside class="context-rail">
-          <section class="connection-track">
-            <div class="track-line" aria-hidden="true"><span></span><span></span><span></span></div>
-            <div class="track-copy"><strong>手机</strong><small>已授权设备</small></div>
-            <div class="track-copy"><strong>工作台</strong><small>远程服务 / 8766</small></div>
-            <div class="track-copy"><strong>Codex</strong><small id="codex-state">检查连接中</small></div>
-          </section>
-
-          <section class="pairing-admin admin-only">
-            <div class="section-heading"><div><p class="eyebrow">PAIR DEVICE</p><h2>添加移动设备</h2></div></div>
-            <label for="public-base-url">手机可访问地址</label>
-            <input id="public-base-url" type="url" inputmode="url" placeholder="http://192.168.1.10:8766">
-            <button class="button primary wide" id="create-pairing" type="button">生成配对二维码</button>
-            <div class="qr-result" id="qr-result" hidden>
-              <img id="pairing-qr" alt="手机配对二维码">
-              <span>桌面验证码</span>
-              <strong id="desktop-comparison-code">000000</strong>
-              <small id="pairing-expiry"></small>
-            </div>
-          </section>
-
-          <section class="mobile-context">
-            <p class="eyebrow">CURRENT HOST</p>
-            <h2>本地开发主机</h2>
-            <p>只同步监控目录中的会话。桌面 GUI 必要时需要切换或重新打开会话。</p>
-          </section>
-        </aside>
       </section>
 
       <section class="projects-view view" data-view-panel="projects" hidden>
@@ -146,15 +112,40 @@
       </section>
 
       <section class="devices-view view admin-only" data-view-panel="devices" hidden>
-        <header class="section-heading"><div><p class="eyebrow">TRUSTED DEVICES</p><h2>已配对设备</h2></div><span>撤销后立即失效</span></header>
-        <div class="device-list" id="device-list"></div>
+        <div class="devices-layout">
+          <div class="pairing-column">
+            <section class="connection-track">
+              <div class="track-line" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="track-copy"><strong>手机</strong><small>已授权设备</small></div>
+              <div class="track-copy"><strong>工作台</strong><small>远程服务 / 8766</small></div>
+              <div class="track-copy"><strong>Codex</strong><small id="codex-state">检查连接中</small></div>
+            </section>
+            <section class="pairing-admin">
+              <div class="section-heading"><div><p class="eyebrow">PAIR DEVICE</p><h2>添加移动设备</h2></div></div>
+              <label for="public-base-url">手机可访问地址</label>
+              <input id="public-base-url" type="url" inputmode="url" placeholder="http://192.168.1.10:8766">
+              <button class="button primary wide" id="create-pairing" type="button">生成配对二维码</button>
+              <div class="qr-result" id="qr-result" hidden>
+                <img id="pairing-qr" alt="手机配对二维码">
+                <span>桌面验证码</span>
+                <strong id="desktop-comparison-code">000000</strong>
+                <small id="pairing-expiry"></small>
+              </div>
+            </section>
+          </div>
+          <section class="trusted-devices">
+            <header class="section-heading"><div><p class="eyebrow">TRUSTED DEVICES</p><h2>已配对设备</h2></div><span>撤销后立即失效</span></header>
+            <p class="section-copy">只同步会话监控中登记的任务；跨公网访问需使用 Tailscale 或其他受信任的 HTTPS 通道。</p>
+            <div class="device-list" id="device-list"></div>
+          </section>
+        </div>
       </section>
     </main>
 
     <nav class="mobile-nav" aria-label="移动端视图导航">
       <button class="active" type="button" data-mobile-view="sessions"><span>⌁</span>会话</button>
       <button type="button" data-mobile-view="projects"><span>▦</span>项目</button>
-      <button type="button" data-mobile-view="context"><span>●</span>连接</button>
+      <button class="admin-only" type="button" data-mobile-view="devices"><span>●</span>设备</button>
     </nav>
   </div>
 
@@ -163,4 +154,3 @@
   <script src="/remote.js" defer></script>
 </body>
 </html>
-

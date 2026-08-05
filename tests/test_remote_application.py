@@ -36,8 +36,10 @@ class SessionStore:
 class Adapter:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.last_turn_limit: int | None = None
 
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
+        self.last_turn_limit = turn_limit
         return {"threadId": thread_id, "status": "idle", "turns": []}
 
     def send_message(self, thread_id: str, prompt: str) -> dict:
@@ -83,6 +85,12 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(self.adapter.sent, [(THREAD_ID, "继续")])
         with self.assertRaises(RemoteNotFound):
             self.application.send_message("unknown", {"message": "continue"})
+
+    def test_session_detail_is_limited_to_recent_turns(self) -> None:
+        detail = self.application.read_session("session-1")
+
+        self.assertEqual(detail["threadId"], THREAD_ID)
+        self.assertEqual(self.adapter.last_turn_limit, 12)
 
     def test_project_overview_omits_paths_commands_and_urls(self) -> None:
         projects = self.application.list_projects()

@@ -73,14 +73,10 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 .connection-dot { width: 8px; height: 8px; flex: none; background: var(--running); border-radius: 50%; box-shadow: 0 0 0 4px rgba(39, 132, 90, .12); }
 .connection-dot.offline { background: var(--danger); box-shadow: 0 0 0 4px rgba(180, 69, 56, .12); }
 .workspace-nav { display: grid; gap: 4px; margin-top: 32px; }
-.workspace-nav h2 { margin: 0 0 8px; color: var(--ink-3); font-size: 12px; }
 .nav-link { min-height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--ink-2); border: 1px solid transparent; border-radius: 6px; font-size: 13px; font-weight: 600; text-decoration: none; }
 .nav-link:hover { color: var(--ink); background: var(--surface-hover); }
 .nav-link.current { color: var(--accent); background: var(--accent-soft); border-color: rgba(45, 113, 91, .14); }
 .nav-icon { width: 16px; color: currentColor; text-align: center; font: 16px/1 Bahnschrift, sans-serif; }
-.project-nav-group { display: grid; gap: 4px; }
-.project-filter-list { display: grid; gap: 3px; margin: 1px 0 8px 27px; padding-left: 10px; border-left: 1px solid var(--border); }
-.project-filter-list span { min-height: 27px; display: flex; align-items: center; color: var(--ink-3); font-size: 11px; }
 .theme-toggle { min-height: 44px; display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding: 0 10px; color: var(--ink-2); background: transparent; border: 1px solid var(--border); border-radius: 6px; }
 .theme-switch { position: relative; width: 43px; height: 24px; background: var(--surface-hover); border: 1px solid var(--border-strong); border-radius: 999px; }
 .theme-switch span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 50%; transition: transform 150ms ease-out; }
@@ -100,26 +96,18 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .view-tab { min-height: 49px; padding: 0 2px; color: var(--ink-3); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 600; }
 .view-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 .view { min-height: 0; }
-.sessions-workspace { display: grid; grid-template-columns: 242px minmax(360px, 1fr) 276px; min-height: 0; }
-.session-rail { min-width: 0; padding: 18px 14px; border-right: 1px solid var(--border); background: var(--surface-muted); overflow-y: auto; }
-.rail-heading { display: flex; justify-content: space-between; padding: 0 6px 12px; color: var(--ink-3); font-size: 11px; }
-.rail-heading strong { color: var(--ink-2); }
-.session-list { display: grid; gap: 5px; }
-.session-item { width: 100%; min-height: 64px; display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px 10px; color: var(--ink-2); background: transparent; border: 1px solid transparent; border-radius: 6px; text-align: left; }
-.session-item:hover { background: var(--surface-hover); }
-.session-item.active { color: var(--ink); background: var(--surface); border-color: var(--border); box-shadow: 0 2px 8px rgba(30, 47, 40, .05); }
-.session-marker { width: 7px; height: 7px; margin-top: 5px; background: var(--ink-3); border-radius: 50%; }
-.session-marker.running { background: var(--running); }
-.session-item-copy { min-width: 0; display: grid; gap: 5px; }
-.session-item-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.session-item-copy small { overflow: hidden; color: var(--ink-3); font: 10px/1.3 "Cascadia Mono", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.sessions-workspace { padding: 24px 28px 30px; overflow-y: auto; }
 .empty-state { padding: 22px 10px; color: var(--ink-3); font-size: 12px; line-height: 1.7; }
-.conversation { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(240px, 1fr) auto; }
+.conversation { width: min(1120px, 100%); min-width: 0; display: grid; grid-template-rows: auto auto auto; margin: 0 auto; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .conversation-head { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid var(--border); }
+.session-picker { min-width: 0; display: grid; grid-template-columns: auto minmax(220px, 520px); align-items: center; gap: 4px 12px; }
+.session-picker label { color: var(--ink-2); font-size: 11px; font-weight: 700; }
+.session-picker select { min-width: 0; height: 40px; padding: 0 34px 0 11px; color: var(--ink); background: var(--surface-muted); border: 1px solid var(--border); border-radius: 6px; }
 .conversation-head p { margin: 5px 0 0; color: var(--ink-3); font: 10px/1.3 "Cascadia Mono", Consolas, monospace; }
+.session-picker p { grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-badge { flex: none; padding: 5px 8px; color: var(--ink-2); background: var(--surface-muted); border: 1px solid var(--border); border-radius: 999px; font-size: 10px; }
 .status-badge.running { color: var(--running); background: rgba(39, 132, 90, .08); border-color: rgba(39, 132, 90, .2); }
-.transcript { min-height: 0; padding: 26px max(22px, 6%); overflow-y: auto; overscroll-behavior: contain; }
+.transcript { height: clamp(300px, calc(100dvh - 360px), 680px); min-height: 0; padding: 26px max(22px, 6%); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .turn { display: grid; gap: 14px; margin-bottom: 24px; }
 .turn-divider { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font: 9px/1 "Cascadia Mono", Consolas, monospace; }
 .turn-divider::before, .turn-divider::after { content: ""; height: 1px; flex: 1; background: var(--border); }
@@ -135,11 +123,10 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .conversation-empty { min-height: 100%; display: grid; place-content: center; gap: 8px; color: var(--ink-3); text-align: center; }
 .conversation-empty strong { color: var(--ink-2); font-size: 13px; }
 .conversation-empty span { font-size: 11px; }
-.composer { position: relative; margin: 0 max(18px, 5%) 22px; }
+.composer { position: relative; margin: 16px max(18px, 5%) 20px; }
 .composer textarea { min-height: 54px; max-height: 160px; background: var(--surface); box-shadow: var(--shadow); }
 .send-button { position: absolute; right: 8px; bottom: 8px; width: 36px; height: 36px; display: grid; place-items: center; color: #fff; background: var(--accent); border: 0; border-radius: 6px; font-size: 18px; }
 .send-button:hover { background: var(--accent-strong); }
-.context-rail { min-width: 0; padding: 22px 18px; border-left: 1px solid var(--border); overflow-y: auto; }
 .connection-track { display: grid; grid-template-columns: 18px 1fr; gap: 0 10px; padding-bottom: 22px; border-bottom: 1px solid var(--border); }
 .track-line { grid-row: 1 / 4; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 5px 0; }
 .track-line::before { content: ""; position: absolute; width: 1px; height: 92px; background: var(--border-strong); }
@@ -147,7 +134,7 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .track-copy { min-height: 48px; display: grid; align-content: start; gap: 3px; }
 .track-copy strong { font-size: 11px; }
 .track-copy small { color: var(--ink-3); font-size: 10px; }
-.pairing-admin, .mobile-context { padding-top: 22px; }
+.pairing-admin { padding-top: 22px; }
 .pairing-admin label { display: block; margin: 16px 0 7px; color: var(--ink-2); font-size: 11px; }
 .button { min-height: 42px; padding: 0 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-weight: 600; }
 .button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
@@ -157,7 +144,6 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .qr-result img { width: min(176px, 100%); aspect-ratio: 1; padding: 8px; background: #fff; border: 1px solid var(--border); border-radius: 6px; }
 .qr-result span, .qr-result small { color: var(--ink-3); font-size: 10px; }
 .qr-result strong { font: 700 24px/1.2 "Cascadia Mono", Consolas, monospace; }
-.mobile-context p:last-child { color: var(--ink-2); font-size: 11px; line-height: 1.65; }
 .projects-view, .devices-view { padding: 24px 28px; overflow-y: auto; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
 .section-heading > span { color: var(--ink-3); font-size: 11px; }
@@ -168,6 +154,9 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .project-state { justify-self: end; color: var(--ink-2); font-size: 11px; }
 .project-state.running, .project-state.online { color: var(--running); }
 .device-row { grid-template-columns: minmax(160px, 1fr) 180px 92px; }
+.devices-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(420px, 1fr); gap: clamp(28px, 5vw, 72px); }
+.pairing-column { padding-right: clamp(0px, 2vw, 24px); border-right: 1px solid var(--border); }
+.section-copy { max-width: 620px; margin: 12px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.65; }
 .device-meta { display: grid; gap: 4px; }
 .text-button { min-height: 36px; color: var(--danger); background: transparent; border: 1px solid transparent; border-radius: 6px; }
 .text-button:hover { background: rgba(180, 69, 56, .08); }
@@ -187,8 +176,7 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .toast { position: fixed; z-index: 110; right: 20px; bottom: 20px; max-width: min(360px, calc(100vw - 40px)); padding: 11px 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: var(--shadow); font-size: 12px; }
 
 @media (max-width: 1120px) {
-  .sessions-workspace { grid-template-columns: 220px minmax(340px, 1fr); }
-  .context-rail { display: none; }
+  .devices-layout { grid-template-columns: minmax(240px, 300px) minmax(320px, 1fr); gap: 28px; }
 }
 
 @media (max-width: 760px) {
@@ -200,16 +188,14 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
   .topbar h1 { font-size: 20px; }
   .sync-state { display: none; }
   .view-tabs { display: none; }
-  .sessions-workspace { display: block; }
-  .session-rail { padding: 12px 12px 8px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--border); }
-  .rail-heading { padding-bottom: 8px; }
-  .session-list { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; }
-  .session-list::-webkit-scrollbar { display: none; }
-  .session-item { min-width: 152px; max-width: 180px; min-height: 54px; padding: 8px; background: var(--surface); border-color: var(--border); }
-  .conversation { min-height: calc(100dvh - 72px - 92px - 64px); grid-template-rows: auto minmax(220px, 1fr) auto; }
-  .conversation-head { min-height: 60px; padding: 10px 16px; }
-  .conversation-head h2 { font-size: 14px; }
-  .transcript { padding: 18px 14px; }
+  .sessions-workspace { display: block; padding: 0; overflow: visible; }
+  .conversation { width: 100%; border: 0; border-radius: 0; }
+  .conversation-head { min-height: 76px; padding: 10px 16px; }
+  .session-picker { width: 100%; grid-template-columns: 1fr; gap: 4px; }
+  .session-picker label { font-size: 10px; }
+  .session-picker select { width: 100%; height: 42px; font-size: 13px; }
+  .session-picker p { display: none; }
+  .transcript { height: clamp(280px, calc(100dvh - 291px - env(safe-area-inset-bottom)), 600px); padding: 18px 14px; }
   .message { max-width: 92%; }
   .message-body { font-size: 13px; }
   .composer { position: sticky; bottom: calc(64px + env(safe-area-inset-bottom)); z-index: 10; margin: 0; padding: 10px 12px; background: var(--surface); border-top: 1px solid var(--border); }
@@ -218,18 +204,18 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
   .projects-view { padding: 18px 16px; }
   .project-row { min-height: 62px; grid-template-columns: minmax(0, 1fr) 90px; }
   .project-row > small { display: none; }
-  .devices-view { display: none !important; }
-  .mobile-nav { position: fixed; z-index: 40; inset: auto 0 0; height: calc(64px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(3, 1fr); padding-bottom: env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--border); }
+  .devices-view { padding: 18px 16px; }
+  .devices-layout { grid-template-columns: 1fr; gap: 30px; }
+  .pairing-column { padding: 0 0 28px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .device-row { grid-template-columns: minmax(0, 1fr) 72px; }
+  .device-row > small { display: none; }
+  .mobile-nav { position: fixed; z-index: 40; inset: auto 0 0; height: calc(64px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); padding-bottom: env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--border); }
   .mobile-nav button { min-height: 64px; display: grid; place-content: center; gap: 3px; color: var(--ink-3); background: transparent; border: 0; font-size: 10px; }
   .mobile-nav button span { font-size: 16px; }
   .mobile-nav button.active { color: var(--accent); }
-  .context-rail.mobile-visible { display: block; min-height: calc(100dvh - 136px); padding: 24px 18px; border: 0; }
-  .context-rail.mobile-visible .pairing-admin { display: none; }
   .toast { right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); }
-  body[data-mobile-view="context"] .session-rail,
-  body[data-mobile-view="context"] .conversation { display: none; }
-  body[data-mobile-view="context"] .context-rail { display: block; min-height: calc(100dvh - 136px); padding: 24px 18px; border: 0; }
   body[data-mobile-view="projects"] .sessions-workspace { display: none; }
+  body[data-mobile-view="devices"] .sessions-workspace { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

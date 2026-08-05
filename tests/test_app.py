@@ -16,7 +16,9 @@ from app import (
     project_summary,
     project_url_is_valid,
     reorder_projects,
+    running_pids,
     state_for,
+    states_for,
 )
 
 
@@ -83,6 +85,66 @@ class ProjectSummaryTests(unittest.TestCase):
             {"all": 3, "running": 1, "stopped": 1, "needs-config": 0, "external": 1},
         )
         self.assertNotIn("projects", summary)
+
+
+class ProjectStateBatchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        WEBSITE_CACHE.clear()
+
+    def test_slow_external_probe_does_not_block_project_state_response(self) -> None:
+        probe_started = threading.Event()
+        release_probe = threading.Event()
+        state_ready = threading.Event()
+        result: list[dict] = []
+
+        def slow_probe(_url: object) -> dict:
+            probe_started.set()
+            release_probe.wait(timeout=2)
+            return {
+                "online": True,
+                "status": 200,
+                "detail": "HTTP 200",
+                "checkedAt": "2026-08-05 12:00:00",
+            }
+
+        def collect_states() -> None:
+            result.extend(
+                states_for(
+                    [
+                        {
+                            "id": "external-project",
+                            "name": "Slow website",
+                            "mode": "external",
+                            "url": "https://slow.example.com",
+                            "path": "",
+                            "startCommand": "",
+                            "port": "",
+                            "pid": None,
+                        }
+                    ]
+                )
+            )
+            state_ready.set()
+
+        with patch("app.probe_website", side_effect=slow_probe):
+            worker = threading.Thread(target=collect_states)
+            worker.start()
+            try:
+                self.assertTrue(probe_started.wait(timeout=1))
+                returned_while_probe_is_running = state_ready.wait(timeout=0.25)
+            finally:
+                release_probe.set()
+                worker.join(timeout=2)
+
+        self.assertTrue(returned_while_probe_is_running)
+        self.assertEqual(result[0]["websiteDetail"], "检测中")
+
+    def test_single_managed_process_uses_targeted_pid_check(self) -> None:
+        with patch("app.pid_is_running", return_value=True) as check:
+            active = running_pids([None, "2048", ""])
+
+        self.assertEqual(active, {2048})
+        check.assert_called_once_with(2048)
 
 
 class HandlerConnectionTests(unittest.TestCase):

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#e9eeeb">
+  <link rel="icon" href="/assets/project-console-icon.png">
   <script>
     (() => {
       const key = 'localhost-project-console.theme';
@@ -428,7 +429,7 @@
 <body>
   <a class="skip-link" href="#watchdog-main">跳到会话监控内容</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="控制台工作区">
+    <aside class="sidebar" aria-label="控制台主导航">
       <a class="brand" href="/" aria-label="本地项目控制台首页">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -442,26 +443,11 @@
         <div class="summary-track" aria-hidden="true"><span id="running-track"></span></div>
       </section>
 
-      <nav class="workspace-nav" aria-label="工作区导航">
-        <h2>工作区</h2>
-        <div class="project-nav-group">
-          <a class="nav-link" href="/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/></svg>
-            <span>项目控制台</span>
-          </a>
-          <div class="project-filter-list" id="project-filter-list" aria-label="项目查看范围">
-            <h3>查看范围</h3>
-            <a class="filter-link" href="/?filter=all"><span>全部项目</span><span data-project-count="all">0</span></a>
-            <a class="filter-link" href="/?filter=running"><span>运行中</span><span data-project-count="running">0</span></a>
-            <a class="filter-link" href="/?filter=stopped"><span>已关闭</span><span data-project-count="stopped">0</span></a>
-            <a class="filter-link" href="/?filter=needs-config"><span>待配置</span><span data-project-count="needs-config">0</span></a>
-            <a class="filter-link" href="/?filter=external"><span>网页入口</span><span data-project-count="external">0</span></a>
-          </div>
-        </div>
-      </nav>
-
-      <nav class="tool-nav" aria-label="自动化工具">
-        <h2>自动化工具</h2>
+      <nav class="workspace-nav" aria-label="主导航">
+        <a class="nav-link" href="/">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/></svg>
+          <span>项目控制台</span>
+        </a>
         <a class="nav-link" href="/watchdog" aria-current="page">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           <span>会话监控</span>
@@ -493,7 +479,7 @@
       <div class="workspace-inner">
         <header class="page-head">
           <div>
-            <p class="page-kicker">自动化工具</p>
+            <p class="page-kicker">SESSION WATCHDOG</p>
             <h1>会话监控</h1>
             <p class="page-description">集中查看指定本地 Codex 会话的渠道健康、运行状态和安全续跑记录。</p>
           </div>
@@ -1244,17 +1230,16 @@
 
     async function loadInitial() {
       try {
-        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs, appState.rules, appState.projectSummary] = await Promise.all([
+        [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs, appState.rules] = await Promise.all([
           apiRequest(WATCHDOG_ENDPOINTS.status),
           apiRequest(WATCHDOG_ENDPOINTS.settings),
           apiRequest(WATCHDOG_ENDPOINTS.channels),
           apiRequest(WATCHDOG_ENDPOINTS.sessions),
           apiRequest(`${WATCHDOG_ENDPOINTS.runs}?limit=100`),
           apiRequest(WATCHDOG_ENDPOINTS.rules),
-          apiRequest('/api/shell/project-summary'),
         ]);
-        renderProjectSidebar();
         renderAll();
+        refreshProjectSidebar().catch(() => {});
       } catch (error) {
         document.getElementById('sessions-loading').hidden = true;
         document.getElementById('sessions-empty').hidden = false;

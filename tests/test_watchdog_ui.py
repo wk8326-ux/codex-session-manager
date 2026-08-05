@@ -33,21 +33,23 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertNotIn("执行记录", html)
         self.assertNotIn("添加监控渠道", html)
 
-    def test_project_navigation_stays_expanded_across_both_workspaces(self) -> None:
-        labels = ["全部项目", "运行中", "已关闭", "待配置", "网页入口"]
+    def test_sidebar_navigation_has_only_three_primary_entries(self) -> None:
+        removed_labels = ["查看范围", "全部项目", "工作区", "自动化工具"]
 
-        for filename in ("index.html", "watchdog.html"):
+        for filename in ("index.html", "watchdog.html", "remote.html"):
             with self.subTest(filename=filename):
                 html = (ROOT / filename).read_text(encoding="utf-8")
-                self.assertIn('class="sidebar-summary"', html)
-                self.assertIn('id="project-filter-list"', html)
-                self.assertIn('aria-label="项目查看范围"', html)
-                for label in labels:
-                    self.assertIn(label, html)
+                summary_class = "host-summary" if filename == "remote.html" else "sidebar-summary"
+                self.assertIn(f'class="{summary_class}"', html)
+                nav_start = html.index('<nav class="workspace-nav"')
+                nav = html[nav_start:html.index("</nav>", nav_start)]
+                for label in ("项目控制台", "会话监控", "远程会话"):
+                    self.assertEqual(nav.count(f">{label}<"), 1)
+                for label in removed_labels:
+                    self.assertNotIn(f">{label}<", nav)
 
         watchdog_html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
         self.assertIn('href="/watchdog" aria-current="page"', watchdog_html)
-        self.assertIn('href="/?filter=running"', watchdog_html)
 
     def test_watchdog_page_has_four_horizontal_tabs(self) -> None:
         html = (ROOT / "watchdog.html").read_text(encoding="utf-8")

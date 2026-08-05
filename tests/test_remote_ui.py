@@ -17,6 +17,17 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn('class="mobile-nav"', html)
         self.assertIn('id="create-pairing"', html)
         self.assertIn('id="desktop-comparison-code"', html)
+        self.assertIn('id="session-select"', html)
+        self.assertNotIn('id="session-list"', html)
+        self.assertLess(html.index('id="create-pairing"'), html.index('id="device-list"'))
+
+    def test_transcript_is_a_fixed_scrollable_latest_message_viewport(self) -> None:
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("height: clamp(", stylesheet)
+        self.assertIn("overflow-y: auto", stylesheet)
+        self.assertIn("transcript.scrollTop = transcript.scrollHeight", script)
 
     def test_service_worker_never_caches_api_responses(self) -> None:
         script = (ROOT / "service-worker.js").read_text(encoding="utf-8")

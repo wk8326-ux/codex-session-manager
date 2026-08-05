@@ -1,4 +1,4 @@
-const CACHE_NAME = 'local-project-console-remote-v2';
+const CACHE_NAME = 'local-project-console-remote-v3';
 const STATIC_ASSETS = [
   '/remote',
   '/remote.css',

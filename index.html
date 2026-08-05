@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#e9eeeb">
+  <link rel="icon" href="/assets/project-console-icon.png">
   <script>
     (() => {
       const key = 'localhost-project-console.theme';
@@ -404,7 +405,7 @@
 <body>
   <a class="skip-link" href="#main-content">跳到项目列表</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="项目状态与筛选">
+    <aside class="sidebar" aria-label="控制台主导航">
       <a class="brand" href="/" aria-label="本地项目控制台首页">
         <span class="brand-mark" id="brand-icon"></span>
         <span class="brand-copy"><strong>本地项目控制台</strong><span>LOCALHOST / 8765</span></span>
@@ -416,27 +417,10 @@
         <div class="summary-track" aria-hidden="true"><span id="running-track"></span></div>
       </section>
 
-      <nav class="workspace-nav" aria-label="工作区导航">
-        <h2>工作区</h2>
-        <div class="project-nav-group">
-          <button class="nav-section-trigger" type="button" aria-current="page" aria-expanded="true" aria-controls="project-filter-list">
-            <span data-icon="layout"></span><span>项目控制台</span><span class="nav-chevron" data-icon="chevron-down"></span>
-          </button>
-          <div class="project-filter-list" id="project-filter-list" aria-label="项目查看范围">
-            <h3>查看范围</h3>
-            <button class="filter-button" type="button" data-filter="all" aria-pressed="true"><span>全部项目</span><span data-count="all">0</span></button>
-            <button class="filter-button" type="button" data-filter="running" aria-pressed="false"><span>运行中</span><span data-count="running">0</span></button>
-            <button class="filter-button" type="button" data-filter="stopped" aria-pressed="false"><span>已关闭</span><span data-count="stopped">0</span></button>
-            <button class="filter-button" type="button" data-filter="needs-config" aria-pressed="false"><span>待配置</span><span data-count="needs-config">0</span></button>
-            <button class="filter-button" type="button" data-filter="external" aria-pressed="false"><span>网页入口</span><span data-count="external">0</span></button>
-          </div>
-        </div>
-      </nav>
-
-      <nav class="tool-nav" aria-label="自动化工具">
-        <h2>自动化工具</h2>
-        <a class="tool-link" href="/watchdog"><span data-icon="activity"></span><span>会话监控</span></a>
-        <a class="tool-link" href="/remote"><span data-icon="globe"></span><span>远程会话</span></a>
+      <nav class="workspace-nav" aria-label="主导航">
+        <a class="nav-link" href="/" aria-current="page"><span data-icon="layout"></span><span>项目控制台</span></a>
+        <a class="nav-link" href="/watchdog"><span data-icon="activity"></span><span>会话监控</span></a>
+        <a class="nav-link" href="/remote"><span data-icon="globe"></span><span>远程会话</span></a>
       </nav>
       <div class="theme-controls">
         <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="切换至深色模式" title="切换至深色模式">
@@ -570,9 +554,7 @@
       x: '<path d="M18 6 6 18M6 6l12 12"/>'
     };
     const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name] || ''}</svg>`;
-    const requestedFilter = new URLSearchParams(window.location.search).get('filter');
-    const initialFilter = ['all', 'running', 'stopped', 'needs-config', 'external'].includes(requestedFilter) ? requestedFilter : 'all';
-    const state = { projects: [], editing: null, deleting: null, filter: initialFilter, formBaseline: '', dragging: false, reordering: false };
+    const state = { projects: [], editing: null, deleting: null, formBaseline: '', dragging: false, reordering: false };
     const dragState = { item: null, pointerId: null, moved: false, originalIds: [] };
     const $ = (selector) => document.querySelector(selector);
     const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -604,9 +586,7 @@
     }
 
     function currentProjects() {
-      if (state.filter === 'all') return state.projects;
-      if (state.filter === 'external') return state.projects.filter(project => project.mode === 'external');
-      return state.projects.filter(project => project.state === state.filter);
+      return state.projects;
     }
 
     function runtimeText(project) {
@@ -653,17 +633,11 @@
       const projects = currentProjects();
       const local = state.projects.filter(project => project.mode !== 'external');
       const running = local.filter(project => project.state === 'running').length;
-      const counts = { all: state.projects.length, running: 0, stopped: 0, 'needs-config': 0, external: 0 };
-      state.projects.forEach(project => {
-        if (project.mode === 'external') counts.external += 1;
-        if (project.state in counts && project.state !== 'external') counts[project.state] += 1;
-      });
       $('#running-count').textContent = running;
       $('#local-count').textContent = local.length;
       $('#running-track').style.width = `${local.length ? Math.round(running / local.length * 100) : 0}%`;
-      Object.entries(counts).forEach(([key, value]) => { const element = document.querySelector(`[data-count="${key}"]`); if (element) element.textContent = value; });
       $('#visible-count').textContent = `${projects.length} 项`;
-      $('#projects').innerHTML = projects.length ? projects.map(projectRow).join('') : `<li class="empty-state">${icon('terminal')}<h3>这个筛选下没有项目</h3><p>切换查看范围，或添加一个新的项目。</p></li>`;
+      $('#projects').innerHTML = projects.length ? projects.map(projectRow).join('') : `<li class="empty-state">${icon('terminal')}<h3>还没有登记项目</h3><p>添加一个项目后，它会出现在这里。</p></li>`;
       $('#projects').setAttribute('aria-busy', 'false');
       $('#last-updated').textContent = `刚刚同步 · ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())}`;
     }
@@ -788,23 +762,6 @@
 
     hydrateIcons();
     $('#add-project').addEventListener('click', () => openForm());
-    const projectNavTrigger = $('.nav-section-trigger');
-    const projectFilterList = $('#project-filter-list');
-    $$('.filter-button').forEach(item => item.setAttribute('aria-pressed', String(item.dataset.filter === state.filter)));
-    projectNavTrigger.addEventListener('click', () => {
-      const expanded = projectNavTrigger.getAttribute('aria-expanded') === 'true';
-      projectNavTrigger.setAttribute('aria-expanded', String(!expanded));
-      projectFilterList.hidden = expanded;
-    });
-    $$('.filter-button').forEach(button => button.addEventListener('click', () => {
-      state.filter = button.dataset.filter;
-      $$('.filter-button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-      const url = new URL(window.location.href);
-      if (state.filter === 'all') url.searchParams.delete('filter');
-      else url.searchParams.set('filter', state.filter);
-      window.history.replaceState(null, '', `${url.pathname}${url.search}`);
-      render();
-    }));
     $('#projects').addEventListener('pointerdown', event => {
       const handle = event.target.closest('.drag-handle');
       if (!handle || event.button !== 0 || state.reordering) return;

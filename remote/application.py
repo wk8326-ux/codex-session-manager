@@ -120,7 +120,7 @@ class RemoteApplication:
     def read_session(self, session_id: str) -> dict:
         session = self._session(session_id)
         try:
-            detail = self.adapter.read_thread_detail(session["threadId"], turn_limit=40)
+            detail = self.adapter.read_thread_detail(session["threadId"], turn_limit=12)
         except CodexAdapterError as error:
             raise RemoteApplicationError("Codex 会话当前不可读取。") from error
         return {**self._session_summary(session), "conversation": detail}
@@ -148,4 +148,3 @@ class RemoteApplication:
             }
             for project in projects
         ]
-
