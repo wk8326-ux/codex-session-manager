@@ -52,11 +52,26 @@ class RemoteUiContractTests(unittest.TestCase):
 
     def test_runtime_activity_uses_structured_tool_and_reasoning_rows(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
 
         self.assertIn("reasoningNode", script)
         self.assertIn("activityNode", script)
         self.assertIn("conversationActivity", script)
         self.assertIn("stream-tail", script)
+        self.assertIn("runtime-strip running", script)
+        self.assertIn("runtime-rotor", stylesheet)
+        self.assertIn("status-badge.running::before", stylesheet)
+
+    def test_conversation_text_uses_safe_readable_markdown_structure(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        self.assertIn("appendRichText", script)
+        self.assertIn("appendInlineMarkup", script)
+        self.assertIn("message-heading", script)
+        self.assertIn("message-code", script)
+        self.assertIn("rich-text", stylesheet)
+        self.assertIn("max-width: 76ch", stylesheet)
 
     def test_service_worker_never_caches_api_responses(self) -> None:
         script = (ROOT / "service-worker.js").read_text(encoding="utf-8")
@@ -67,7 +82,8 @@ class RemoteUiContractTests(unittest.TestCase):
     def test_browser_renders_conversation_text_without_html_injection(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
 
-        self.assertIn("body.textContent = text", script)
+        self.assertIn("element.textContent =", script)
+        self.assertIn("code.textContent =", script)
         self.assertNotIn("innerHTML", script)
 
 

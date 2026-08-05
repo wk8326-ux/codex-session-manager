@@ -177,7 +177,8 @@
     $('#conversation-status').className = 'status-badge';
     $('#message-input').disabled = true;
     $('#send-button').disabled = true;
-    $('#runtime-signal').className = 'runtime-signal';
+    $('#runtime-strip').className = 'runtime-strip';
+    $('#runtime-signal').className = 'runtime-signal runtime-rotor';
     $('#runtime-activity').textContent = '等待选择会话';
     $('#runtime-detail').textContent = '选择后将持续同步 Codex 的最新活动';
     $('#runtime-metrics').textContent = '未连接';
@@ -301,6 +302,107 @@
     }
   }
 
+  function appendInlineMarkup(container, text) {
+    const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
+    let cursor = 0;
+    for (const match of text.matchAll(pattern)) {
+      if (match.index > cursor) container.append(document.createTextNode(text.slice(cursor, match.index)));
+      const token = match[0];
+      const element = document.createElement(token.startsWith('`') ? 'code' : 'strong');
+      element.className = token.startsWith('`') ? 'inline-code' : 'inline-strong';
+      element.textContent = token.startsWith('`') ? token.slice(1, -1) : token.slice(2, -2);
+      container.append(element);
+      cursor = match.index + token.length;
+    }
+    if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
+  }
+
+  function appendRichText(container, text) {
+    container.replaceChildren();
+    container.classList.add('rich-text');
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    let index = 0;
+    const blockStart = line => /^\s*(```|#{1,4}\s+|[-*+]\s+|\d+[.)]\s+|>\s*|\*\*[^*]+\*\*\s*$|---+\s*$)/.test(line);
+    while (index < lines.length) {
+      const line = lines[index];
+      if (!line.trim()) {
+        index += 1;
+        continue;
+      }
+      if (/^\s*```/.test(line)) {
+        const language = line.trim().slice(3).trim();
+        const codeLines = [];
+        index += 1;
+        while (index < lines.length && !/^\s*```/.test(lines[index])) {
+          codeLines.push(lines[index]);
+          index += 1;
+        }
+        if (index < lines.length) index += 1;
+        const pre = document.createElement('pre');
+        pre.className = 'message-code';
+        if (language) pre.dataset.language = language;
+        const code = document.createElement('code');
+        code.textContent = codeLines.join('\n');
+        pre.append(code);
+        container.append(pre);
+        continue;
+      }
+      const headingMatch = line.match(/^\s*#{1,4}\s+(.+)$/);
+      const boldHeadingMatch = line.match(/^\s*\*\*([^*]+)\*\*\s*$/);
+      if (headingMatch || boldHeadingMatch) {
+        const heading = document.createElement('h3');
+        heading.className = 'message-heading';
+        appendInlineMarkup(heading, headingMatch?.[1] || boldHeadingMatch[1]);
+        container.append(heading);
+        index += 1;
+        continue;
+      }
+      const unorderedMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+      const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
+      if (unorderedMatch || orderedMatch) {
+        const ordered = Boolean(orderedMatch);
+        const list = document.createElement(ordered ? 'ol' : 'ul');
+        list.className = 'message-list';
+        while (index < lines.length) {
+          const match = lines[index].match(ordered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*[-*+]\s+(.+)$/);
+          if (!match) break;
+          const item = document.createElement('li');
+          appendInlineMarkup(item, match[1]);
+          list.append(item);
+          index += 1;
+        }
+        container.append(list);
+        continue;
+      }
+      if (/^\s*>/.test(line)) {
+        const quoteLines = [];
+        while (index < lines.length && /^\s*>/.test(lines[index])) {
+          quoteLines.push(lines[index].replace(/^\s*>\s?/, ''));
+          index += 1;
+        }
+        const quote = document.createElement('blockquote');
+        appendInlineMarkup(quote, quoteLines.join('\n'));
+        container.append(quote);
+        continue;
+      }
+      if (/^\s*---+\s*$/.test(line)) {
+        container.append(document.createElement('hr'));
+        index += 1;
+        continue;
+      }
+      const paragraphLines = [line.trim()];
+      index += 1;
+      while (index < lines.length && lines[index].trim() && !blockStart(lines[index])) {
+        paragraphLines.push(lines[index].trim());
+        index += 1;
+      }
+      const paragraph = document.createElement('p');
+      appendInlineMarkup(paragraph, paragraphLines.join('\n'));
+      container.append(paragraph);
+    }
+    if (!container.childNodes.length) container.textContent = text;
+  }
+
   function messageNode(role, label, text) {
     const message = document.createElement('article');
     message.className = `message ${role}`;
@@ -309,7 +411,7 @@
     heading.textContent = label;
     const body = document.createElement('div');
     body.className = 'message-body';
-    body.textContent = text;
+    appendRichText(body, text);
     message.append(heading, body);
     return message;
   }
@@ -329,10 +431,11 @@
     const labels = {
       commandExecution: '执行命令', fileChange: '修改文件', mcpToolCall: '调用工具',
       webSearch: '搜索网页', reasoning: '分析任务', agentMessage: '生成回复',
-      plan: '更新计划', userMessage: '收到消息',
+      plan: '更新计划', userMessage: '收到消息', subAgentActivity: '子任务协作',
+      contextCompaction: '整理上下文',
     };
     if (item?.type === 'mcpToolCall') return [item.server, item.tool].filter(Boolean).join(' / ') || labels.mcpToolCall;
-    return item?.label || labels[item?.type] || '任务活动';
+    return labels[item?.type] || item?.label || '任务活动';
   }
 
   function conversationActivity(detail) {
@@ -370,7 +473,7 @@
     summary.append(signal, title);
     const body = document.createElement('div');
     body.className = 'reasoning-body';
-    body.textContent = item.text;
+    appendRichText(body, item.text);
     details.append(summary, body);
     return details;
   }
@@ -403,7 +506,8 @@
     const status = conversationStatus(detail);
     const running = status === 'inProgress';
     const failed = ['failed', 'interrupted', 'systemError'].includes(status);
-    $('#runtime-signal').className = `runtime-signal${running ? ' running' : ''}${failed ? ' failed' : ''}`;
+    $('#runtime-strip').className = `runtime-strip${running ? ' running' : ''}${failed ? ' failed' : ''}`;
+    $('#runtime-signal').className = `runtime-signal runtime-rotor${running ? ' running' : ''}${failed ? ' failed' : ''}`;
     $('#runtime-activity').textContent = conversationActivity(detail);
     const time = state.lastUpdatedAt
       ? new Date(state.lastUpdatedAt).toLocaleTimeString('zh-CN', { hour12: false })
@@ -616,7 +720,8 @@
     const button = $('#send-button');
     button.disabled = true;
     state.followTail = true;
-    $('#runtime-signal').className = 'runtime-signal running';
+    $('#runtime-strip').className = 'runtime-strip running';
+    $('#runtime-signal').className = 'runtime-signal runtime-rotor running';
     $('#runtime-activity').textContent = '等待 Codex 响应';
     $('#runtime-detail').textContent = '消息已提交，正在确认新的任务轮次';
     $('#transcript').setAttribute('aria-busy', 'true');
