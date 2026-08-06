@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/assets/project-console-icon.png">
-  <link rel="stylesheet" href="/remote.css">
+  <link rel="stylesheet" href="/remote.css?v=14">
   <link rel="stylesheet" href="/assets/console-sidebar.css?v=8">
   <script>
     (() => {
@@ -33,7 +33,7 @@
     <div class="pair-panel">
       <p class="eyebrow">设备配对</p>
       <h1 id="pair-title">连接到工作台</h1>
-      <p class="pair-copy">首次连接需要扫描电脑端生成的二维码。配对成功后，这台设备会被记住。</p>
+      <p class="pair-copy">首次设置需要扫描电脑端生成的二维码。配对成功后，这台设备会被记住并直接进入会话。</p>
 
       <div class="pair-start" id="pair-start">
         <div class="pair-memory">
@@ -152,6 +152,11 @@
                 <div><dt>接入方式</dt><dd id="tunnel-provider">FRP</dd></div>
                 <div><dt>本次启动</dt><dd id="tunnel-started-at">尚未启动</dd></div>
               </dl>
+              <a class="setup-entry" id="open-remote-setup" href="/remote-setup">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5-5l2.1 2.1-2.4 2.4-2.1-2.1a4 4 0 0 0 5 5l7.1 7.1a2 2 0 0 1-2.8 2.8l-7.1-7.1a4 4 0 0 0-5-5"/><path d="m15 9 3-3 2 2-3 3"/></svg>
+                <span><strong>配置或迁移远程访问</strong><small>按 5 个步骤部署中继并连接本机</small></span>
+                <svg class="setup-entry-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+              </a>
             </section>
             <section class="pairing-admin">
               <div class="section-heading"><div><p class="eyebrow">PAIR DEVICE</p><h2>添加移动设备</h2></div></div>
@@ -210,6 +215,7 @@
 
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="/assets/vendor/qrcode.min.js"></script>
-  <script src="/remote.js?v=8" defer></script>
+  <script src="/assets/vendor/jsQR.js?v=1" defer></script>
+  <script src="/remote.js?v=11" defer></script>
 </body>
 </html>

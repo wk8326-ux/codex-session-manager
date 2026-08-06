@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import subprocess
 from pathlib import Path
 
 
@@ -67,6 +68,94 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn(".qr-scanner", stylesheet)
         self.assertIn(".pair-memory", stylesheet)
 
+    def test_pairing_keeps_the_current_origin_and_survives_confirmation_reload(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        accept_pairing = script[
+            script.index("function acceptPairingUrl"):
+            script.index("function parsePairingLink")
+        ]
+        claim_pairing = script[
+            script.index("async function claimPairing"):
+            script.index("async function enterAfterPairing")
+        ]
+        self.assertNotIn("location.assign", accept_pairing)
+        self.assertIn("stopQrScanner({ keepFeedback: scannerActive })", accept_pairing)
+        self.assertIn("storePendingPairing", claim_pairing)
+        self.assertIn("readPendingPairing", script)
+        self.assertIn("restorePendingPairing", script)
+
+    def test_transient_remote_failures_do_not_immediately_report_disconnected(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("CONNECTION_FAILURE_THRESHOLD = 3", script)
+        self.assertIn("CONNECTION_FAILURE_GRACE_MS = 8000", script)
+        self.assertIn("connectionFailureCount", script)
+        self.assertIn("连接波动，正在复检", script)
+        self.assertIn("error.authorizationFailed", script)
+        self.assertIn("scheduleWorkspaceRetry", script)
+
+    def test_camera_scanner_falls_back_when_barcode_detector_is_missing(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        server = (ROOT / "app.py").read_text(encoding="utf-8")
+
+        self.assertIn('/assets/vendor/jsQR.js?v=1', html)
+        self.assertIn("async function createQrDetector", script)
+        self.assertIn("typeof window.jsQR === 'function'", script)
+        self.assertIn("window.jsQR(image.data", script)
+        self.assertNotIn("|| !('BarcodeDetector' in window)", script)
+        self.assertGreaterEqual(server.count('"/assets/vendor/jsQR.js"'), 2)
+
+    def test_vendored_decoder_reads_the_generated_pairing_qr(self) -> None:
+        generator = ROOT / "assets" / "vendor" / "qrcode.min.js"
+        decoder = ROOT / "assets" / "vendor" / "jsQR.js"
+        node_script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const generatorPath = process.argv[1];
+const decoderPath = process.argv[2];
+const context = {};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(generatorPath, 'utf8'), context);
+const jsQR = require(decoderPath);
+const value = 'https://console.example.com/pair?pairing=12345678-1234-1234-1234-123456789012#secret=test-secret';
+const qr = context.qrcode(0, 'M');
+qr.addData(value);
+qr.make();
+const modules = qr.getModuleCount();
+const quiet = 4;
+const scale = 5;
+const width = (modules + quiet * 2) * scale;
+const pixels = new Uint8ClampedArray(width * width * 4);
+pixels.fill(255);
+for (let row = 0; row < modules; row += 1) {
+  for (let column = 0; column < modules; column += 1) {
+    if (!qr.isDark(row, column)) continue;
+    for (let y = 0; y < scale; y += 1) {
+      for (let x = 0; x < scale; x += 1) {
+        const pixelX = (column + quiet) * scale + x;
+        const pixelY = (row + quiet) * scale + y;
+        const offset = (pixelY * width + pixelX) * 4;
+        pixels[offset] = 0;
+        pixels[offset + 1] = 0;
+        pixels[offset + 2] = 0;
+      }
+    }
+  }
+}
+const result = jsQR(pixels, width, width, { inversionAttempts: 'dontInvert' });
+if (!result || result.data !== value) process.exit(1);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, str(generator), str(decoder)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_live_activity_can_override_a_stale_interrupted_snapshot(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
@@ -102,6 +191,24 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn("followTail", script)
         self.assertIn("scrollToLatest", script)
         self.assertIn("aria-busy", (ROOT / "remote.html").read_text(encoding="utf-8"))
+
+    def test_mobile_remote_mode_fills_the_viewport_without_a_single_item_nav(self) -> None:
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        self.assertIn("body.remote-mode .mobile-nav { display: none; }", stylesheet)
+        self.assertIn("body.remote-mode .main { height: 100dvh; }", stylesheet)
+        self.assertIn(".sessions-workspace { height: 100%; min-height: 0;", stylesheet)
+        self.assertIn(".conversation { width: 100%; height: 100%; min-height: 0;", stylesheet)
+        self.assertIn(".transcript { height: 100%; min-height: 0;", stylesheet)
+        self.assertIn("@media (max-width: 480px)", stylesheet)
+        self.assertIn(".conversation-head { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr);", stylesheet)
+        self.assertNotIn("calc(100dvh - 421px", stylesheet)
+
+    def test_mobile_pairing_flow_starts_near_the_top_on_short_screens(self) -> None:
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        self.assertIn(".pair-screen { grid-template-rows: auto auto; align-content: start;", stylesheet)
+        self.assertIn(".pair-panel { align-self: start; }", stylesheet)
 
     def test_runtime_activity_uses_structured_tool_and_reasoning_rows(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -152,9 +259,18 @@ class RemoteUiContractTests(unittest.TestCase):
 
     def test_service_worker_never_caches_api_responses(self) -> None:
         script = (ROOT / "service-worker.js").read_text(encoding="utf-8")
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
 
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
+        server = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertIn('/remote.css?v=14', script)
+        self.assertIn('href="/remote.css?v=14"', html)
+        self.assertIn('/remote.js?v=11', script)
+        self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
+        self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
+        self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)
+        self.assertIn('/assets/vendor/jsQR.js?v=1', script)
 
     def test_browser_renders_conversation_text_without_html_injection(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")

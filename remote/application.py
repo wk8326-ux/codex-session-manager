@@ -37,6 +37,7 @@ class RemoteApplication:
         default_base_url: str,
         codex_connected: bool,
         tunnel_status_provider=None,
+        tunnel_start_provider=None,
     ) -> None:
         self.remote_store = remote_store
         self.adapter = adapter
@@ -45,6 +46,7 @@ class RemoteApplication:
         self.default_base_url = default_base_url
         self.codex_connected = codex_connected
         self.tunnel_status_provider = tunnel_status_provider
+        self.tunnel_start_provider = tunnel_start_provider
 
     @staticmethod
     def _base_url(value: object) -> str:

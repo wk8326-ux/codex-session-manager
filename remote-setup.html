@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#eef1ef">
+  <link rel="icon" href="/assets/project-console-icon.png">
+  <link rel="stylesheet" href="/remote-setup.css?v=2">
+  <script>
+    (() => {
+      const key = 'localhost-project-console.theme';
+      let saved = null;
+      try { saved = localStorage.getItem(key); } catch {}
+      const theme = ['light', 'dark'].includes(saved)
+        ? saved
+        : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme;
+    })();
+  </script>
+  <title>配置远程访问 · 本地项目控制台</title>
+</head>
+<body>
+  <a class="skip-link" href="#setup-stage">跳到当前配置步骤</a>
+
+  <header class="setup-header">
+    <a class="back-link" href="/remote" aria-label="返回远程会话">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+      <span>返回远程会话</span>
+    </a>
+    <div class="setup-brand">
+      <img src="/assets/project-console-icon.png" alt="">
+      <span><strong>远程访问配置</strong><small>FRP RELAY SETUP</small></span>
+    </div>
+    <div class="header-actions">
+      <span class="save-state" id="save-state" role="status">已保存在本机</span>
+      <button class="theme-button" id="setup-theme-toggle" type="button" aria-label="切换至深色模式" title="切换至深色模式">
+        <svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="setup-layout">
+    <aside class="step-rail" aria-labelledby="setup-title">
+      <div class="rail-intro">
+        <p class="kicker">一次配置，持续连接</p>
+        <h1 id="setup-title">把工作台安全接入公网</h1>
+        <p>共 5 步，约 8 分钟。需要一台 Ubuntu 或 Debian VPS 和一个已解析的域名。</p>
+      </div>
+
+      <div class="existing-status checking" id="existing-status" role="status">
+        <span class="existing-status-dot" aria-hidden="true"></span>
+        <div><strong>正在读取现有配置</strong><small>不会修改当前隧道</small></div>
+      </div>
+
+      <ol class="step-list" aria-label="配置进度">
+        <li><button type="button" data-step-target="1"><span class="step-node">1</span><span class="step-copy"><strong>准备信息</strong><small>服务器与访问地址</small></span><span class="step-state">当前</span></button></li>
+        <li><button type="button" data-step-target="2"><span class="step-node">2</span><span class="step-copy"><strong>配置 DNS</strong><small>确认域名解析</small></span><span class="step-state">待完成</span></button></li>
+        <li><button type="button" data-step-target="3"><span class="step-node">3</span><span class="step-copy"><strong>部署服务器</strong><small>安装 frps 与 HTTPS</small></span><span class="step-state">待完成</span></button></li>
+        <li><button type="button" data-step-target="4"><span class="step-node">4</span><span class="step-copy"><strong>连接本机</strong><small>安装并启动 frpc</small></span><span class="step-state">待完成</span></button></li>
+        <li><button type="button" data-step-target="5"><span class="step-node">5</span><span class="step-copy"><strong>验证并配对</strong><small>检查公网入口</small></span><span class="step-state">待完成</span></button></li>
+      </ol>
+
+      <div class="rail-foot">
+        <div><span>敏感信息</span><strong>仅保存在 .runtime</strong></div>
+        <button class="text-button" id="reset-wizard" type="button">重新开始配置</button>
+      </div>
+    </aside>
+
+    <section class="setup-stage" id="setup-stage" tabindex="-1" aria-live="polite">
+      <section class="step-panel active" data-step-panel="1" aria-labelledby="step-1-title">
+        <header class="panel-head">
+          <span class="panel-index">步骤 1 / 5</span>
+          <h2 id="step-1-title">先确认连接两端</h2>
+          <p>这里只记录部署所需的公开信息。SSH 私钥、FRP token 和 Codex 数据都不会写入项目配置。</p>
+        </header>
+        <form class="setup-form" id="server-info-form" novalidate>
+          <div class="field">
+            <label for="vps-host">VPS 公网 IP 或主机名</label>
+            <p class="field-hint">手机最终访问的中继服务器，例如 203.0.113.10。</p>
+            <input id="vps-host" name="vpsHost" autocomplete="off" spellcheck="false" placeholder="203.0.113.10" aria-describedby="vps-host-error">
+            <span class="field-error" id="vps-host-error"></span>
+          </div>
+          <div class="field">
+            <label for="ssh-user">SSH 用户</label>
+            <p class="field-hint">仅用于生成登录提示，不会保存密码或私钥。</p>
+            <input id="ssh-user" name="sshUser" autocomplete="username" value="ubuntu" aria-describedby="ssh-user-error">
+            <span class="field-error" id="ssh-user-error"></span>
+          </div>
+          <div class="field">
+            <label for="public-domain">公网访问域名</label>
+            <p class="field-hint">填写完整域名，不要包含 https:// 或路径。</p>
+            <input id="public-domain" name="domain" autocomplete="url" spellcheck="false" placeholder="console.example.com" aria-describedby="public-domain-error">
+            <span class="field-error" id="public-domain-error"></span>
+          </div>
+          <div class="field-pair">
+            <div class="field">
+              <label for="frp-port">FRP 入站端口</label>
+              <input id="frp-port" name="frpPort" type="number" min="1" max="65535" inputmode="numeric" value="7000">
+            </div>
+            <div class="field">
+              <label for="remote-port">VPS 内部转发端口</label>
+              <input id="remote-port" name="remotePort" type="number" min="1" max="65535" inputmode="numeric" value="18766">
+            </div>
+          </div>
+          <p class="form-error" id="step-1-error" role="alert"></p>
+          <footer class="panel-actions">
+            <span>下一步将检查 DNS，不会连接 SSH。</span>
+            <button class="button primary" type="submit"><span class="button-label">保存并配置 DNS</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+          </footer>
+        </form>
+      </section>
+
+      <section class="step-panel" data-step-panel="2" aria-labelledby="step-2-title" hidden>
+        <header class="panel-head">
+          <span class="panel-index">步骤 2 / 5</span>
+          <h2 id="step-2-title">让域名指向 VPS</h2>
+          <p>在域名服务商添加下面这条 A 记录。解析通常几分钟生效，也可能受到本地 DNS 缓存影响。</p>
+        </header>
+        <div class="dns-record" aria-label="DNS A 记录">
+          <div><span>类型</span><strong>A</strong></div>
+          <div><span>名称</span><strong id="dns-host-label">console.example.com</strong></div>
+          <div><span>目标</span><strong id="dns-target-label">203.0.113.10</strong></div>
+          <button class="icon-copy" id="copy-dns-record" type="button" aria-label="复制 DNS 记录" title="复制 DNS 记录"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+        </div>
+        <div class="check-result idle" id="dns-check-result" role="status">
+          <span class="check-mark" aria-hidden="true"></span>
+          <div><strong>等待检查</strong><small>添加 DNS 记录后点击“检查解析”。</small></div>
+        </div>
+        <footer class="panel-actions">
+          <button class="button secondary" type="button" data-back-step="1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> 返回</button>
+          <button class="button primary" id="check-dns" type="button"><span class="button-label">检查解析</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg></button>
+        </footer>
+      </section>
+
+      <section class="step-panel" data-step-panel="3" aria-labelledby="step-3-title" hidden>
+        <header class="panel-head">
+          <span class="panel-index">步骤 3 / 5</span>
+          <h2 id="step-3-title">在 VPS 部署中继</h2>
+          <p>登录 VPS 后粘贴执行下面的命令。脚本会安装 frps、Nginx、HTTPS 证书和 systemd 服务，并保留重复运行前的配置备份。</p>
+        </header>
+        <div class="command-block">
+          <div class="command-head"><span>VPS 一键安装命令</span><button class="copy-button" id="copy-server-command" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button></div>
+          <pre><code id="server-command">正在生成命令...</code></pre>
+        </div>
+        <div class="field bundle-field">
+          <label for="server-bundle">粘贴安装完成后的配置包</label>
+          <p class="field-hint">只粘贴 <code>LPC_CONFIG_BUNDLE=</code> 后面的内容。验证成功后不会保存在浏览器中。</p>
+          <textarea id="server-bundle" rows="4" autocomplete="off" spellcheck="false" placeholder="eyJmb3JtYXQiOiJscGMtZnJwLXYxIiw..." aria-describedby="step-3-error"></textarea>
+        </div>
+        <p class="form-error" id="step-3-error" role="alert"></p>
+        <footer class="panel-actions">
+          <button class="button secondary" type="button" data-back-step="2"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> 返回</button>
+          <button class="button primary" id="validate-bundle" type="button"><span class="button-label">验证配置包</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+        </footer>
+      </section>
+
+      <section class="step-panel" data-step-panel="4" aria-labelledby="step-4-title" hidden>
+        <header class="panel-head">
+          <span class="panel-index">步骤 4 / 5</span>
+          <h2 id="step-4-title">安装本机 FRP 客户端</h2>
+          <p>先复制配置包，再在项目目录打开 PowerShell 执行下面的命令。脚本只从 FRP 官方发布页下载文件并校验 SHA-256。</p>
+        </header>
+        <div class="bundle-summary" id="bundle-summary">
+          <div><span>中继服务器</span><strong id="bundle-server">等待配置包</strong></div>
+          <div><span>公网入口</span><strong id="bundle-public-url">等待配置包</strong></div>
+          <button class="button secondary" id="copy-bundle" type="button">复制配置包</button>
+        </div>
+        <p class="bundle-memory-note" id="bundle-memory-note" role="status">连接凭据只保留在当前页面内，刷新或关闭页面后需要重新粘贴配置包。</p>
+        <div class="command-block">
+          <div class="command-head"><span>Windows 本机安装命令</span><button class="copy-button" id="copy-client-command" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button></div>
+          <pre><code id="client-command">正在读取本机脚本路径...</code></pre>
+        </div>
+        <div class="check-list" id="client-check-list">
+          <div data-client-check="script"><span class="check-mark" aria-hidden="true"></span><strong>本机安装脚本</strong><small>检查中</small></div>
+          <div data-client-check="binary"><span class="check-mark" aria-hidden="true"></span><strong>frpc 程序</strong><small>尚未安装</small></div>
+          <div data-client-check="config"><span class="check-mark" aria-hidden="true"></span><strong>私密连接配置</strong><small>尚未写入</small></div>
+          <div data-client-check="tunnel"><span class="check-mark" aria-hidden="true"></span><strong>FRP 隧道</strong><small>尚未连接</small></div>
+        </div>
+        <p class="form-error" id="step-4-error" role="alert"></p>
+        <footer class="panel-actions">
+          <button class="button secondary" type="button" data-back-step="3"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> 返回</button>
+          <button class="button primary" id="refresh-client-status" type="button"><span class="button-label">检查并启动隧道</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg></button>
+        </footer>
+      </section>
+
+      <section class="step-panel" data-step-panel="5" aria-labelledby="step-5-title" hidden>
+        <header class="panel-head">
+          <span class="panel-index">步骤 5 / 5</span>
+          <h2 id="step-5-title">完成最后一次连通验证</h2>
+          <p>验证只检查隧道和公网 HTTPS 入口，不会读取任何会话内容。通过后即可回到远程会话生成配对二维码。</p>
+        </header>
+        <div class="verification-board" id="verification-board">
+          <div data-verification="dns"><span class="check-mark" aria-hidden="true"></span><div><strong>域名解析</strong><small>等待验证</small></div></div>
+          <div data-verification="tunnel"><span class="check-mark" aria-hidden="true"></span><div><strong>本机隧道</strong><small>等待验证</small></div></div>
+          <div data-verification="https"><span class="check-mark" aria-hidden="true"></span><div><strong>公网 HTTPS</strong><small>等待验证</small></div></div>
+          <div data-verification="pairing"><span class="check-mark" aria-hidden="true"></span><div><strong>设备配对</strong><small>验证通过后在远程会话中完成</small></div></div>
+        </div>
+        <div class="completion-note" id="completion-note" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          <div><strong>远程访问已经就绪</strong><span>下次启动控制台时，FRP 隧道会自动随控制台启动。</span></div>
+        </div>
+        <p class="form-error" id="step-5-error" role="alert"></p>
+        <footer class="panel-actions">
+          <button class="button secondary" type="button" data-back-step="4"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg> 返回</button>
+          <button class="button primary" id="verify-all" type="button"><span class="button-label">开始完整验证</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg></button>
+          <a class="button primary" id="finish-setup" href="/remote" hidden>进入设备配对 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+        </footer>
+      </section>
+    </section>
+  </main>
+
+  <div class="toast" id="setup-toast" role="status" hidden></div>
+  <script src="/remote-setup.js?v=2" defer></script>
+</body>
+</html>

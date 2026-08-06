@@ -28,6 +28,7 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 from remote.application import RemoteApplication
 from remote.events import RemoteEventHub
 from remote.router import AdminRemoteApi, RemoteHttpApi, RemoteResponse
+from remote.setup import RelaySetupApi, RelaySetupService
 from remote.store import RemoteStore
 from remote.tunnel import FrpTunnelManager
 
@@ -62,6 +63,7 @@ WEBSITE_FAILURE_THRESHOLD = 3
 WATCHDOG_API: WatchdogHttpApi | None = None
 REMOTE_ADMIN_API: AdminRemoteApi | None = None
 REMOTE_HTTP_API: RemoteHttpApi | None = None
+RELAY_SETUP_API: RelaySetupApi | None = None
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -531,6 +533,7 @@ class ConsoleRuntime:
     remote_admin_api: AdminRemoteApi
     remote_http_api: RemoteHttpApi
     tunnel: FrpTunnelManager
+    relay_setup_api: RelaySetupApi
 
 
 class UnavailableCodexAdapter:
@@ -627,6 +630,14 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         default_base_url=_default_remote_base_url(),
         codex_connected=codex_connected,
         tunnel_status_provider=tunnel.status,
+        tunnel_start_provider=tunnel.start,
+    )
+    relay_setup_api = RelaySetupApi(
+        RelaySetupService(
+            base_path,
+            tunnel_status_provider=tunnel.status,
+            tunnel_start_provider=tunnel.start,
+        )
     )
     return ConsoleRuntime(
         WatchdogHttpApi(application),
@@ -635,6 +646,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         AdminRemoteApi(remote_application),
         RemoteHttpApi(remote_application),
         tunnel,
+        relay_setup_api,
     )
 
 
@@ -656,10 +668,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def respond_file(self, path: Path, content_type: str) -> None:
+    def respond_file(
+        self, path: Path, content_type: str, *, cache: str | None = None
+    ) -> None:
         body = path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
+        if cache:
+            self.send_header("Cache-Control", cache)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -696,6 +712,22 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_remote_response(response)
         return True
 
+    def dispatch_relay_setup(self, method: str, path: str, payload: object) -> bool:
+        if path != "/api/relay-setup" and not path.startswith("/api/relay-setup/"):
+            return False
+        if RELAY_SETUP_API is None:
+            self.respond_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"message": "Relay setup is unavailable."},
+            )
+            return True
+        response = RELAY_SETUP_API.dispatch(method, path, payload)
+        if response is None:
+            self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+        else:
+            self.respond_json(response.status, response.body)
+        return True
+
     def dispatch_watchdog(
         self, method: str, parsed: object, payload: object
     ) -> bool:
@@ -729,6 +761,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.dispatch_remote_admin("GET", self.path, None):
             return
+        if self.dispatch_relay_setup("GET", parsed.path, None):
+            return
         if parsed.path == "/api/projects":
             with LOCK:
                 projects = [dict(project) for project in PROJECTS]
@@ -752,13 +786,34 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_file(ROOT / "watchdog.html", "text/html; charset=utf-8")
             return
         if parsed.path in {"/remote", "/remote/"}:
-            self.respond_file(ROOT / "remote.html", "text/html; charset=utf-8")
+            self.respond_file(
+                ROOT / "remote.html", "text/html; charset=utf-8", cache="no-cache"
+            )
             return
         if parsed.path == "/remote.css":
-            self.respond_file(ROOT / "remote.css", "text/css; charset=utf-8")
+            self.respond_file(
+                ROOT / "remote.css", "text/css; charset=utf-8", cache="no-cache"
+            )
             return
         if parsed.path == "/remote.js":
-            self.respond_file(ROOT / "remote.js", "text/javascript; charset=utf-8")
+            self.respond_file(
+                ROOT / "remote.js", "text/javascript; charset=utf-8", cache="no-cache"
+            )
+            return
+        if parsed.path in {"/remote-setup", "/remote-setup/"}:
+            self.respond_file(
+                ROOT / "remote-setup.html", "text/html; charset=utf-8", cache="no-cache"
+            )
+            return
+        if parsed.path == "/remote-setup.css":
+            self.respond_file(
+                ROOT / "remote-setup.css", "text/css; charset=utf-8", cache="no-cache"
+            )
+            return
+        if parsed.path == "/remote-setup.js":
+            self.respond_file(
+                ROOT / "remote-setup.js", "text/javascript; charset=utf-8", cache="no-cache"
+            )
             return
         if parsed.path == "/assets/console-sidebar.css":
             self.respond_file(
@@ -772,6 +827,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/assets/vendor/qrcode.min.js":
             self.respond_file(ROOT / "assets" / "vendor" / "qrcode.min.js", "text/javascript; charset=utf-8")
+            return
+        if parsed.path == "/assets/vendor/jsQR.js":
+            self.respond_file(ROOT / "assets" / "vendor" / "jsQR.js", "text/javascript; charset=utf-8")
             return
         if parsed.path == "/manifest.webmanifest":
             self.respond_file(ROOT / "manifest.webmanifest", "application/manifest+json")
@@ -802,6 +860,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.dispatch_watchdog("POST", parsed, payload):
             return
         if self.dispatch_remote_admin("POST", parsed.path, payload):
+            return
+        if self.dispatch_relay_setup("POST", parsed.path, payload):
             return
         with LOCK:
             if parsed.path == "/api/projects/reorder":
@@ -996,14 +1056,15 @@ class RemoteHandler(BaseHTTPRequestHandler):
             "/remote": ("remote.html", "text/html; charset=utf-8", "no-cache"),
             "/remote/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
             "/pair": ("remote.html", "text/html; charset=utf-8", "no-cache"),
-            "/remote.css": ("remote.css", "text/css; charset=utf-8", "public, max-age=3600"),
-            "/remote.js": ("remote.js", "text/javascript; charset=utf-8", "public, max-age=3600"),
+            "/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache"),
+            "/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache"),
             "/assets/console-sidebar.css": ("assets/console-sidebar.css", "text/css; charset=utf-8", "public, max-age=3600"),
             "/assets/console-sidebar.js": ("assets/console-sidebar.js", "text/javascript; charset=utf-8", "public, max-age=3600"),
             "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "no-cache"),
             "/service-worker.js": ("service-worker.js", "text/javascript; charset=utf-8", "no-cache"),
             "/assets/project-console-icon.png": ("assets/project-console-icon.png", "image/png", "public, max-age=86400"),
             "/assets/vendor/qrcode.min.js": ("assets/vendor/qrcode.min.js", "text/javascript; charset=utf-8", "public, max-age=86400"),
+            "/assets/vendor/jsQR.js": ("assets/vendor/jsQR.js", "text/javascript; charset=utf-8", "public, max-age=86400"),
         }
         asset = static.get(path)
         if asset is None:
@@ -1022,12 +1083,13 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
 
 def run_console(base_path: Path = ROOT) -> None:
-    global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API
+    global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API
     LOG_DIR.mkdir(exist_ok=True)
     runtime = create_console_runtime(base_path)
     WATCHDOG_API = runtime.api
     REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
     REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
+    RELAY_SETUP_API = getattr(runtime, "relay_setup_api", None)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     remote_server = None
     remote_thread = None
@@ -1062,6 +1124,7 @@ def run_console(base_path: Path = ROOT) -> None:
         WATCHDOG_API = None
         REMOTE_ADMIN_API = None
         REMOTE_HTTP_API = None
+        RELAY_SETUP_API = None
 
 
 if __name__ == "__main__":

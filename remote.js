@@ -1,11 +1,15 @@
 (() => {
   const TOKEN_KEY = 'localhost-project-console.remote-token';
   const DEVICE_KEY = 'localhost-project-console.remote-device';
+  const PENDING_PAIRING_KEY = 'localhost-project-console.remote-pending-pairing';
   const ACTIVE_REFRESH_MS = 1200;
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
   const LIVE_ACTIVITY_GRACE_MS = 180000;
   const INITIAL_LIVE_TURN_MAX_AGE_MS = 7200000;
+  const CONNECTION_FAILURE_THRESHOLD = 3;
+  const CONNECTION_FAILURE_GRACE_MS = 8000;
+  const WORKSPACE_RETRY_MS = 2500;
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
   const state = {
@@ -14,6 +18,7 @@
     pendingToken: '',
     device: null,
     pendingDevice: null,
+    pendingComparisonCode: '',
     sessions: [],
     localSessions: [],
     devices: [],
@@ -25,6 +30,7 @@
     pairingUrl: '',
     qrStream: null,
     qrScanFrame: 0,
+    qrScanGeneration: 0,
     conversation: null,
     conversationSignature: '',
     conversationRefreshTimer: 0,
@@ -37,6 +43,9 @@
     lastEventAt: 0,
     lastConversationActivityAt: 0,
     adminStatus: null,
+    connectionFailureCount: 0,
+    connectionFailureStartedAt: 0,
+    workspaceRetryTimer: 0,
   };
 
   function readToken() {
@@ -63,9 +72,30 @@
     state.device = device;
   }
 
+  function readPendingPairing() {
+    try { return JSON.parse(localStorage.getItem(PENDING_PAIRING_KEY) || 'null'); } catch { return null; }
+  }
+
+  function storePendingPairing(value) {
+    try {
+      if (value) localStorage.setItem(PENDING_PAIRING_KEY, JSON.stringify(value));
+      else localStorage.removeItem(PENDING_PAIRING_KEY);
+    } catch {}
+  }
+
+  function restorePendingPairing() {
+    const pending = readPendingPairing();
+    if (!pending?.token || !pending?.device?.id || !pending?.comparisonCode) return false;
+    state.pendingToken = pending.token;
+    state.pendingDevice = pending.device;
+    state.pendingComparisonCode = pending.comparisonCode;
+    return true;
+  }
+
   function forgetRememberedDevice() {
     storeToken('');
     storeRememberedDevice(null);
+    storePendingPairing(null);
   }
 
   async function requestPersistentStorage() {
@@ -89,9 +119,25 @@
     showToast.timer = setTimeout(() => { toast.hidden = true; }, 3200);
   }
 
-  function setConnected(connected, detail = '') {
-    $('#offline-banner').hidden = connected;
-    $('#sync-state').textContent = connected ? '已同步' : '重新连接中';
+  function setConnected(connected, options = {}) {
+    if (connected) {
+      state.connectionFailureCount = 0;
+      state.connectionFailureStartedAt = 0;
+      $('#offline-banner').hidden = true;
+      $('#sync-state').textContent = '已同步';
+      return true;
+    }
+
+    const now = Date.now();
+    state.connectionFailureCount += 1;
+    if (!state.connectionFailureStartedAt) state.connectionFailureStartedAt = now;
+    const forceOffline = options.immediate || navigator.onLine === false;
+    const confirmedOffline = forceOffline
+      || state.connectionFailureCount >= CONNECTION_FAILURE_THRESHOLD
+      || now - state.connectionFailureStartedAt >= CONNECTION_FAILURE_GRACE_MS;
+    $('#offline-banner').hidden = !confirmedOffline;
+    $('#sync-state').textContent = confirmedOffline ? '重新连接中' : '连接波动，正在复检';
+    return confirmedOffline;
   }
 
   async function api(path, options = {}) {
@@ -103,19 +149,30 @@
       : await response.json().catch(() => ({ message: '服务返回了无法读取的响应。' }));
     if (response.status === 401 && !state.admin) {
       forgetRememberedDevice();
-      throw new Error('设备授权已失效，请重新扫码配对。');
+      const error = new Error('设备授权已失效，请重新扫码配对。');
+      error.authorizationFailed = true;
+      error.status = response.status;
+      throw error;
     }
-    if (!response.ok) throw new Error(payload?.message || `请求失败 (${response.status})`);
+    if (!response.ok) {
+      const error = new Error(payload?.message || `请求失败 (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
 
-  function stopQrScanner() {
+  function stopQrScanner(options = {}) {
+    const keepFeedback = options.keepFeedback === true;
+    state.qrScanGeneration += 1;
     cancelAnimationFrame(state.qrScanFrame);
     state.qrScanFrame = 0;
     state.qrStream?.getTracks().forEach(track => track.stop());
     state.qrStream = null;
     $('#qr-video').srcObject = null;
-    $('#qr-scanner').hidden = true;
+    $('#qr-scanner').classList.toggle('scan-success', keepFeedback);
+    $('#qr-scanner').hidden = !keepFeedback;
+    if (!keepFeedback) $('#scan-status').textContent = '将二维码完整放入取景框';
   }
 
   function showPairingStep() {
@@ -129,22 +186,35 @@
     if (ready) $('#pair-device-name').focus();
   }
 
+  function showPendingPairingStep() {
+    $('#pair-start').hidden = true;
+    $('#pair-details').hidden = true;
+    $('#claim-pairing').hidden = true;
+    $('#pair-device-name').disabled = true;
+    $('#mobile-comparison-code').textContent = state.pendingComparisonCode || '------';
+    $('#mobile-comparison').hidden = false;
+  }
+
   function acceptPairingUrl(value) {
     try {
       const url = new URL(String(value || '').trim(), location.href);
       const pairingId = url.searchParams.get('pairing') || '';
       const secret = new URLSearchParams(url.hash.slice(1)).get('secret') || '';
       if (!pairingId || !secret) throw new Error('没有识别到有效的配对信息。');
-      if (url.origin !== location.origin) {
-        location.assign(url.href);
-        return false;
-      }
       state.pairingId = pairingId;
       state.pairingSecret = secret;
-      stopQrScanner();
+      const scannerActive = Boolean(state.qrStream);
+      $('#scan-status').textContent = '二维码已识别，正在准备配对';
+      stopQrScanner({ keepFeedback: scannerActive });
       history.replaceState(null, '', `${location.pathname}?pairing=${encodeURIComponent(pairingId)}`);
       $('#pair-error').textContent = '';
-      showPairingStep();
+      if (scannerActive) {
+        setTimeout(() => {
+          $('#qr-scanner').hidden = true;
+          $('#qr-scanner').classList.remove('scan-success');
+          showPairingStep();
+        }, 320);
+      } else showPairingStep();
       return true;
     } catch (error) {
       $('#pair-error').textContent = error.message || '配对链接无法读取。';
@@ -166,6 +236,7 @@
     state.pairingSecret = '';
     state.pendingToken = '';
     state.pendingDevice = null;
+    state.pendingComparisonCode = '';
     $('#pair-link-input').value = '';
     $('#pair-error').textContent = '';
     history.replaceState(null, '', location.pathname);
@@ -174,33 +245,80 @@
 
   async function scanQrFrame(detector) {
     if (!state.qrStream) return;
+    const generation = state.qrScanGeneration;
     try {
       const codes = await detector.detect($('#qr-video'));
+      if (generation !== state.qrScanGeneration || !state.qrStream) return;
       const value = codes.find(code => code.rawValue)?.rawValue;
       if (value && acceptPairingUrl(value)) return;
     } catch {}
-    state.qrScanFrame = requestAnimationFrame(() => scanQrFrame(detector));
+    if (generation === state.qrScanGeneration && state.qrStream) {
+      state.qrScanFrame = requestAnimationFrame(() => scanQrFrame(detector));
+    }
+  }
+
+  async function createQrDetector() {
+    if ('BarcodeDetector' in window) {
+      try {
+        const supported = BarcodeDetector.getSupportedFormats
+          ? await BarcodeDetector.getSupportedFormats()
+          : ['qr_code'];
+        if (supported.includes('qr_code')) {
+          return new BarcodeDetector({ formats: ['qr_code'] });
+        }
+      } catch {}
+    }
+
+    if (typeof window.jsQR === 'function') {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('当前浏览器无法初始化二维码识别。');
+      return {
+        detect(video) {
+          if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return [];
+          const scale = Math.min(1, 720 / Math.max(video.videoWidth, video.videoHeight));
+          const width = Math.max(1, Math.round(video.videoWidth * scale));
+          const height = Math.max(1, Math.round(video.videoHeight * scale));
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+          }
+          context.drawImage(video, 0, 0, width, height);
+          const image = context.getImageData(0, 0, width, height);
+          const code = window.jsQR(image.data, width, height, {
+            inversionAttempts: 'attemptBoth',
+          });
+          return code?.data ? [{ rawValue: code.data }] : [];
+        },
+      };
+    }
+
+    throw new Error('当前浏览器缺少二维码识别组件，请粘贴电脑端的配对链接。');
   }
 
   async function startQrScanner() {
     $('#pair-error').textContent = '';
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !('BarcodeDetector' in window)) {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       $('#pair-error').textContent = '当前浏览器无法直接调用摄像头扫码，请粘贴电脑端的配对链接。';
       $('#pair-link-input').focus();
       return;
     }
     try {
-      const supported = BarcodeDetector.getSupportedFormats
-        ? await BarcodeDetector.getSupportedFormats()
-        : ['qr_code'];
-      if (!supported.includes('qr_code')) throw new Error('当前浏览器不支持二维码识别。');
-      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      stopQrScanner();
+      $('#scan-status').textContent = '正在打开相机';
+      const detector = await createQrDetector();
       state.qrStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } }, audio: false,
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
       });
       $('#qr-video').srcObject = state.qrStream;
       $('#qr-scanner').hidden = false;
       await $('#qr-video').play();
+      $('#scan-status').textContent = '将二维码完整放入取景框';
       scanQrFrame(detector);
     } catch (error) {
       stopQrScanner();
@@ -214,7 +332,8 @@
     $('#app-shell').hidden = true;
     $('#pair-screen').hidden = false;
     $('#pair-error').textContent = message;
-    showPairingStep();
+    if (state.pendingToken && state.pendingDevice) showPendingPairingStep();
+    else showPairingStep();
   }
 
   async function claimPairing() {
@@ -231,12 +350,15 @@
       });
       state.pendingToken = result.deviceToken;
       state.pendingDevice = { id: result.deviceId, name: result.deviceName };
+      state.pendingComparisonCode = result.comparisonCode;
+      storePendingPairing({
+        token: state.pendingToken,
+        device: state.pendingDevice,
+        comparisonCode: state.pendingComparisonCode,
+      });
+      await requestPersistentStorage();
       state.pairingSecret = '';
-      $('#pair-details').hidden = true;
-      $('#claim-pairing').hidden = true;
-      $('#pair-device-name').disabled = true;
-      $('#mobile-comparison-code').textContent = result.comparisonCode;
-      $('#mobile-comparison').hidden = false;
+      showPendingPairingStep();
     } catch (error) {
       $('#pair-error').textContent = error.message;
       button.disabled = false;
@@ -247,8 +369,11 @@
     storeToken(state.pendingToken);
     storeRememberedDevice(state.pendingDevice);
     await requestPersistentStorage();
+    storePendingPairing(null);
     state.pendingToken = '';
     state.pendingDevice = null;
+    state.pendingComparisonCode = '';
+    history.replaceState(null, '', location.pathname);
     $('#pair-screen').hidden = true;
     $('#app-shell').hidden = false;
     renderDeviceIdentity();
@@ -1026,7 +1151,7 @@
         setConnected(true);
       } catch (error) {
         setConnected(false);
-        if (!state.token && !state.admin) {
+        if (error.authorizationFailed && !state.admin) {
           state.polling = false;
           showPairScreen(error.message);
           break;
@@ -1144,8 +1269,11 @@
     });
     $$('.view-tab').forEach(tab => tab.addEventListener('click', () => switchView(tab.dataset.view)));
     $$('.mobile-nav button').forEach(button => button.addEventListener('click', () => switchMobileView(button.dataset.mobileView)));
-    addEventListener('online', () => setConnected(true));
-    addEventListener('offline', () => setConnected(false));
+    addEventListener('online', () => {
+      setConnected(true);
+      if (!state.polling && (state.admin || state.token)) startWorkspace({ quiet: true });
+    });
+    addEventListener('offline', () => setConnected(false, { immediate: true }));
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') stopQrScanner();
       if (!state.selectedSessionId) return;
@@ -1154,17 +1282,27 @@
     });
   }
 
-  async function startWorkspace() {
+  function scheduleWorkspaceRetry() {
+    clearTimeout(state.workspaceRetryTimer);
+    state.workspaceRetryTimer = setTimeout(
+      () => startWorkspace({ quiet: true }),
+      WORKSPACE_RETRY_MS,
+    );
+  }
+
+  async function startWorkspace(options = {}) {
+    clearTimeout(state.workspaceRetryTimer);
     $('#app-shell').hidden = false;
     $('#pair-screen').hidden = true;
     try {
       await loadWorkspaceData();
       pollEvents();
     } catch (error) {
-      if (!state.admin && !state.token) showPairScreen(error.message);
+      if (!state.admin && error.authorizationFailed) showPairScreen(error.message);
       else {
         setConnected(false);
-        showToast(error.message);
+        if (!options.quiet) showToast('连接暂时波动，工作台正在自动重试。');
+        scheduleWorkspaceRetry();
       }
     }
   }
@@ -1174,6 +1312,7 @@
     parsePairingLink();
     state.token = readToken();
     state.device = readStoredDevice();
+    const pendingPairingRestored = restorePendingPairing();
     let status = null;
     try {
       status = await refreshAdminStatus(true);
@@ -1195,13 +1334,30 @@
         renderDeviceIdentity();
         await startWorkspace();
       } catch (error) {
-        showPairScreen(error.message);
+        if (error.authorizationFailed) showPairScreen(error.message);
+        else {
+          $('#app-shell').hidden = false;
+          $('#pair-screen').hidden = true;
+          setConnected(false);
+          scheduleWorkspaceRetry();
+        }
       }
+    } else if (pendingPairingRestored) {
+      showPairScreen();
     } else {
       showPairScreen();
     }
     if ('serviceWorker' in navigator && window.isSecureContext) {
-      navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (state.qrStream || state.pairingSecret || state.pendingToken) return;
+        const reloadKey = 'localhost-project-console.remote-worker-reloaded';
+        if (sessionStorage.getItem(reloadKey)) return;
+        sessionStorage.setItem(reloadKey, '1');
+        location.reload();
+      });
+      navigator.serviceWorker.register('/service-worker.js')
+        .then(registration => registration.update())
+        .catch(() => {});
     }
   }
 

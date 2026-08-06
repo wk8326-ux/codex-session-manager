@@ -223,6 +223,13 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .tunnel-facts div { min-width: 0; display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: baseline; gap: 12px; }
 .tunnel-facts dt { color: var(--ink-3); font-size: 10px; }
 .tunnel-facts dd { min-width: 0; margin: 0; overflow: hidden; color: var(--ink-2); font: 10px/1.45 "Cascadia Mono", Consolas, monospace; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.setup-entry { min-height: 58px; display: grid; grid-template-columns: 20px minmax(0, 1fr) 16px; align-items: center; gap: 11px; margin-top: 14px; padding: 10px 12px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; text-decoration: none; transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease; }
+.setup-entry:hover { color: var(--accent); background: var(--surface-hover); border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); }
+.setup-entry > svg { width: 18px; height: 18px; }
+.setup-entry > span { min-width: 0; display: grid; gap: 3px; }
+.setup-entry strong { color: var(--ink); font-size: 11px; }
+.setup-entry small { overflow: hidden; color: var(--ink-3); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.setup-entry-arrow { justify-self: end; }
 .pairing-admin { padding-top: 22px; }
 .pairing-admin label { display: block; margin: 16px 0 7px; color: var(--ink-2); font-size: 11px; }
 .button { min-height: 42px; padding: 0 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-weight: 600; }
@@ -276,6 +283,9 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 .scanner-viewport video { width: 100%; height: 100%; display: block; object-fit: cover; }
 .scanner-frame { position: absolute; inset: 16%; border: 2px solid rgba(255, 255, 255, .85); border-radius: 6px; box-shadow: 0 0 0 999px rgba(4, 10, 8, .34); }
 .qr-scanner > p { margin: 0; color: var(--ink-2); font-size: 11px; text-align: center; }
+.qr-scanner.scan-success .scanner-viewport::after { content: "✓"; position: absolute; inset: 50% auto auto 50%; width: 52px; height: 52px; display: grid; place-items: center; color: #fff; background: var(--running); border-radius: 50%; font-size: 26px; transform: translate(-50%, -50%); }
+.qr-scanner.scan-success .scanner-frame { border-color: var(--running); box-shadow: 0 0 0 999px rgba(4, 10, 8, .58); }
+.qr-scanner.scan-success > p { color: var(--running); font-weight: 700; }
 .pair-ready { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 11px; margin-bottom: 18px; color: var(--accent-strong); }
 .pair-ready > span { width: 24px; height: 24px; display: grid; place-items: center; color: #fff; background: var(--accent); border-radius: 50%; font-size: 13px; }
 .comparison { display: grid; justify-items: center; gap: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
@@ -307,17 +317,21 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
 
 @media (max-width: 760px) {
   :root { --conversation-inline: 16px; }
-  body { background: var(--surface); }
-  .app-shell { display: block; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  html, body { height: 100%; }
+  body { overflow: hidden; background: var(--surface); }
+  .app-shell { height: 100dvh; min-height: 0; display: block; padding-bottom: calc(64px + env(safe-area-inset-bottom)); overflow: hidden; }
   .sidebar { display: none; }
-  .main { min-height: calc(100dvh - 64px); grid-template-rows: auto auto minmax(0, 1fr); }
+  .main { height: calc(100dvh - 64px - env(safe-area-inset-bottom)); min-height: 0; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
+  body.remote-mode .app-shell { padding-bottom: 0; }
+  body.remote-mode .main { height: 100dvh; }
+  body.remote-mode .mobile-nav { display: none; }
   .topbar { min-height: 72px; padding: max(14px, env(safe-area-inset-top)) 16px 12px; }
   .topbar h1 { font-size: 20px; }
   .device-identity { font-size: 10px; }
   .sync-state { display: none; }
   .view-tabs { display: none; }
-  .sessions-workspace { display: block; padding: 0; overflow: visible; }
-  .conversation { width: 100%; border: 0; border-radius: 0; }
+  .sessions-workspace { height: 100%; min-height: 0; display: block; padding: 0; overflow: hidden; }
+  .conversation { width: 100%; height: 100%; min-height: 0; border: 0; border-radius: 0; }
   .conversation-head { min-height: 92px; align-items: end; padding: 10px var(--conversation-inline); }
   .session-picker { width: 100%; grid-template-columns: 1fr; gap: 4px; }
   .session-picker label { font-size: 10px; }
@@ -328,7 +342,8 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
   .conversation-actions .button.compact span { color: var(--ink); font-size: 18px; }
   .runtime-strip { min-height: 56px; padding: 8px var(--conversation-inline); }
   .runtime-metrics { display: none; }
-  .transcript { height: clamp(260px, calc(100dvh - 421px - env(safe-area-inset-bottom)), 600px); padding: 18px var(--conversation-inline); }
+  .transcript-shell { min-height: 0; overflow: hidden; }
+  .transcript { height: 100%; min-height: 0; padding: 18px var(--conversation-inline); }
   .message { max-width: 92%; }
   .message.agent { width: 96%; }
   .message-body { font-size: 14px; }
@@ -338,6 +353,8 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
   .composer { position: relative; bottom: auto; z-index: 10; margin: 0; padding: 10px 12px; background: var(--surface); border-top: 1px solid var(--border); }
   .composer textarea { min-height: 50px; font-size: 16px; box-shadow: none; }
   .composer .send-button { right: 20px; bottom: 17px; }
+  body.remote-mode .composer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  body.remote-mode .composer .send-button { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 7px); }
   .devices-view { padding: 18px 16px; }
   .devices-layout { grid-template-columns: 1fr; gap: 30px; }
   .pairing-column { padding: 0 0 28px; border-right: 0; border-bottom: 1px solid var(--border); }
@@ -350,8 +367,30 @@ h2 { margin: 0; font: 700 16px/1.25 Bahnschrift, "Microsoft YaHei UI", sans-seri
   .toast { right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); }
   body[data-mobile-view="devices"] .sessions-workspace { display: none; }
   .sync-form-row { grid-template-columns: 1fr; }
+  .pair-screen { grid-template-rows: auto auto; align-content: start; gap: clamp(20px, 5dvh, 40px); overflow-y: auto; }
+  .pair-panel { align-self: start; }
   .pair-panel { padding: 22px 20px; }
   .pair-panel input { font-size: 16px; }
+}
+
+@media (max-width: 480px) {
+  :root { --conversation-inline: 14px; }
+  .topbar { min-height: 68px; padding-inline: 14px; }
+  .conversation-head { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 8px; padding: 12px var(--conversation-inline); }
+  .conversation-actions { display: flex; align-items: center; justify-content: flex-start; margin-left: 0; }
+  .conversation-actions .status-badge { min-height: 28px; }
+  .session-picker select { height: 44px; font-size: 16px; }
+  .runtime-strip { grid-template-columns: 16px minmax(0, 1fr); }
+  .runtime-copy strong { font-size: 12px; }
+  .runtime-copy small { font-size: 10px; line-height: 1.45; }
+  .message, .message.agent, .activity-row, .reasoning-trace { width: 100%; max-width: 100%; }
+  .pair-screen { padding-inline: 12px; }
+  .pair-panel { padding: 20px 18px; }
+}
+
+@media (max-width: 360px) {
+  .pair-link-row { grid-template-columns: 1fr; }
+  .pair-link-row .button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,13 +1,14 @@
-const CACHE_NAME = 'local-project-console-remote-v11';
+const CACHE_NAME = 'local-project-console-remote-v15';
 const STATIC_ASSETS = [
   '/remote',
-  '/remote.css',
-  '/remote.js?v=8',
+  '/remote.css?v=14',
+  '/remote.js?v=11',
   '/assets/console-sidebar.css?v=8',
   '/assets/console-sidebar.js?v=9',
   '/manifest.webmanifest',
   '/assets/project-console-icon.png',
-  '/assets/vendor/qrcode.min.js'
+  '/assets/vendor/qrcode.min.js',
+  '/assets/vendor/jsQR.js?v=1',
 ];
 
 self.addEventListener('install', event => {
@@ -28,7 +29,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
   event.respondWith(
-    fetch(event.request).then(response => {
+    fetch(event.request, { cache: 'no-store' }).then(response => {
       if (response.ok && url.origin === location.origin) {
         const copy = response.clone();
         caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
