@@ -171,6 +171,20 @@ class WatchdogClientContractTests(unittest.TestCase):
         self.assertRegex(script, r"\bpollWatchdogOverview\b")
         self.assertNotRegex(script, r"setInterval\([^;]*(?:5_000|5000)[^;]*\)")
 
+    def test_enabled_session_rows_show_live_next_check_countdown(self) -> None:
+        html = self.read_html()
+
+        self.assertIn("data-session-countdown", html)
+        self.assertIn("updateSessionCountdowns", html)
+        self.assertIn("nextCheckAt", html)
+        self.assertIn("effectiveIntervalMinutes", html)
+        self.assertIn("后检查", html)
+        self.assertIn("已暂停", html)
+        self.assertRegex(
+            html,
+            r"setInterval\(updateSessionCountdowns,\s*1000\)",
+        )
+
     def test_mutations_prevent_duplicate_submissions_and_report_inline_errors(self) -> None:
         html = self.read_html()
 
