@@ -28,7 +28,7 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 from remote.application import RemoteApplication
 from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
-from remote.native_capture import WindowsRegionCapture
+from remote.native_capture import FlameshotRegionCapture
 from remote.router import AdminRemoteApi, RemoteHttpApi, RemoteResponse
 from remote.setup import RelaySetupApi, RelaySetupService
 from remote.store import RemoteStore
@@ -652,9 +652,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
             tunnel_start_provider=tunnel.start,
         )
     )
-    native_capture = WindowsRegionCapture(
-        base_path / "scripts" / "capture-region.ps1"
-    )
+    native_capture = FlameshotRegionCapture()
     return ConsoleRuntime(
         WatchdogHttpApi(application),
         scheduler,

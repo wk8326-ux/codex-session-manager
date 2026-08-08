@@ -70,6 +70,27 @@ class SystemStartupContractTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:8765/", launcher)
         self.assertNotIn("py app.py", launcher)
 
+    def test_screenshot_installer_uses_a_pinned_flameshot_package(self) -> None:
+        script = (ROOT / "scripts" / "install-screenshot-tool.ps1").read_text(
+            encoding="utf-8"
+        )
+        launcher = (ROOT / "install-screenshot-tool.bat").read_text(
+            encoding="utf-8"
+        )
+
+        for contract in (
+            "Flameshot.Flameshot",
+            "14.0.0",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--disable-interactivity",
+            "LPC_FLAMESHOT_PATH",
+            "function Get-FlameshotVersion",
+            "$installedVersion -ne $Version",
+        ):
+            self.assertIn(contract, script)
+        self.assertIn("install-screenshot-tool.ps1", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()

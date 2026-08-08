@@ -15,6 +15,7 @@
 - Windows 10 或 Windows 11
 - Python 3.10 或更高版本
 - 使用会话监控时，需要已安装并登录 Codex CLI / Codex Desktop
+- 使用自由区域截图时，需要开源截图组件 Flameshot 14.0.0
 
 双击：
 
@@ -33,6 +34,23 @@ python app.py
 - 项目控制台：<http://127.0.0.1:8765/>
 - 会话监控：<http://127.0.0.1:8765/watchdog>
 - 远程会话管理：<http://127.0.0.1:8765/remote>
+
+## 自由区域截图
+
+本机远程会话页面使用开源工具 [Flameshot](https://github.com/flameshot-org/flameshot)
+完成 Windows 桌面自由框选，不调用浏览器的“选择标签页或窗口”截图弹窗。
+
+首次使用可双击 install-screenshot-tool.bat。后台常驻安装脚本
+install-system-startup.bat 也会自动检查并安装 Flameshot。安装脚本使用 Windows
+Package Manager 固定安装 Flameshot.Flameshot 14.0.0，由 winget 校验官方安装包哈希。
+
+GitHub 直连不可用时，可传入本机 HTTP 代理：
+
+    powershell -ExecutionPolicy Bypass -File scripts/install-screenshot-tool.ps1 -Proxy http://127.0.0.1:10808
+
+控制台依次从 LPC_FLAMESHOT_PATH、系统 PATH、Program Files 和当前用户安装目录查找
+flameshot.exe。点击“区域截图”或使用页面配置的截图快捷键后，框选区域即可直接进入附件预览。
+Flameshot 作为独立程序按 GPL-3.0 授权，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 同一进程还会在 `0.0.0.0:8766` 启动经过设备认证的远程服务。该端口只暴露远程会话、脱敏项目状态和配对领取接口，不暴露项目启动命令、API 渠道密钥或监控管理接口。
 

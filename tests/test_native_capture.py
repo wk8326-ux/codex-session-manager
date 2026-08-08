@@ -1,59 +1,73 @@
 import base64
-import tempfile
+import os
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from remote.native_capture import NativeCaptureError, WindowsRegionCapture
+from remote.native_capture import FlameshotRegionCapture, NativeCaptureError
 
 
-ROOT = Path(__file__).resolve().parents[1]
 PNG = b"\x89PNG\r\n\x1a\n" + b"region"
 
 
-class WindowsRegionCaptureTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.directory = tempfile.TemporaryDirectory()
-        self.script = Path(self.directory.name) / "capture-region.ps1"
-        self.script.write_text("# test capture helper", encoding="utf-8")
-
-    def tearDown(self) -> None:
-        self.directory.cleanup()
-
-    def service(self, runner, *, platform: str = "nt") -> WindowsRegionCapture:
-        return WindowsRegionCapture(
-            self.script,
+class FlameshotRegionCaptureTests(unittest.TestCase):
+    def service(
+        self,
+        runner,
+        *,
+        platform: str = "nt",
+        executable_path: str = r"C:\Program Files\Flameshot\bin\flameshot.exe",
+    ) -> FlameshotRegionCapture:
+        return FlameshotRegionCapture(
             platform=platform,
-            powershell_path="powershell.exe",
+            executable_path=executable_path,
             runner=runner,
         )
 
-    def test_capture_returns_png_and_cleans_its_temporary_file(self) -> None:
+    def test_capture_reads_flameshot_png_file_and_cleans_it_up(self) -> None:
         observed: dict[str, object] = {}
 
         def runner(command, **kwargs):
             observed["command"] = command
             observed["kwargs"] = kwargs
-            output = Path(command[command.index("-OutputPath") + 1])
+            output = Path(command[command.index("--path") + 1])
             observed["output"] = output
             output.write_bytes(PNG)
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         result = self.service(runner).capture()
 
         self.assertTrue(result["captured"])
-        self.assertTrue(result["image"].startswith("data:image/png;base64,"))
         self.assertEqual(
             base64.b64decode(result["image"].split(",", 1)[1]),
             PNG,
         )
-        self.assertIn("-Sta", observed["command"])
+        self.assertEqual(observed["command"][1], "gui")
+        self.assertEqual(observed["command"][2], "--path")
+        self.assertEqual(observed["command"][-1], "--accept-on-select")
+        self.assertNotIn("--raw", observed["command"])
+        self.assertEqual(observed["kwargs"]["stdout"], subprocess.PIPE)
+        self.assertEqual(observed["kwargs"]["stderr"], subprocess.PIPE)
+        self.assertNotIn("text", observed["kwargs"])
         self.assertFalse(Path(observed["output"]).exists())
 
-    def test_cancelled_selection_is_not_reported_as_an_error(self) -> None:
+    def test_empty_successful_capture_is_treated_as_cancelled(self) -> None:
         service = self.service(
             lambda *_args, **_kwargs: SimpleNamespace(
-                returncode=2, stdout="", stderr=""
+                returncode=0, stdout=b"", stderr=b""
+            )
+        )
+
+        self.assertEqual(service.capture(), {"captured": False})
+
+    def test_flameshot_aborted_exit_is_treated_as_cancelled(self) -> None:
+        service = self.service(
+            lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=2,
+                stdout=b"",
+                stderr=b"flameshot: info: Screenshot aborted.",
             )
         )
 
@@ -61,29 +75,30 @@ class WindowsRegionCaptureTests(unittest.TestCase):
 
     def test_invalid_output_and_unsupported_platform_fail_explicitly(self) -> None:
         def invalid_runner(command, **_kwargs):
-            output = Path(command[command.index("-OutputPath") + 1])
+            output = Path(command[command.index("--path") + 1])
             output.write_bytes(b"not-an-image")
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         with self.assertRaisesRegex(NativeCaptureError, "PNG"):
             self.service(invalid_runner).capture()
         with self.assertRaisesRegex(NativeCaptureError, "Windows"):
             self.service(invalid_runner, platform="posix").capture()
 
-    def test_helper_implements_a_native_drag_selection_overlay(self) -> None:
-        source = (ROOT / "scripts" / "capture-region.ps1").read_text(
-            encoding="utf-8"
-        )
+    def test_missing_flameshot_has_an_install_instruction(self) -> None:
+        with patch("remote.native_capture.shutil.which", return_value=None), patch.dict(
+            os.environ,
+            {
+                "PROGRAMFILES": r"C:\missing",
+                "LOCALAPPDATA": r"C:\also-missing",
+            },
+            clear=False,
+        ), patch.object(Path, "is_file", return_value=False):
+            service = FlameshotRegionCapture(platform="nt", runner=lambda: None)
 
-        for contract in (
-            "SystemInformation]::VirtualScreen",
-            "CopyFromScreen",
-            "Add_MouseDown",
-            "Add_MouseMove",
-            "Add_MouseUp",
-            "Keys]::Escape",
-        ):
-            self.assertIn(contract, source)
+            with self.assertRaisesRegex(
+                NativeCaptureError, "install-screenshot-tool.bat"
+            ):
+                service.capture()
 
 
 if __name__ == "__main__":
