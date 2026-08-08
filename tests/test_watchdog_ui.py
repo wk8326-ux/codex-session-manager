@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class WatchdogUiTests(unittest.TestCase):
     def test_all_workspaces_reuse_one_persistent_system_aware_theme_control(self) -> None:
         sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
-        for filename in ("index.html", "watchdog.html", "remote.html"):
+        for filename in ("index.html", "watchdog.html"):
             with self.subTest(filename=filename):
                 html = (ROOT / filename).read_text(encoding="utf-8")
 
@@ -21,6 +21,12 @@ class WatchdogUiTests(unittest.TestCase):
                     html.index("</head>"),
                     "theme must resolve before styles are parsed to avoid a light-mode flash",
                 )
+
+        remote_html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        remote_script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        self.assertNotIn('src="/assets/console-sidebar.js?v=9"', remote_html)
+        self.assertIn('id="remote-theme-toggle"', remote_html)
+        self.assertIn("localhost-project-console.theme", remote_script)
 
         self.assertIn("localStorage.setItem(THEME_KEY, next)", sidebar_script)
         self.assertIn("addEventListener('storage'", sidebar_script)
@@ -44,7 +50,6 @@ class WatchdogUiTests(unittest.TestCase):
         expected_active = {
             "index.html": "projects",
             "watchdog.html": "watchdog",
-            "remote.html": "remote",
         }
 
         for filename, active in expected_active.items():
@@ -64,6 +69,10 @@ class WatchdogUiTests(unittest.TestCase):
             "navLink('remote', '/remote', 'globe', '远程会话')",
         ):
             self.assertEqual(sidebar_script.count(route), 1)
+
+        remote_html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        self.assertNotIn("data-console-sidebar", remote_html)
+        self.assertIn('href="/"', remote_html)
 
     def test_shared_sidebar_owns_all_fixed_layout_and_copy(self) -> None:
         sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")

@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from remote.approvals import RemoteApprovalBroker
 from watchdog.codex_adapter import (
     CodexAdapterError,
     CodexAppServerAdapter,
@@ -52,6 +53,53 @@ class CodexAdapterTests(unittest.TestCase):
                 "turn/steer": {"turnId": "turn-active"},
             }
         )
+        result = CodexAppServerAdapter(transport).send_message(THREAD_ID, "continue")
+
+        self.assertEqual(result, {"turnId": "turn-active", "delivery": "steered"})
+        self.assertEqual(
+            transport.calls,
+            [
+                ("thread/read", {"threadId": THREAD_ID, "includeTurns": True}),
+                (
+                    "turn/steer",
+                    {
+                        "threadId": THREAD_ID,
+                        "expectedTurnId": "turn-active",
+                        "input": [
+                            {"type": "text", "text": "continue", "text_elements": []}
+                        ],
+                    },
+                ),
+            ],
+        )
+
+    def test_send_message_adds_a_schema_compliant_image_input(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "status": {"type": "active"},
+                        "turns": [{"id": "turn-active", "status": "inProgress", "items": []}],
+                    }
+                },
+                "turn/steer": {"turnId": "turn-active"},
+            }
+        )
+        image = "data:image/png;base64,iVBORw0KGgo="
+
+        CodexAppServerAdapter(transport).send_message(
+            THREAD_ID, "请看截图", image_url=image
+        )
+
+        self.assertEqual(
+            transport.calls[-1][1]["input"],
+            [
+                {"type": "text", "text": "请看截图", "text_elements": []},
+                {"type": "image", "url": image},
+            ],
+        )
+        transport.calls.clear()
 
         result = CodexAppServerAdapter(transport).send_message(THREAD_ID, "继续检查")
 
@@ -109,7 +157,10 @@ class CodexAdapterTests(unittest.TestCase):
                                     {
                                         "id": "u1",
                                         "type": "userMessage",
-                                        "content": [{"type": "text", "text": "hello"}],
+                                        "content": [
+                                            {"type": "text", "text": "hello"},
+                                            {"type": "image", "url": "data:image/png;base64,private"},
+                                        ],
                                     },
                                     {"id": "a1", "type": "agentMessage", "text": "done"},
                                     {
@@ -136,10 +187,12 @@ class CodexAdapterTests(unittest.TestCase):
 
         detail = CodexAppServerAdapter(transport).read_thread_detail(THREAD_ID)
 
-        serialized = json.dumps(detail)
+        serialized = json.dumps(detail, ensure_ascii=False)
         self.assertIn("hello", serialized)
         self.assertIn("done", serialized)
         self.assertIn("checked the result", serialized)
+        self.assertIn("附带 1 张截图", serialized)
+        self.assertNotIn("base64,private", serialized)
         self.assertNotIn("secret-value", serialized)
         self.assertNotIn("C:\\\\private", serialized)
         self.assertNotIn("private chain", serialized)
@@ -558,6 +611,54 @@ class StdioJsonRpcClientTests(unittest.TestCase):
         self.assertEqual(
             self.attention,
             [(THREAD_ID, "item/commandExecution/requestApproval")],
+        )
+
+    def test_remote_broker_resolves_command_and_permission_on_same_connection(self) -> None:
+        broker = RemoteApprovalBroker(lambda: {THREAD_ID}, timeout_seconds=2)
+        self.client._approval_broker = broker
+        requests = [
+            {
+                "id": 101,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turnId": "turn-new",
+                    "command": "npm test",
+                    "availableDecisions": ["accept", "decline"],
+                },
+            },
+            {
+                "id": 102,
+                "method": "item/permissions/requestApproval",
+                "params": {
+                    "threadId": THREAD_ID,
+                    "turnId": "turn-new",
+                    "permissions": {"network": {"enabled": True}},
+                },
+            },
+        ]
+        for request in requests:
+            self.process.stdout.push(request)
+
+        deadline = time.monotonic() + 1
+        while len(broker.list_pending()) < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(len(self.process.stdin.messages), 2)
+
+        for pending in broker.list_pending():
+            broker.resolve(
+                pending["id"], "accept", {"id": "phone-1", "name": "Phone"}
+            )
+        self.wait_for_messages(4)
+
+        responses = {
+            message["id"]: message["result"]
+            for message in self.process.stdin.messages[2:]
+        }
+        self.assertEqual(responses[101], {"decision": "accept"})
+        self.assertEqual(
+            responses[102],
+            {"permissions": {"network": {"enabled": True}}},
         )
 
     def test_explicit_unattended_policy_accepts_command_and_file_for_session(self) -> None:

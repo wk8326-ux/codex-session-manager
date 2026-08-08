@@ -218,6 +218,100 @@ class DesktopBridgeTests(unittest.TestCase):
         )
         self.assertEqual(started["decision"], "resume_started")
 
+    def test_disabling_session_cancels_pending_bridge_job(self) -> None:
+        self._queue_job()
+
+        updated = self.store.update_session(
+            self.session["id"],
+            {
+                "enabled": False,
+                "nextCheckAt": None,
+                "updatedAt": "2026-08-02T02:00:01Z",
+            },
+        )
+
+        bridge = self.store.get_desktop_bridge_status()
+        run = self.store.list_monitor_runs({})[0]
+        incident = self.store._one("SELECT * FROM recovery_incidents LIMIT 1")
+        self.assertFalse(updated["enabled"])
+        self.assertEqual(bridge["pending"], 0)
+        self.assertEqual(bridge["terminal"], 1)
+        self.assertEqual(run["decision"], "resume_cancelled")
+        self.assertIsNotNone(incident)
+        self.assertEqual(incident["status"], "failed")
+        self.assertIsNone(
+            self.store.claim_desktop_bridge_job(
+                "desktop-test", "2026-08-02T02:00:02Z", lease_seconds=60
+            )
+        )
+
+    def test_claim_cancels_job_when_disabled_session_cleanup_was_missed(self) -> None:
+        self._queue_job()
+        with self.store._connect() as connection:
+            connection.execute(
+                "UPDATE monitored_sessions SET enabled = 0 WHERE id = ?",
+                (self.session["id"],),
+            )
+
+        claimed = self.store.claim_desktop_bridge_job(
+            "desktop-test", "2026-08-02T02:00:01Z", lease_seconds=60
+        )
+
+        self.assertIsNone(claimed)
+        self.assertEqual(self.store.get_desktop_bridge_status()["pending"], 0)
+        self.assertEqual(self.store.get_desktop_bridge_status()["terminal"], 1)
+        self.assertEqual(
+            self.store.list_monitor_runs({})[0]["decision"],
+            "resume_cancelled",
+        )
+
+    def test_startup_cancels_jobs_left_for_disabled_sessions(self) -> None:
+        self._queue_job()
+        with self.store._connect() as connection:
+            connection.execute(
+                "UPDATE monitored_sessions SET enabled = 0 WHERE id = ?",
+                (self.session["id"],),
+            )
+
+        self.store.initialize()
+
+        self.assertEqual(self.store.get_desktop_bridge_status()["pending"], 0)
+        self.assertEqual(self.store.get_desktop_bridge_status()["terminal"], 1)
+        self.assertEqual(
+            self.store.list_monitor_runs({})[0]["decision"],
+            "resume_cancelled",
+        )
+
+    def test_disabled_session_claimed_job_is_not_requeued_after_lease_expiry(self) -> None:
+        self._queue_job()
+        original = self.store.claim_desktop_bridge_job(
+            "desktop-a", "2026-08-02T02:00:01Z", lease_seconds=30
+        )
+        assert original is not None
+
+        self.store.update_session(
+            self.session["id"],
+            {
+                "enabled": False,
+                "nextCheckAt": None,
+                "updatedAt": "2026-08-02T02:00:02Z",
+            },
+        )
+        reclaimed = self.store.claim_desktop_bridge_job(
+            "desktop-b", "2026-08-02T02:00:31Z", lease_seconds=30
+        )
+
+        self.assertIsNone(reclaimed)
+        with self.assertRaisesRegex(
+            WatchdogStoreError, "desktop bridge lease is no longer valid"
+        ):
+            self.store.mark_desktop_bridge_started(
+                original["id"],
+                original["leaseToken"],
+                "66666666-7777-4888-8999-aaaaaaaaaaaa",
+                "2026-08-02T02:00:32Z",
+            )
+
     def test_completed_bridge_history_does_not_block_session_deletion(self) -> None:
         self._queue_job()
         job = self.store.claim_desktop_bridge_job(

@@ -525,7 +525,7 @@
             <form class="filters-row" id="runs-filter-form">
               <div class="compact-field"><label for="run-filter-session">会话</label><select id="run-filter-session" name="sessionId"><option value="">全部会话</option></select></div>
               <div class="compact-field"><label for="run-filter-channel">渠道</label><select id="run-filter-channel" name="channelId"><option value="">全部渠道</option></select></div>
-              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">静默：仅观察续跑候选</option><option value="resume_queued">等待桌面桥接</option><option value="resume_started">续跑已启动</option><option value="resume_completed">续跑已完成</option><option value="resume_failed">续跑后失败</option><option value="resume_interrupted">续跑被中断</option><option value="resume_manual_attention">续跑需要关注</option><option value="resume_sent">旧记录：已续跑</option><option value="resume_action_failed">续跑请求失败</option><option value="silent_manual_attention">需要关注</option></select></div>
+              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">静默：仅观察续跑候选</option><option value="resume_queued">等待桌面桥接</option><option value="resume_cancelled">续跑已取消</option><option value="resume_started">续跑已启动</option><option value="resume_completed">续跑已完成</option><option value="resume_failed">续跑后失败</option><option value="resume_interrupted">续跑被中断</option><option value="resume_manual_attention">续跑需要关注</option><option value="resume_sent">旧记录：已续跑</option><option value="resume_action_failed">续跑请求失败</option><option value="silent_manual_attention">需要关注</option></select></div>
               <div class="compact-field"><label for="run-filter-from">开始时间</label><input id="run-filter-from" name="from" type="datetime-local"></div>
               <div class="compact-field"><label for="run-filter-to">结束时间</label><input id="run-filter-to" name="to" type="datetime-local"></div>
               <div class="filter-actions"><button class="button" type="submit">筛选记录</button><button class="button ghost" id="reset-run-filters" type="button">重置</button></div>
@@ -801,6 +801,7 @@
 
     function decisionView(decision) {
       if (decision === 'resume_queued') return { label: '等待桌面', tone: 'warning' };
+      if (decision === 'resume_cancelled') return { label: '续跑已取消', tone: 'neutral' };
       if (decision === 'resume_started') return { label: '续跑中', tone: 'warning' };
       if (decision === 'resume_completed') return { label: '续跑完成', tone: 'success' };
       if (decision === 'resume_sent') return { label: '已续跑', tone: 'success' };

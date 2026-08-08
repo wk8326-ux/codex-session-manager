@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from remote.application import RemoteApplication
+from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
 from remote.router import AdminRemoteApi, RemoteHttpApi
 from remote.store import RemoteStore
@@ -58,6 +59,14 @@ class RemoteRouterTests(unittest.TestCase):
         self.store.initialize()
         sessions = Sessions()
         self.adapter = Adapter()
+        self.approval_decisions: list[str] = []
+        self.approvals = RemoteApprovalBroker(
+            lambda: {
+                session["threadId"] for session in self.store.list_synced_sessions()
+            },
+            timeout_seconds=2,
+            record_audit=self.store.record_approval_audit,
+        )
         application = RemoteApplication(
             self.store,
             self.adapter,
@@ -65,11 +74,13 @@ class RemoteRouterTests(unittest.TestCase):
             lambda: [],
             default_base_url="http://192.0.2.10:8766",
             codex_connected=True,
+            approval_broker=self.approvals,
         )
         self.admin = AdminRemoteApi(application)
         self.remote = RemoteHttpApi(application)
 
     def tearDown(self) -> None:
+        self.approvals.close()
         self.directory.cleanup()
 
     def pair(self) -> str:
@@ -162,6 +173,48 @@ class RemoteRouterTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.body["name"], "Phone")
         self.assertIn("createdAt", response.body)
+
+    def test_authenticated_device_can_resolve_pending_approval(self) -> None:
+        self.admin.dispatch(
+            "POST",
+            "/api/remote/synced-sessions",
+            {"name": "Remote Woxsheet", "threadId": THREAD_ID},
+        )
+        self.approvals.offer(
+            "item/commandExecution/requestApproval",
+            {
+                "threadId": THREAD_ID,
+                "turnId": "turn-1",
+                "command": "npm test",
+                "availableDecisions": ["accept", "decline"],
+            },
+            self.approval_decisions.append,
+        )
+        token = self.pair()
+        headers = {"Authorization": f"Bearer {token}"}
+
+        listed = self.remote.dispatch(
+            "GET", "/api/remote/approvals", headers, None
+        )
+        self.assertEqual(listed.status, 200)
+        self.assertEqual(listed.body[0]["summary"], "npm test")
+        approval_id = listed.body[0]["id"]
+
+        resolved = self.remote.dispatch(
+            "POST",
+            f"/api/remote/approvals/{approval_id}/decision",
+            headers,
+            {"decision": "accept"},
+        )
+
+        self.assertEqual(resolved.status, 200)
+        self.assertEqual(self.approval_decisions, ["accept"])
+        self.assertEqual(
+            self.remote.dispatch(
+                "GET", "/api/remote/approvals", headers, None
+            ).body,
+            [],
+        )
 
     def test_remote_router_has_no_admin_or_project_crud_routes(self) -> None:
         token = self.pair()

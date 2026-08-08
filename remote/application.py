@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import re
 import sqlite3
 from urllib.parse import urlparse
 
@@ -10,6 +13,12 @@ from watchdog.validation import (
     validate_thread_id,
 )
 
+from .approvals import (
+    ApprovalDeliveryError,
+    ApprovalNotFound,
+    InvalidApprovalDecision,
+    RemoteApprovalBroker,
+)
 from .events import RemoteEventHub
 from .store import PairingRejected, RemoteStore
 
@@ -26,6 +35,47 @@ class RemoteValidationError(RemoteApplicationError):
     pass
 
 
+_IMAGE_DATA_URL = re.compile(
+    r"\Adata:image/(?P<type>png|jpeg|webp);base64,(?P<data>[A-Za-z0-9+/]*={0,2})\Z",
+    re.ASCII,
+)
+_MAX_IMAGE_BYTES = 1_200_000
+
+
+def _validated_image_url(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise RemoteValidationError("\u622a\u56fe\u683c\u5f0f\u65e0\u6548\u3002")
+    match = _IMAGE_DATA_URL.fullmatch(value)
+    if match is None:
+        raise RemoteValidationError(
+            "\u4ec5\u652f\u6301 PNG\u3001JPEG \u6216 WebP \u622a\u56fe\u3002"
+        )
+    try:
+        decoded = base64.b64decode(match.group("data"), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise RemoteValidationError("\u622a\u56fe\u6570\u636e\u65e0\u6548\u3002") from error
+    if not decoded or len(decoded) > _MAX_IMAGE_BYTES:
+        raise RemoteValidationError("\u622a\u56fe\u8d85\u8fc7 1.2 MB \u9650\u5236\u3002")
+    image_type = match.group("type")
+    signature_is_valid = (
+        (image_type == "png" and decoded.startswith(b"\x89PNG\r\n\x1a\n"))
+        or (image_type == "jpeg" and decoded.startswith(b"\xff\xd8\xff"))
+        or (
+            image_type == "webp"
+            and len(decoded) >= 12
+            and decoded.startswith(b"RIFF")
+            and decoded[8:12] == b"WEBP"
+        )
+    )
+    if not signature_is_valid:
+        raise RemoteValidationError(
+            "\u622a\u56fe\u5185\u5bb9\u4e0e\u6587\u4ef6\u7c7b\u578b\u4e0d\u5339\u914d\u3002"
+        )
+    return value
+
+
 class RemoteApplication:
     def __init__(
         self,
@@ -36,6 +86,7 @@ class RemoteApplication:
         *,
         default_base_url: str,
         codex_connected: bool,
+        approval_broker: RemoteApprovalBroker | None = None,
         tunnel_status_provider=None,
         tunnel_start_provider=None,
     ) -> None:
@@ -45,6 +96,7 @@ class RemoteApplication:
         self.project_provider = project_provider
         self.default_base_url = default_base_url
         self.codex_connected = codex_connected
+        self.approval_broker = approval_broker
         self.tunnel_status_provider = tunnel_status_provider
         self.tunnel_start_provider = tunnel_start_provider
 
@@ -188,8 +240,57 @@ class RemoteApplication:
         return self._session_summary(session)
 
     def delete_synced_session(self, session_id: str) -> None:
+        session = self._session(session_id)
+        if self.approval_broker is not None:
+            self.approval_broker.cancel_thread(session["threadId"])
         if not self.remote_store.delete_synced_session(session_id):
             raise RemoteNotFound("远程同步会话不存在。")
+
+    def list_approvals(self) -> list[dict]:
+        if self.approval_broker is None:
+            return []
+        sessions = {
+            session["threadId"]: session
+            for session in self.remote_store.list_synced_sessions()
+        }
+        approvals = []
+        for approval in self.approval_broker.list_pending():
+            session = sessions.get(approval["threadId"])
+            if session is None:
+                continue
+            approvals.append(
+                {
+                    **approval,
+                    "sessionId": session["id"],
+                    "sessionName": session["name"],
+                }
+            )
+        return approvals
+
+    def resolve_approval(
+        self,
+        approval_id: str,
+        payload: dict,
+        actor: dict,
+    ) -> dict:
+        unknown = set(payload) - {"decision"}
+        if unknown:
+            raise RemoteValidationError("授权操作包含不支持的字段。")
+        decision = str(payload.get("decision") or "").strip()
+        if decision not in {"accept", "acceptForSession", "acceptForTurn", "decline"}:
+            raise RemoteValidationError("请选择有效的授权操作。")
+        if self.approval_broker is None:
+            raise RemoteNotFound("待处理授权不存在或已经结束。")
+        try:
+            if decision == "acceptForTurn":
+                return self.approval_broker.allow_turn(approval_id, actor)
+            return self.approval_broker.resolve(approval_id, decision, actor)
+        except ApprovalNotFound as error:
+            raise RemoteNotFound(str(error)) from error
+        except InvalidApprovalDecision as error:
+            raise RemoteValidationError(str(error)) from error
+        except ApprovalDeliveryError as error:
+            raise RemoteApplicationError(str(error)) from error
 
     def read_session(self, session_id: str, turn_limit: int = 12) -> dict:
         session = self._session(session_id)
@@ -205,10 +306,17 @@ class RemoteApplication:
     def send_message(self, session_id: str, payload: dict) -> dict:
         session = self._session(session_id)
         prompt = str(payload.get("message") or "").strip()
-        if not prompt or len(prompt) > 20_000:
+        image_url = _validated_image_url(payload.get("image"))
+        if len(prompt) > 20_000:
             raise RemoteValidationError("消息不能为空，且不能超过 20000 个字符。")
+        if not prompt and not image_url:
+            raise RemoteValidationError(
+                "\u8bf7\u8f93\u5165\u6d88\u606f\u6216\u6dfb\u52a0\u4e00\u5f20\u622a\u56fe\u3002"
+            )
         try:
-            result = self.adapter.send_message(session["threadId"], prompt)
+            result = self.adapter.send_message(
+                session["threadId"], prompt, image_url=image_url
+            )
         except CodexAdapterError as error:
             raise RemoteApplicationError("消息未能由 Codex App Server 确认发送。") from error
         return {**result, "threadId": session["threadId"]}

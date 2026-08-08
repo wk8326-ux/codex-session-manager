@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from remote.application import RemoteApplication, RemoteNotFound, RemoteValidationError
+from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
 from remote.store import RemoteStore
 
@@ -36,15 +37,15 @@ class SessionStore:
 
 class Adapter:
     def __init__(self) -> None:
-        self.sent: list[tuple[str, str]] = []
+        self.sent: list[tuple[str, str, str | None]] = []
         self.last_turn_limit: int | None = None
 
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
         self.last_turn_limit = turn_limit
         return {"threadId": thread_id, "status": "idle", "turns": []}
 
-    def send_message(self, thread_id: str, prompt: str) -> dict:
-        self.sent.append((thread_id, prompt))
+    def send_message(self, thread_id: str, prompt: str, image_url: str | None = None) -> dict:
+        self.sent.append((thread_id, prompt, image_url))
         return {"turnId": "turn-2", "delivery": "started"}
 
     def list_threads(self, limit: int) -> list[object]:
@@ -67,6 +68,15 @@ class RemoteApplicationTests(unittest.TestCase):
         self.sessions = SessionStore()
         self.adapter = Adapter()
         self.hub = RemoteEventHub(lambda: {THREAD_ID})
+        self.approval_decisions: list[str] = []
+        self.approvals = RemoteApprovalBroker(
+            lambda: {
+                session["threadId"]
+                for session in self.remote_store.list_synced_sessions()
+            },
+            timeout_seconds=2,
+            record_audit=self.remote_store.record_approval_audit,
+        )
         self.application = RemoteApplication(
             remote_store,
             self.adapter,
@@ -84,9 +94,11 @@ class RemoteApplicationTests(unittest.TestCase):
             ],
             default_base_url="http://192.0.2.10:8766",
             codex_connected=True,
+            approval_broker=self.approvals,
         )
 
     def tearDown(self) -> None:
+        self.approvals.close()
         self.temporary_directory.cleanup()
 
     def test_message_is_sent_to_the_exact_registered_thread(self) -> None:
@@ -96,9 +108,36 @@ class RemoteApplicationTests(unittest.TestCase):
         response = self.application.send_message(synced["id"], {"message": "继续"})
 
         self.assertEqual(response["threadId"], THREAD_ID)
-        self.assertEqual(self.adapter.sent, [(THREAD_ID, "继续")])
+        self.assertEqual(self.adapter.sent, [(THREAD_ID, "继续", None)])
         with self.assertRaises(RemoteNotFound):
             self.application.send_message("unknown", {"message": "continue"})
+
+    def test_message_accepts_one_valid_screenshot_and_rejects_invalid_data(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        image = "data:image/png;base64,iVBORw0KGgo="
+
+        self.application.send_message(
+            synced["id"], {"message": "请看截图", "image": image}
+        )
+
+        self.assertEqual(self.adapter.sent[-1], (THREAD_ID, "请看截图", image))
+        with self.assertRaises(RemoteValidationError):
+            self.application.send_message(
+                synced["id"],
+                {"message": "bad", "image": "data:text/html;base64,PGgxPmJhZDwvaDE+"},
+            )
+
+    def test_screenshot_can_be_sent_without_text(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        image = "data:image/jpeg;base64,/9j/2Q=="
+
+        self.application.send_message(synced["id"], {"message": "", "image": image})
+
+        self.assertEqual(self.adapter.sent[-1], (THREAD_ID, "", image))
 
     def test_admin_status_includes_local_tunnel_state(self) -> None:
         self.application.tunnel_status_provider = lambda: {
@@ -153,6 +192,80 @@ class RemoteApplicationTests(unittest.TestCase):
 
         with self.assertRaises(RemoteValidationError):
             self.application.create_synced_session(payload)
+
+    def test_synced_session_exposes_and_resolves_remote_approval(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        self.assertTrue(
+            self.approvals.offer(
+                "item/commandExecution/requestApproval",
+                {
+                    "threadId": THREAD_ID,
+                    "turnId": "turn-1",
+                    "command": "npm test",
+                    "availableDecisions": ["accept", "decline"],
+                },
+                self.approval_decisions.append,
+            )
+        )
+
+        pending = self.application.list_approvals()[0]
+        self.assertEqual(pending["sessionId"], synced["id"])
+        self.assertEqual(pending["sessionName"], "Woxsheet")
+        result = self.application.resolve_approval(
+            pending["id"],
+            {"decision": "accept"},
+            {"id": "phone-1", "name": "Phone"},
+        )
+
+        self.assertEqual(result["status"], "resolved")
+        self.assertEqual(self.approval_decisions, ["accept"])
+        self.assertEqual(self.application.list_approvals(), [])
+        self.assertEqual(
+            self.remote_store.list_approval_audit()[0]["actorDeviceName"],
+            "Phone",
+        )
+
+    def test_synced_session_can_allow_the_rest_of_the_current_turn(self) -> None:
+        self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        self.approvals.offer(
+            "item/commandExecution/requestApproval",
+            {
+                "threadId": THREAD_ID,
+                "turnId": "turn-1",
+                "command": "npm test",
+                "availableDecisions": ["accept", "acceptForSession", "decline"],
+            },
+            self.approval_decisions.append,
+        )
+        pending = self.application.list_approvals()[0]
+
+        result = self.application.resolve_approval(
+            pending["id"],
+            {"decision": "acceptForTurn"},
+            {"id": "phone-1", "name": "Phone"},
+        )
+
+        self.assertEqual(result["status"], "resolved")
+        self.assertEqual(self.approval_decisions, ["acceptForSession"])
+
+    def test_removing_synced_session_declines_its_pending_approval(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        self.approvals.offer(
+            "item/fileChange/requestApproval",
+            {"threadId": THREAD_ID, "reason": "Update file"},
+            self.approval_decisions.append,
+        )
+
+        self.application.delete_synced_session(synced["id"])
+
+        self.assertEqual(self.approval_decisions, ["decline"])
+        self.assertEqual(self.application.list_approvals(), [])
 
     def test_project_overview_omits_paths_commands_and_urls(self) -> None:
         projects = self.application.list_projects()

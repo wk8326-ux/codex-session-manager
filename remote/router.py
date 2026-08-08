@@ -46,6 +46,23 @@ class AdminRemoteApi:
                 )
             if method == "GET" and route == "/api/remote/devices":
                 return RemoteResponse(HTTPStatus.OK, self.application.list_devices())
+            if method == "GET" and route == "/api/remote/approvals":
+                return RemoteResponse(HTTPStatus.OK, self.application.list_approvals())
+            approval_prefix = "/api/remote/approvals/"
+            if (
+                method == "POST"
+                and route.startswith(approval_prefix)
+                and route.endswith("/decision")
+            ):
+                approval_id = route[len(approval_prefix):-len("/decision")]
+                return RemoteResponse(
+                    HTTPStatus.OK,
+                    self.application.resolve_approval(
+                        approval_id,
+                        payload if isinstance(payload, dict) else {},
+                        {"id": "desktop", "name": "本机控制台"},
+                    ),
+                )
             prefix = "/api/remote/devices/"
             if method == "DELETE" and route.startswith(prefix):
                 self.application.revoke_device(route[len(prefix):])
@@ -139,6 +156,23 @@ class RemoteHttpApi:
                 return RemoteResponse(HTTPStatus.UNAUTHORIZED, {"message": "设备未配对或授权已撤销。"})
             if method == "GET" and path == "/api/remote/device":
                 return RemoteResponse(HTTPStatus.OK, device)
+            if method == "GET" and path == "/api/remote/approvals":
+                return RemoteResponse(HTTPStatus.OK, self.application.list_approvals())
+            approval_prefix = "/api/remote/approvals/"
+            if (
+                method == "POST"
+                and path.startswith(approval_prefix)
+                and path.endswith("/decision")
+            ):
+                approval_id = path[len(approval_prefix):-len("/decision")]
+                return RemoteResponse(
+                    HTTPStatus.OK,
+                    self.application.resolve_approval(
+                        approval_id,
+                        payload if isinstance(payload, dict) else {},
+                        device,
+                    ),
+                )
             if method == "GET" and path == "/api/remote/sessions":
                 return RemoteResponse(HTTPStatus.OK, self.application.list_sessions())
             session_prefix = "/api/remote/sessions/"

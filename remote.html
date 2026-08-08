@@ -2,14 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#e9eeeb">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/assets/project-console-icon.png">
-  <link rel="stylesheet" href="/remote.css?v=14">
-  <link rel="stylesheet" href="/assets/console-sidebar.css?v=8">
+  <link rel="stylesheet" href="/remote.css?v=18">
   <script>
     (() => {
       const key = 'localhost-project-console.theme';
@@ -75,38 +74,72 @@
   </section>
 
   <div class="app-shell" id="app-shell" hidden>
-    <aside class="sidebar" data-console-sidebar data-active="remote" aria-label="控制台主导航"></aside>
-    <script src="/assets/console-sidebar.js?v=9"></script>
-
-    <main class="main" id="remote-main">
-      <header class="topbar">
-        <div><p class="eyebrow">REMOTE WORKSPACE</p><h1>远程会话</h1><p class="device-identity" id="device-identity" hidden></p></div>
-        <div class="top-actions">
-          <span class="sync-state" id="sync-state">正在同步</span>
-          <button class="icon-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
-        </div>
+    <button class="session-drawer-backdrop" id="session-drawer-backdrop" type="button" aria-label="关闭会话列表" tabindex="-1"></button>
+    <aside class="session-drawer" id="session-drawer" role="dialog" aria-modal="true" aria-label="会话列表" aria-hidden="true">
+      <header class="drawer-head">
+        <button class="drawer-icon-button" id="close-session-drawer" type="button" aria-label="关闭会话列表" title="关闭会话列表">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <a class="drawer-brand" href="/" aria-label="返回项目工作台">
+          <img src="/assets/project-console-icon.png" alt="">
+          <span><strong>远程会话</strong><small>Local Project Console</small></span>
+        </a>
       </header>
 
-      <nav class="view-tabs" aria-label="远程工作区视图">
-        <button class="view-tab active" type="button" data-view="sessions" aria-pressed="true">会话</button>
-        <button class="view-tab admin-only" type="button" data-view="devices" aria-pressed="false">配对设备</button>
-      </nav>
+      <section class="drawer-connection" aria-live="polite">
+        <span class="connection-dot" id="drawer-connection-dot" aria-hidden="true"></span>
+        <div><strong id="sync-state">正在同步</strong><small class="device-identity" id="device-identity" hidden></small></div>
+      </section>
+
+      <div class="drawer-section-head">
+        <h2>会话</h2>
+        <button class="drawer-add-button admin-only" id="manage-synced-sessions" type="button" hidden aria-label="添加同步会话" title="添加同步会话">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <nav class="session-drawer-list" id="session-drawer-list" aria-label="已同步会话"></nav>
+
+      <footer class="drawer-footer">
+        <button class="drawer-tool active" type="button" data-view="sessions">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+          <span>当前会话</span>
+        </button>
+        <button class="drawer-tool admin-only" type="button" data-view="devices" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 18h6"/></svg>
+          <span>配对设备</span>
+        </button>
+        <button class="drawer-tool" id="remote-theme-toggle" type="button" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c-5 2-10-3-9-9Z"/></svg>
+          <span id="remote-theme-label">深色模式</span>
+        </button>
+        <a class="drawer-tool" href="/">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18-6-6 6-6M3 12h18"/></svg>
+          <span>返回项目工作台</span>
+        </a>
+      </footer>
+    </aside>
+
+    <main class="main" id="remote-main">
+      <header class="chat-header">
+        <button class="chat-header-button" id="open-session-drawer" type="button" aria-label="打开会话列表" title="打开会话列表" aria-controls="session-drawer" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h12M4 17h8"/></svg>
+          <span class="header-notice-dot" id="header-notice-dot" aria-hidden="true"></span>
+        </button>
+        <div class="chat-title">
+          <h1 id="conversation-title">远程会话</h1>
+          <span class="status-badge stopped" id="conversation-status">未选择</span>
+        </div>
+        <button class="chat-header-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7"/></svg>
+        </button>
+      </header>
+
+      <label class="sr-only" for="session-select">同步会话</label>
+      <select class="sr-only" id="session-select" aria-describedby="conversation-meta"><option value="">选择同步会话</option></select>
+      <p class="sr-only" id="conversation-meta">尚未选择会话</p>
 
       <section class="sessions-workspace view active" data-view-panel="sessions">
         <section class="conversation">
-          <header class="conversation-head">
-            <div class="session-picker">
-              <label for="session-select">同步会话</label>
-              <select id="session-select" aria-describedby="conversation-meta">
-                <option value="">选择同步会话</option>
-              </select>
-              <p id="conversation-meta">尚未选择会话</p>
-            </div>
-            <div class="conversation-actions">
-              <button class="button compact admin-only" id="manage-synced-sessions" type="button" hidden><span aria-hidden="true">＋</span> 添加同步会话</button>
-              <span class="status-badge stopped" id="conversation-status">未选择</span>
-            </div>
-          </header>
           <section class="runtime-strip" id="runtime-strip">
             <span class="runtime-signal runtime-rotor" id="runtime-signal" aria-hidden="true"></span>
             <div class="runtime-copy">
@@ -115,6 +148,24 @@
             </div>
             <span class="runtime-metrics" id="runtime-metrics">未连接</span>
           </section>
+          <section class="approval-tray" id="approval-tray" aria-labelledby="approval-title" aria-live="assertive" hidden>
+            <span class="approval-mark" aria-hidden="true">!</span>
+            <div class="approval-copy">
+              <div class="approval-heading">
+                <strong id="approval-title">等待授权</strong>
+                <span id="approval-session-name"></span>
+              </div>
+              <code class="approval-summary" id="approval-summary"></code>
+              <p class="approval-detail" id="approval-detail"></p>
+              <small class="approval-expiry" id="approval-expiry"></small>
+            </div>
+            <div class="approval-actions" id="approval-actions">
+              <button class="approval-button view" id="approval-view-session" type="button" hidden>查看会话</button>
+              <button class="approval-button decline" id="approval-decline" type="button">拒绝</button>
+              <button class="approval-button session" id="approval-accept-session" type="button">本轮全部允许</button>
+              <button class="approval-button accept" id="approval-accept" type="button">允许一次</button>
+            </div>
+          </section>
           <div class="transcript-shell">
             <div class="transcript" id="transcript" aria-live="polite" aria-busy="false">
               <div class="conversation-empty"><strong>等待选择会话</strong><span>消息会保留在原 Codex 会话中</span></div>
@@ -122,9 +173,21 @@
             <button class="jump-latest" id="jump-latest" type="button" hidden>↓ 回到最新</button>
           </div>
           <form class="composer" id="composer">
+            <div class="attachment-preview" id="attachment-preview" hidden>
+              <img id="attachment-thumbnail" alt="">
+              <div class="attachment-copy">
+                <strong>&#24050;&#28155;&#21152;&#25130;&#22270;</strong>
+                <small id="attachment-name"></small>
+              </div>
+              <button class="remove-attachment" id="remove-attachment" type="button" aria-label="&#31227;&#38500;&#25130;&#22270;" title="&#31227;&#38500;&#25130;&#22270;">&times;</button>
+            </div>
+            <div class="composer-row">
+              <button class="attach-image" id="attach-image" type="button" aria-label="&#28155;&#21152;&#25130;&#22270;" title="&#28155;&#21152;&#25130;&#22270;" disabled>+</button>
+              <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
             <label class="sr-only" for="message-input">发送到当前 Codex 会话</label>
             <textarea id="message-input" rows="1" maxlength="20000" placeholder="发送消息到当前会话" disabled></textarea>
             <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">↑</button>
+            </div>
           </form>
         </section>
       </section>
@@ -181,10 +244,6 @@
       </section>
     </main>
 
-    <nav class="mobile-nav" aria-label="移动端视图导航">
-      <button class="active" type="button" data-mobile-view="sessions"><span>⌁</span>会话</button>
-      <button class="admin-only" type="button" data-mobile-view="devices"><span>●</span>设备</button>
-    </nav>
   </div>
 
   <dialog class="sync-dialog admin-only" id="sync-session-dialog" aria-labelledby="sync-session-title" hidden>
@@ -216,6 +275,6 @@
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="/assets/vendor/qrcode.min.js"></script>
   <script src="/assets/vendor/jsQR.js?v=1" defer></script>
-  <script src="/remote.js?v=11" defer></script>
+  <script src="/remote.js?v=16" defer></script>
 </body>
 </html>

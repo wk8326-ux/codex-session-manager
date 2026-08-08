@@ -68,6 +68,7 @@ DECISION_DETAILS = {
     "resume_candidate_observed": "enabled recovery rule matched",
     "resume_started": "resumed turn started; waiting for final outcome",
     "resume_queued": "waiting for Codex Desktop bridge",
+    "resume_cancelled": "bridge dispatch was cancelled because monitoring was disabled",
     "resume_completed": "resumed turn completed",
     "resume_failed": "resumed turn failed",
     "resume_interrupted": "resumed turn was interrupted",

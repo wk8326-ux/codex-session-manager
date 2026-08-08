@@ -15,9 +15,17 @@ class RemoteUiContractTests(unittest.TestCase):
 
         for label in ("项目控制台", "会话监控", "远程会话"):
             self.assertIn(label, sidebar)
-        self.assertIn('data-console-sidebar data-active="remote"', html)
+        self.assertNotIn('data-console-sidebar', html)
+        self.assertNotIn('/assets/console-sidebar.css', html)
+        self.assertNotIn('/assets/console-sidebar.js', html)
         self.assertIn('id="composer"', html)
-        self.assertIn('class="mobile-nav"', html)
+        self.assertIn('id="session-drawer"', html)
+        self.assertIn('id="session-drawer-backdrop"', html)
+        self.assertIn('id="open-session-drawer"', html)
+        self.assertIn('id="close-session-drawer"', html)
+        self.assertIn('id="session-drawer-list"', html)
+        self.assertIn('href="/"', html)
+        self.assertNotIn('class="mobile-nav"', html)
         self.assertIn('id="create-pairing"', html)
         self.assertIn('id="tunnel-state-label"', html)
         self.assertIn('id="remote-public-url"', html)
@@ -45,6 +53,24 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertNotIn("项目概览", html)
         self.assertNotIn("只显示会话监控中登记的任务", html)
         self.assertLess(html.index('id="create-pairing"'), html.index('id="device-list"'))
+
+    def test_mobile_client_uses_a_swipeable_session_drawer_and_fixed_chat_shell(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn('aria-controls="session-drawer"', html)
+        self.assertIn('aria-expanded="false"', html)
+        self.assertIn('id="conversation-title"', html)
+        self.assertIn('id="remote-theme-toggle"', html)
+        self.assertIn("function openSessionDrawer()", script)
+        self.assertIn("function closeSessionDrawer", script)
+        self.assertIn("touchstart", script)
+        self.assertIn("touchend", script)
+        self.assertIn("deltaX < -60", script)
+        self.assertIn("body.drawer-open .session-drawer", stylesheet)
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr);", stylesheet)
+        self.assertIn("padding-bottom: max(10px, env(safe-area-inset-bottom));", stylesheet)
 
     def test_sync_manager_uses_the_independent_remote_catalog_api(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -170,6 +196,52 @@ if (!result || result.data !== value) process.exit(1);
         self.assertIn("runtime-rotor.running", stylesheet)
         self.assertIn(".scan-button { min-height: var(--control-height)", stylesheet)
 
+    def test_explicit_turn_errors_override_stale_active_thread_state(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  function conversationStatus(detail) {")
+        end = script.index("\n  function uuidV7Timestamp", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const context = { Date, console, state: { lastConversationActivityAt: 0, lastEventAt: 0 } };
+vm.createContext(context);
+vm.runInContext(`const LIVE_ACTIVITY_GRACE_MS = 180000;\n${source}; this.conversationStatus = conversationStatus;`, context);
+const cases = [
+  {
+    expected: 'failed',
+    detail: { status: 'active', turns: [{ status: 'failed', error: 'exceeded retry limit, last status: 429 Too Many Requests' }] },
+  },
+  {
+    expected: 'failed',
+    detail: { status: 'active', turns: [{ status: 'inProgress', error: 'unexpected status 503 Service Unavailable' }] },
+  },
+  {
+    expected: 'inProgress',
+    detail: { status: 'active', turns: [{ status: 'inProgress', items: [{ status: 'inProgress' }] }] },
+  },
+  {
+    expected: 'interrupted',
+    detail: { status: 'active', activeFlags: ['active'], turns: [{ status: 'interrupted' }] },
+  },
+];
+for (const item of cases) {
+  const actual = context.conversationStatus(item.detail);
+  if (actual !== item.expected) {
+    console.error(JSON.stringify({ expected: item.expected, actual, detail: item.detail }));
+    process.exit(1);
+  }
+}
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_admin_view_reports_local_frp_lifecycle(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
@@ -193,16 +265,43 @@ if (!result || result.data !== value) process.exit(1);
         self.assertIn("aria-busy", (ROOT / "remote.html").read_text(encoding="utf-8"))
 
     def test_mobile_remote_mode_fills_the_viewport_without_a_single_item_nav(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
 
-        self.assertIn("body.remote-mode .mobile-nav { display: none; }", stylesheet)
-        self.assertIn("body.remote-mode .main { height: 100dvh; }", stylesheet)
-        self.assertIn(".sessions-workspace { height: 100%; min-height: 0;", stylesheet)
+        self.assertIn("interactive-widget=resizes-content", html)
+        self.assertIn("--app-viewport-height: 100dvh", stylesheet)
+        self.assertNotIn(".mobile-nav", stylesheet)
+        self.assertIn(".main { height: var(--app-viewport-height);", stylesheet)
+        self.assertIn(".sessions-workspace { min-height: 0; display: grid;", stylesheet)
+        self.assertNotIn(".sessions-workspace { height: 100%;", stylesheet)
         self.assertIn(".conversation { width: 100%; height: 100%; min-height: 0;", stylesheet)
         self.assertIn(".transcript { height: 100%; min-height: 0;", stylesheet)
+        self.assertIn("function syncVisualViewport()", script)
+        self.assertIn("visualViewport.addEventListener('resize', syncVisualViewport", script)
+        self.assertIn("--app-viewport-height", script)
         self.assertIn("@media (max-width: 480px)", stylesheet)
-        self.assertIn(".conversation-head { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr);", stylesheet)
+        self.assertIn(".chat-header", stylesheet)
         self.assertNotIn("calc(100dvh - 421px", stylesheet)
+
+    def test_composer_supports_one_screenshot_with_preview_and_removal(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        for element_id in (
+            "attach-image",
+            "image-input",
+            "attachment-preview",
+            "attachment-thumbnail",
+            "remove-attachment",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn('accept="image/png,image/jpeg,image/webp"', html)
+        self.assertIn("function prepareScreenshot(file)", script)
+        self.assertIn("image: state.pendingImage?.dataUrl", script)
+        self.assertIn(".composer-row", stylesheet)
+        self.assertIn(".attachment-preview", stylesheet)
 
     def test_mobile_pairing_flow_starts_near_the_top_on_short_screens(self) -> None:
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
@@ -246,6 +345,42 @@ if (!result || result.data !== value) process.exit(1);
         self.assertIn("--conversation-inline", stylesheet)
         self.assertIn("prefers-reduced-motion: reduce", stylesheet)
 
+    def test_pending_approval_is_visible_and_actionable_on_mobile(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        for element_id in (
+            "approval-tray",
+            "approval-title",
+            "approval-view-session",
+            "approval-decline",
+            "approval-accept-session",
+            "approval-accept",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn('aria-live="assertive"', html)
+        self.assertIn("/api/remote/approvals", script)
+        self.assertIn("function renderApprovals", script)
+        self.assertIn("function resolveApproval", script)
+        self.assertIn("waitingOnApproval", script)
+        self.assertIn("remote/approval", script)
+        self.assertIn("acceptForTurn", script)
+        self.assertIn("本轮全部允许", html)
+        self.assertIn(".approval-tray", stylesheet)
+        self.assertIn(".status-badge.waiting", stylesheet)
+        self.assertIn("min-height: 44px", stylesheet)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(88px, 1fr))", stylesheet)
+
+    def test_session_switch_restores_cached_conversation_before_refreshing(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("conversationCache: new Map()", script)
+        self.assertIn("conversationRequests: new Set()", script)
+        self.assertIn("function restoreCachedConversation(session)", script)
+        self.assertIn("state.conversationCache.set(sessionId", script)
+        self.assertNotIn("conversationRefreshInFlight: false", script)
+
     def test_conversation_text_uses_safe_readable_markdown_structure(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
@@ -264,9 +399,9 @@ if (!result || result.data !== value) process.exit(1);
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=14', script)
-        self.assertIn('href="/remote.css?v=14"', html)
-        self.assertIn('/remote.js?v=11', script)
+        self.assertIn('/remote.css?v=18', script)
+        self.assertIn('href="/remote.css?v=18"', html)
+        self.assertIn('/remote.js?v=16', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

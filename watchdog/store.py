@@ -285,6 +285,10 @@ class WatchdogStore:
                        'builtin-timeout', 'builtin-connection_reset'
                    )"""
             )
+            self._cancel_unstarted_desktop_bridge_jobs(
+                connection,
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
 
     @staticmethod
     def _ensure_column(
@@ -506,7 +510,92 @@ class WatchdogStore:
         return self.get_session(session_id)  # type: ignore[return-value]
 
     def update_session(self, session_id: str, changes: dict) -> dict | None:
-        return self._update("monitored_sessions", session_id, changes, self._SESSION_COLUMNS, self.get_session)
+        assignments, values = [], []
+        for key, value in changes.items():
+            column = self._SESSION_COLUMNS.get(key)
+            if column is None:
+                continue
+            assignments.append(f"{column} = ?")
+            values.append(
+                self._bool(value)
+                if key in {"enabled", "unattendedApprovalsEnabled"}
+                else value
+            )
+        with self._connect() as connection:
+            if assignments:
+                connection.execute(
+                    f"UPDATE monitored_sessions SET {', '.join(assignments)} WHERE id = ?",
+                    (*values, session_id),
+                )
+            if "enabled" in changes and not bool(changes["enabled"]):
+                cancelled_at = str(changes.get("updatedAt") or "") or datetime.now(
+                    timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                self._cancel_unstarted_desktop_bridge_jobs(
+                    connection,
+                    cancelled_at,
+                    session_id=session_id,
+                )
+            return self._row(
+                connection.execute(
+                    "SELECT * FROM monitored_sessions WHERE id = ?", (session_id,)
+                ).fetchone()
+            )
+
+    @staticmethod
+    def _cancel_unstarted_desktop_bridge_jobs(
+        connection: sqlite3.Connection,
+        cancelled_at: str,
+        *,
+        session_id: str | None = None,
+    ) -> int:
+        detail = "monitoring session was disabled before bridge dispatch"
+        if session_id is None:
+            rows = connection.execute(
+                """SELECT job.id, job.monitor_run_id,
+                          job.incident_fingerprint, job.session_id
+                   FROM desktop_bridge_jobs AS job
+                   LEFT JOIN monitored_sessions AS session
+                     ON session.id = job.session_id
+                   WHERE job.status IN ('pending', 'claimed')
+                     AND (session.id IS NULL OR session.enabled = 0)"""
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """SELECT id, monitor_run_id, incident_fingerprint, session_id
+                   FROM desktop_bridge_jobs
+                   WHERE session_id = ? AND status IN ('pending', 'claimed')""",
+                (session_id,),
+            ).fetchall()
+        for row in rows:
+            connection.execute(
+                """UPDATE desktop_bridge_jobs
+                   SET status = 'cancelled', detail = ?, finished_at = ?,
+                       lease_token = NULL, lease_expires_at = NULL
+                   WHERE id = ? AND status IN ('pending', 'claimed')""",
+                (detail, cancelled_at, row["id"]),
+            )
+            connection.execute(
+                """UPDATE monitor_runs
+                   SET decision = 'resume_cancelled', session_state = 'cancelled',
+                       finished_at = COALESCE(finished_at, ?),
+                       detail_sanitized = ?
+                   WHERE id = ? AND decision = 'resume_queued'""",
+                (cancelled_at, detail, row["monitor_run_id"]),
+            )
+            connection.execute(
+                """UPDATE recovery_incidents
+                   SET status = 'failed', resolved_at = NULL, detail = ?
+                   WHERE fingerprint = ? AND status = 'sending'""",
+                (detail, row["incident_fingerprint"]),
+            )
+            connection.execute(
+                """UPDATE monitored_sessions
+                   SET last_check_result = 'resume_cancelled'
+                   WHERE id = ? AND last_check_result = 'resume_queued'""",
+                (row["session_id"],),
+            )
+        return len(rows)
 
     def delete_session(self, session_id: str) -> None:
         with self._connect() as connection:
@@ -707,17 +796,26 @@ class WatchdogStore:
         lease_token = str(uuid4())
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._cancel_unstarted_desktop_bridge_jobs(connection, claimed_at)
             connection.execute(
                 """UPDATE desktop_bridge_jobs
                    SET status = 'pending', runner_id = NULL,
                        lease_token = NULL, lease_expires_at = NULL
-                   WHERE status = 'claimed' AND lease_expires_at <= ?""",
+                   WHERE status = 'claimed' AND lease_expires_at <= ?
+                     AND EXISTS (
+                         SELECT 1 FROM monitored_sessions AS session
+                         WHERE session.id = desktop_bridge_jobs.session_id
+                           AND session.enabled = 1
+                     )""",
                 (claimed_at,),
             )
             row = connection.execute(
-                """SELECT id FROM desktop_bridge_jobs
-                   WHERE status = 'pending'
-                   ORDER BY created_at, id LIMIT 1"""
+                """SELECT job.id
+                   FROM desktop_bridge_jobs AS job
+                   JOIN monitored_sessions AS session
+                     ON session.id = job.session_id
+                   WHERE job.status = 'pending' AND session.enabled = 1
+                   ORDER BY job.created_at, job.id LIMIT 1"""
             ).fetchone()
             if row is None:
                 return None
@@ -766,6 +864,7 @@ class WatchdogStore:
                     "interrupted",
                     "manual_attention",
                     "dispatch_failed",
+                    "cancelled",
                 )
             ),
             "lastClaimedAt": last_claimed,

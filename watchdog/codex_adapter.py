@@ -135,8 +135,13 @@ def _session_snapshot(thread: object, *, require_turns: bool) -> SessionSnapshot
     )
 
 
-def _text_input(prompt: str) -> list[dict]:
-    return [{"type": "text", "text": prompt, "text_elements": []}]
+def _user_input(prompt: str, image_url: str | None = None) -> list[dict]:
+    items: list[dict] = []
+    if prompt:
+        items.append({"type": "text", "text": prompt, "text_elements": []})
+    if image_url:
+        items.append({"type": "image", "url": image_url})
+    return items
 
 
 def _safe_user_text(content: object) -> str:
@@ -149,6 +154,13 @@ def _safe_user_text(content: object) -> str:
         and item.get("type") == "text"
         and isinstance(item.get("text"), str)
     ]
+    image_count = sum(
+        1
+        for item in content
+        if isinstance(item, dict) and item.get("type") in {"image", "localImage"}
+    )
+    if image_count:
+        parts.append(f"\u9644\u5e26 {image_count} \u5f20\u622a\u56fe")
     return "\n".join(part for part in parts if part)
 
 
@@ -274,7 +286,9 @@ class CodexAppServerAdapter:
             for thread in response["data"]
         ]
 
-    def start_turn(self, thread_id: str, prompt: str) -> str:
+    def start_turn(
+        self, thread_id: str, prompt: str, image_url: str | None = None
+    ) -> str:
         try:
             resumed = self._transport.request(
                 "thread/resume", {"threadId": thread_id}
@@ -299,7 +313,7 @@ class CodexAppServerAdapter:
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    "input": _text_input(prompt),
+                    "input": _user_input(prompt, image_url),
                 },
             )
         except (DefiniteSendFailure, UncertainSendFailure, CodexProtocolError):
@@ -316,9 +330,11 @@ class CodexAppServerAdapter:
             raise CodexProtocolError("turn/start returned no valid turn id")
         return turn_id
 
-    def send_message(self, thread_id: str, prompt: str) -> dict:
+    def send_message(
+        self, thread_id: str, prompt: str, image_url: str | None = None
+    ) -> dict:
         normalized_prompt = prompt.strip()
-        if not normalized_prompt:
+        if not normalized_prompt and not image_url:
             raise DefiniteSendFailure("message cannot be empty")
         response = self._read_thread_response(thread_id)
         thread = response.get("thread")
@@ -337,7 +353,7 @@ class CodexAppServerAdapter:
                     {
                         "threadId": thread_id,
                         "expectedTurnId": latest_id,
-                        "input": _text_input(normalized_prompt),
+                        "input": _user_input(normalized_prompt, image_url),
                     },
                 )
             except (DefiniteSendFailure, UncertainSendFailure, CodexProtocolError):
@@ -350,7 +366,10 @@ class CodexAppServerAdapter:
             if not isinstance(turn_id, str) or turn_id != latest_id:
                 raise CodexProtocolError("turn/steer returned no matching turn id")
             return {"turnId": turn_id, "delivery": "steered"}
-        return {"turnId": self.start_turn(thread_id, normalized_prompt), "delivery": "started"}
+        return {
+            "turnId": self.start_turn(thread_id, normalized_prompt, image_url),
+            "delivery": "started",
+        }
 
     def close(self) -> None:
         self._transport.close()
@@ -370,6 +389,19 @@ SAFE_SERVER_REQUEST_RESULTS = {
 
 ApprovalPolicy = Callable[[str, str], bool]
 EventHandler = Callable[[str, dict], None]
+
+
+class ApprovalQueue(Protocol):
+    def offer(
+        self,
+        method: str,
+        params: dict,
+        resolver: Callable[[str], None],
+    ) -> bool:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
 
 
 def _codex_executable() -> str:
@@ -395,6 +427,7 @@ class StdioJsonRpcClient:
         request_timeout: float = 10.0,
         on_attention: Callable[[str, str], None] | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        approval_broker: ApprovalQueue | None = None,
         on_event: EventHandler | None = None,
     ) -> None:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -413,6 +446,7 @@ class StdioJsonRpcClient:
         self._approval_policy = approval_policy or (
             lambda _thread_id, _turn_id: False
         )
+        self._approval_broker = approval_broker
         self._on_event = on_event or (lambda _method, _params: None)
         self._write_lock = threading.Lock()
         self._pending_lock = threading.Lock()
@@ -485,6 +519,11 @@ class StdioJsonRpcClient:
     def close(self) -> None:
         if self._closed:
             return
+        if self._approval_broker is not None:
+            try:
+                self._approval_broker.close()
+            except Exception:
+                pass
         self._closed = True
         stdin = self._process.stdin
         if stdin is not None:
@@ -600,12 +639,18 @@ class StdioJsonRpcClient:
                 )
             except Exception:
                 auto_approve = False
+            if not auto_approve and self._queue_server_approval(
+                request_id, method, params
+            ):
+                return
             decision = self._approval_decision(params) if auto_approve else "decline"
             result = {"decision": decision}
             self._write_message({"id": request_id, "result": result})
             self._emit_event(method, params, watchdog_decision=decision)
             return
         if method == "item/permissions/requestApproval":
+            if self._queue_server_approval(request_id, method, params):
+                return
             self._write_message(
                 {"id": request_id, "result": {"permissions": {}}}
             )
@@ -632,6 +677,35 @@ class StdioJsonRpcClient:
                 "error": {"code": -32601, "message": "Method not found"},
             }
         )
+
+    def _queue_server_approval(
+        self,
+        request_id: int | float,
+        method: str,
+        params: dict,
+    ) -> bool:
+        if self._approval_broker is None:
+            return False
+        captured = dict(params)
+
+        def resolve(decision: str) -> None:
+            if method == "item/permissions/requestApproval":
+                requested = captured.get("permissions")
+                permissions = (
+                    requested
+                    if decision == "accept" and isinstance(requested, dict)
+                    else {}
+                )
+                result = {"permissions": permissions}
+            else:
+                result = {"decision": decision}
+            self._write_message({"id": request_id, "result": result})
+            self._emit_event(method, captured, watchdog_decision=decision)
+
+        try:
+            return bool(self._approval_broker.offer(method, captured, resolve))
+        except Exception:
+            return False
 
     @staticmethod
     def _approval_decision(params: dict) -> str:

@@ -84,6 +84,30 @@ class RemoteStoreTests(unittest.TestCase):
         self.assertTrue(self.store.delete_synced_session(created["id"]))
         self.assertEqual(self.store.list_synced_sessions(), [])
 
+    def test_remote_approval_audit_excludes_command_content(self) -> None:
+        self.store.record_approval_audit(
+            {
+                "id": "approval-1",
+                "threadId": "00000000-0000-4000-8000-000000000001",
+                "turnId": "turn-1",
+                "method": "item/commandExecution/requestApproval",
+                "decision": "accept",
+                "outcome": "resolved",
+                "actorDeviceId": "phone-1",
+                "actorDeviceName": "My phone",
+                "createdAt": "2026-08-06T12:00:00Z",
+                "resolvedAt": "2026-08-06T12:00:05Z",
+                "summary": "secret command",
+            }
+        )
+
+        audit = self.store.list_approval_audit()
+
+        self.assertEqual(audit[0]["decision"], "accept")
+        self.assertEqual(audit[0]["actorDeviceName"], "My phone")
+        self.assertNotIn("summary", audit[0])
+        self.assertNotIn("secret", str(audit))
+
 
 if __name__ == "__main__":
     unittest.main()

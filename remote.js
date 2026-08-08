@@ -2,6 +2,7 @@
   const TOKEN_KEY = 'localhost-project-console.remote-token';
   const DEVICE_KEY = 'localhost-project-console.remote-device';
   const PENDING_PAIRING_KEY = 'localhost-project-console.remote-pending-pairing';
+  const THEME_KEY = 'localhost-project-console.theme';
   const ACTIVE_REFRESH_MS = 1200;
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
@@ -10,6 +11,10 @@
   const CONNECTION_FAILURE_THRESHOLD = 3;
   const CONNECTION_FAILURE_GRACE_MS = 8000;
   const WORKSPACE_RETRY_MS = 2500;
+  const SCREENSHOT_MAX_DIMENSION = 1600;
+  const SCREENSHOT_MAX_SOURCE_BYTES = 12_000_000;
+  const SCREENSHOT_MAX_DATA_URL_LENGTH = 1_550_000;
+  const SCREENSHOT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
   const state = {
@@ -22,6 +27,12 @@
     sessions: [],
     localSessions: [],
     devices: [],
+    approvals: [],
+    activeApprovalId: '',
+    approvalResolvingId: '',
+    approvalRefreshInFlight: false,
+    approvalRefreshQueued: false,
+    approvalExpiryTimer: 0,
     selectedSessionId: '',
     cursor: 0,
     polling: false,
@@ -36,7 +47,9 @@
     conversationRefreshTimer: 0,
     conversationLoadingTimer: 0,
     conversationSelectionVersion: 0,
-    conversationRefreshInFlight: false,
+    conversationCache: new Map(),
+    conversationRequests: new Set(),
+    pendingImage: null,
     followTail: true,
     lastUpdatedAt: 0,
     lastEvent: null,
@@ -46,7 +59,28 @@
     connectionFailureCount: 0,
     connectionFailureStartedAt: 0,
     workspaceRetryTimer: 0,
+    drawerOpen: false,
+    currentView: 'sessions',
+    drawerTouchStart: null,
+    drawerReturnFocus: null,
   };
+
+  function syncVisualViewport() {
+    const viewportHeight = Math.max(240, Math.round(
+      window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight
+    ));
+    document.documentElement.style.setProperty('--app-viewport-height', `${viewportHeight}px`);
+    document.body.classList.toggle('compact-viewport', viewportHeight < 520);
+  }
+
+  function setupVisualViewport() {
+    syncVisualViewport();
+    addEventListener('resize', syncVisualViewport, { passive: true });
+    if (window.visualViewport) {
+      visualViewport.addEventListener('resize', syncVisualViewport, { passive: true });
+      visualViewport.addEventListener('scroll', syncVisualViewport, { passive: true });
+    }
+  }
 
   function readToken() {
     try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
@@ -107,8 +141,32 @@
   function renderDeviceIdentity() {
     const identity = $('#device-identity');
     const device = state.device || readStoredDevice();
-    identity.hidden = state.admin || !device?.name;
-    identity.textContent = device?.name ? `已配对设备 · ${device.name}` : '';
+    identity.hidden = false;
+    identity.textContent = state.admin
+      ? '本机管理端'
+      : (device?.name ? `已配对设备 · ${device.name}` : '移动设备');
+  }
+
+  function applyTheme(theme) {
+    const resolved = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = resolved;
+    document.documentElement.style.colorScheme = resolved;
+    renderRemoteTheme();
+  }
+
+  function renderRemoteTheme() {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    const toggle = $('#remote-theme-toggle');
+    if (!toggle) return;
+    toggle.setAttribute('aria-pressed', String(dark));
+    toggle.setAttribute('aria-label', dark ? '切换至浅色模式' : '切换至深色模式');
+    $('#remote-theme-label').textContent = dark ? '浅色模式' : '深色模式';
+  }
+
+  function toggleRemoteTheme() {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem(THEME_KEY, next); } catch {}
+    applyTheme(next);
   }
 
   function showToast(message) {
@@ -120,11 +178,13 @@
   }
 
   function setConnected(connected, options = {}) {
+    const connectionDot = $('#drawer-connection-dot');
     if (connected) {
       state.connectionFailureCount = 0;
       state.connectionFailureStartedAt = 0;
       $('#offline-banner').hidden = true;
       $('#sync-state').textContent = '已同步';
+      connectionDot.className = 'connection-dot online';
       return true;
     }
 
@@ -137,6 +197,7 @@
       || now - state.connectionFailureStartedAt >= CONNECTION_FAILURE_GRACE_MS;
     $('#offline-banner').hidden = !confirmedOffline;
     $('#sync-state').textContent = confirmedOffline ? '重新连接中' : '连接波动，正在复检';
+    connectionDot.className = `connection-dot ${confirmedOffline ? 'offline' : 'checking'}`;
     return confirmedOffline;
   }
 
@@ -329,6 +390,7 @@
   }
 
   function showPairScreen(message = '') {
+    closeSessionDrawer({ restoreFocus: false });
     $('#app-shell').hidden = true;
     $('#pair-screen').hidden = false;
     $('#pair-error').textContent = message;
@@ -385,9 +447,119 @@
     const labels = {
       active: '正在运行', inProgress: '正在运行', idle: '已停止', completed: '已完成',
       failed: '运行失败', interrupted: '已中断', systemError: '系统错误', notLoaded: '已停止',
+      waitingOnApproval: '等待授权',
       running: '正在运行', started: '正在运行', online: '在线', stopped: '已停止', offline: '离线',
     };
     return labels[value] || value || '未知';
+  }
+
+  function pendingApprovalForSelected() {
+    const session = state.sessions.find(item => item.id === state.selectedSessionId);
+    return state.approvals.find(item => item.threadId === session?.threadId) || null;
+  }
+
+  function approvalExpiryText(approval) {
+    const expiresAt = Date.parse(approval?.expiresAt || '');
+    if (!Number.isFinite(expiresAt)) return '未处理时将自动拒绝';
+    const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+    return seconds ? `${seconds} 秒后自动拒绝` : '正在按安全策略自动拒绝';
+  }
+
+  function renderApprovals() {
+    clearInterval(state.approvalExpiryTimer);
+    state.approvalExpiryTimer = 0;
+    const tray = $('#approval-tray');
+    const selected = state.sessions.find(item => item.id === state.selectedSessionId);
+    const approval = pendingApprovalForSelected() || state.approvals[0] || null;
+    state.activeApprovalId = approval?.id || '';
+    tray.hidden = !approval;
+    $('#header-notice-dot').classList.toggle('visible', state.approvals.length > 0);
+    if (!approval) return;
+
+    const isSelected = approval.sessionId === selected?.id;
+    const sameThreadCount = state.approvals.filter(
+      item => item.threadId === approval.threadId
+    ).length;
+    $('#approval-title').textContent = isSelected ? approval.title : '有会话等待授权';
+    $('#approval-session-name').textContent = [
+      approval.sessionName,
+      sameThreadCount > 1 ? `${sameThreadCount} 项待处理` : '',
+    ].filter(Boolean).join(' · ');
+    $('#approval-summary').textContent = approval.summary || 'Codex 正在等待授权决定';
+    $('#approval-detail').textContent = approval.detail || '';
+    const updateExpiry = () => {
+      $('#approval-expiry').textContent = approvalExpiryText(approval);
+    };
+    updateExpiry();
+    state.approvalExpiryTimer = setInterval(updateExpiry, 1000);
+
+    const decisions = new Set(approval.availableDecisions || []);
+    const resolving = state.approvalResolvingId === approval.id;
+    $('#approval-view-session').hidden = isSelected;
+    $('#approval-decline').hidden = !isSelected || !decisions.has('decline');
+    $('#approval-accept').hidden = !isSelected || !decisions.has('accept');
+    const canAllowTurn = Boolean(approval.turnId)
+      && (decisions.has('accept') || decisions.has('acceptForSession'));
+    $('#approval-accept-session').hidden = !isSelected || !canAllowTurn;
+    $$('#approval-actions button').forEach(button => { button.disabled = resolving; });
+    $('#approval-actions').setAttribute('aria-busy', String(resolving));
+  }
+
+  async function loadApprovals(options = {}) {
+    if (state.approvalRefreshInFlight) {
+      state.approvalRefreshQueued = true;
+      return;
+    }
+    state.approvalRefreshInFlight = true;
+    const previous = state.approvals.map(item => item.id).join(',');
+    try {
+      state.approvals = await api('/api/remote/approvals');
+      renderSessions();
+      renderApprovals();
+      const changed = previous !== state.approvals.map(item => item.id).join(',');
+      if (changed && options.renderConversation !== false && state.conversation) {
+        const session = state.sessions.find(item => item.id === state.selectedSessionId);
+        if (session) renderConversation(session, state.conversation);
+      }
+    } finally {
+      state.approvalRefreshInFlight = false;
+      if (state.approvalRefreshQueued) {
+        state.approvalRefreshQueued = false;
+        queueMicrotask(() => loadApprovals(options).catch(error => showToast(error.message)));
+      }
+    }
+  }
+
+  async function resolveApproval(decision) {
+    const approval = state.approvals.find(item => item.id === state.activeApprovalId);
+    const selected = state.sessions.find(item => item.id === state.selectedSessionId);
+    if (!approval || approval.sessionId !== selected?.id) return;
+    state.approvalResolvingId = approval.id;
+    renderApprovals();
+    try {
+      await api(`/api/remote/approvals/${encodeURIComponent(approval.id)}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      });
+      showToast({
+        accept: '已允许本次操作。',
+        acceptForSession: '已允许当前会话继续执行。',
+        acceptForTurn: '本轮任务后续授权将自动允许。',
+        decline: '已拒绝本次操作。',
+      }[decision] || '授权决定已发送。');
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      state.approvalResolvingId = '';
+      await loadApprovals().catch(error => showToast(error.message));
+      clearTimeout(state.conversationRefreshTimer);
+      scheduleConversationRefresh(80);
+    }
+  }
+
+  async function viewApprovalSession() {
+    const approval = state.approvals.find(item => item.id === state.activeApprovalId);
+    if (approval?.sessionId) await selectSession(approval.sessionId);
   }
 
   function renderSessions() {
@@ -400,11 +572,78 @@
     for (const session of state.sessions) {
       const option = document.createElement('option');
       option.value = session.id;
-      option.textContent = session.name;
+      const pendingCount = state.approvals.filter(
+        approval => approval.threadId === session.threadId
+      ).length;
+      option.textContent = `${session.name}${pendingCount ? ` · 待审批 ${pendingCount}` : ''}`;
       select.append(option);
     }
     select.disabled = state.sessions.length === 0;
     select.value = state.selectedSessionId;
+    const selected = state.sessions.find(item => item.id === state.selectedSessionId);
+    $('#conversation-title').textContent = state.currentView === 'devices'
+      ? '配对设备'
+      : (selected?.name || '远程会话');
+    renderSessionDrawer();
+  }
+
+  function renderSessionDrawer() {
+    const list = $('#session-drawer-list');
+    list.replaceChildren();
+    if (!state.sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'drawer-empty';
+      empty.textContent = state.admin
+        ? '尚未添加同步会话。点击上方加号从本机 Codex 选择。'
+        : '电脑端尚未添加可同步的会话。';
+      list.append(empty);
+      $('#header-notice-dot').classList.toggle('visible', state.approvals.length > 0);
+      return;
+    }
+
+    for (const session of state.sessions) {
+      const cached = session.id === state.selectedSessionId && state.conversation
+        ? state.conversation
+        : state.conversationCache.get(session.id)?.conversation;
+      const pendingCount = state.approvals.filter(
+        approval => approval.threadId === session.threadId
+      ).length;
+      const status = pendingCount
+        ? 'waitingOnApproval'
+        : (cached ? conversationStatus(cached) : (session.threadStatus || 'idle'));
+      const statusClass = conversationStatusClass(status);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `drawer-session${session.id === state.selectedSessionId ? ' active' : ''}`;
+      button.setAttribute('aria-current', session.id === state.selectedSessionId ? 'true' : 'false');
+
+      const dot = document.createElement('span');
+      dot.className = `drawer-session-dot ${statusClass}`;
+      dot.setAttribute('aria-hidden', 'true');
+      const copy = document.createElement('span');
+      copy.className = 'drawer-session-copy';
+      const name = document.createElement('strong');
+      name.textContent = session.name || session.threadId;
+      const detail = document.createElement('small');
+      detail.textContent = cached ? stateLabel(status) : (session.threadId || stateLabel(status));
+      copy.append(name, detail);
+      button.append(dot, copy);
+      if (pendingCount) {
+        const badge = document.createElement('span');
+        badge.className = 'drawer-session-badge';
+        badge.textContent = String(pendingCount);
+        badge.setAttribute('aria-label', `${pendingCount} 项待审批`);
+        button.append(badge);
+      }
+      button.addEventListener('click', async () => {
+        switchView('sessions');
+        closeSessionDrawer({ restoreFocus: false });
+        await selectSession(session.id);
+        $('#message-input').focus({ preventScroll: true });
+      });
+      list.append(button);
+    }
+    $('#header-notice-dot').classList.toggle('visible', state.approvals.length > 0);
   }
 
   function clearConversation() {
@@ -416,12 +655,15 @@
     state.lastEventAt = 0;
     state.lastConversationActivityAt = 0;
     state.followTail = true;
+    $('#conversation-title').textContent = '远程会话';
     $('#conversation-meta').textContent = '尚未选择会话';
     $('#conversation-status').textContent = '未选择';
     $('#conversation-status').className = 'status-badge stopped';
     $('#session-select').setAttribute('aria-busy', 'false');
     $('#message-input').disabled = true;
     $('#send-button').disabled = true;
+    $('#attach-image').disabled = true;
+    removePendingImage();
     $('#runtime-strip').className = 'runtime-strip';
     $('#runtime-signal').className = 'runtime-signal runtime-rotor';
     $('#runtime-activity').textContent = '等待选择会话';
@@ -439,6 +681,7 @@
     copy.textContent = state.admin ? '使用“添加同步会话”从本机 Codex 选择' : '请在电脑端添加需要同步的会话';
     empty.append(title, copy);
     transcript.append(empty);
+    renderApprovals();
   }
 
   function renderSyncManager() {
@@ -536,6 +779,8 @@
       await api(`/api/remote/synced-sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
       state.sessions = await api('/api/remote/synced-sessions');
       state.localSessions = await api('/api/remote/local-sessions?limit=50');
+      state.approvals = await api('/api/remote/approvals');
+      state.conversationCache.delete(session.id);
       if (state.selectedSessionId === session.id) state.selectedSessionId = state.sessions[0]?.id || '';
       renderSessions();
       renderSyncManager();
@@ -676,15 +921,17 @@
     const latest = turns.at(-1);
     const latestItem = (latest?.items || []).at(-1);
     const activeStates = ['active', 'inProgress', 'running', 'started'];
+    const latestError = typeof latest?.error === 'string' ? latest.error.trim() : '';
+    if (latestError) return 'failed';
+    if (['failed', 'systemError'].includes(latest?.status)) return latest.status;
     if (activeStates.includes(latest?.status)) return 'inProgress';
     if (activeStates.includes(latestItem?.status)) return 'inProgress';
-    if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
-    if (activeStates.includes(detail?.status)) return 'inProgress';
     if (latest?.status === 'completed') return 'completed';
     const recentContent = Date.now() - state.lastConversationActivityAt < LIVE_ACTIVITY_GRACE_MS;
     const recentEvent = Date.now() - state.lastEventAt < LIVE_ACTIVITY_GRACE_MS;
     if (recentContent || recentEvent) return 'inProgress';
     if (latest?.status) return latest.status;
+    if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
     return detail?.status === 'notLoaded' ? 'idle' : (detail?.status || 'idle');
   }
 
@@ -717,6 +964,7 @@
 
   function conversationStatusClass(status) {
     if (status === 'inProgress') return 'running';
+    if (status === 'waitingOnApproval') return 'waiting';
     if (['failed', 'interrupted', 'systemError'].includes(status)) return 'failed';
     if (status === 'completed') return 'completed';
     return 'stopped';
@@ -799,6 +1047,7 @@
 
   function renderConversationLoading(session) {
     if (!session || session.id !== state.selectedSessionId || state.conversation) return;
+    $('#conversation-title').textContent = session.name || '远程会话';
     $('#conversation-meta').textContent = session.threadId;
     $('#conversation-status').textContent = '载入中';
     $('#conversation-status').className = 'status-badge loading';
@@ -822,6 +1071,7 @@
   }
 
   function renderConversationReadError(session, error) {
+    $('#conversation-title').textContent = session?.name || '远程会话';
     $('#conversation-meta').textContent = session?.threadId || '会话读取失败';
     $('#conversation-status').textContent = '读取失败';
     $('#conversation-status').className = 'status-badge failed';
@@ -844,30 +1094,42 @@
   }
 
   function renderRuntime(detail) {
-    const status = conversationStatus(detail);
+    const approval = pendingApprovalForSelected();
+    const status = approval ? 'waitingOnApproval' : conversationStatus(detail);
     const statusClass = conversationStatusClass(status);
     const running = statusClass === 'running';
     $('#conversation-status').textContent = stateLabel(status);
     $('#conversation-status').className = `status-badge ${statusClass}`;
     $('#runtime-strip').className = `runtime-strip ${statusClass}`;
     $('#runtime-signal').className = `runtime-signal runtime-rotor ${statusClass}`;
-    $('#runtime-activity').textContent = conversationActivity(detail);
+    $('#runtime-activity').textContent = approval
+      ? 'Codex 正在等待远程授权'
+      : conversationActivity(detail);
     const time = state.lastUpdatedAt
       ? new Date(state.lastUpdatedAt).toLocaleTimeString('zh-CN', { hour12: false })
       : '--:--:--';
     const eventHint = state.lastEvent?.itemType ? ` · ${activityLabel({ type: state.lastEvent.itemType })}` : '';
-    $('#runtime-detail').textContent = `${stateLabel(status)} · 最近同步 ${time}${eventHint}`;
-    $('#runtime-metrics').textContent = conversationMetrics(detail);
+    $('#runtime-detail').textContent = approval
+      ? `${approval.title} · ${approval.sessionName}`
+      : `${stateLabel(status)} · 最近同步 ${time}${eventHint}`;
+    $('#runtime-metrics').textContent = approval
+      ? approvalExpiryText(approval)
+      : conversationMetrics(detail);
     $('#transcript').setAttribute('aria-busy', String(running));
+    renderSessionDrawer();
   }
 
   function renderConversation(session, detail) {
     clearTimeout(state.conversationLoadingTimer);
     state.conversationLoadingTimer = 0;
+    $('#conversation-title').textContent = session.name || '远程会话';
     $('#conversation-meta').textContent = session.threadId;
-    const status = conversationStatus(detail);
+    const status = pendingApprovalForSelected()
+      ? 'waitingOnApproval'
+      : conversationStatus(detail);
     $('#message-input').disabled = false;
     $('#send-button').disabled = false;
+    $('#attach-image').disabled = false;
     renderRuntime(detail);
     const transcript = $('#transcript');
     const previousScrollTop = transcript.scrollTop;
@@ -936,27 +1198,45 @@
     state.conversationRefreshTimer = setTimeout(() => refreshSelectedSession(), delay);
   }
 
+  function restoreCachedConversation(session) {
+    const cached = state.conversationCache.get(session?.id);
+    if (!cached) return false;
+    state.conversation = cached.conversation;
+    state.conversationSignature = cached.signature;
+    state.lastUpdatedAt = cached.lastUpdatedAt;
+    state.lastConversationActivityAt = cached.lastConversationActivityAt;
+    renderConversation(session, cached.conversation);
+    return true;
+  }
+
   async function refreshSelectedSession({ force = false, quiet = true } = {}) {
-    if (!state.selectedSessionId || state.conversationRefreshInFlight) return;
+    if (!state.selectedSessionId) return;
     const sessionId = state.selectedSessionId;
+    if (state.conversationRequests.has(sessionId)) return;
     const selectionVersion = state.conversationSelectionVersion;
-    state.conversationRefreshInFlight = true;
+    state.conversationRequests.add(sessionId);
     if (!quiet) $('#sync-state').textContent = '读取会话中';
     try {
       const result = await api(`/api/remote/sessions/${encodeURIComponent(sessionId)}?turnLimit=6`);
+      const signature = JSON.stringify(result.conversation || {});
+      const previous = state.conversationCache.get(sessionId);
+      const signatureChanged = Boolean(previous?.signature) && signature !== previous.signature;
+      const lastConversationActivityAt = signatureChanged || (
+        !previous?.signature && conversationLooksRecentlyActive(result.conversation)
+      ) ? Date.now() : (previous?.lastConversationActivityAt || 0);
+      const lastUpdatedAt = Date.now();
+      state.conversationCache.set(sessionId, {
+        conversation: result.conversation,
+        signature,
+        lastUpdatedAt,
+        lastConversationActivityAt,
+      });
       if (sessionId !== state.selectedSessionId || selectionVersion !== state.conversationSelectionVersion) return;
       clearTimeout(state.conversationLoadingTimer);
       $('#session-select').setAttribute('aria-busy', 'false');
       const session = state.sessions.find(item => item.id === sessionId) || result;
-      const signature = JSON.stringify(result.conversation || {});
-      const signatureChanged = Boolean(state.conversationSignature)
-        && signature !== state.conversationSignature;
-      if (signatureChanged || (
-        !state.conversationSignature && conversationLooksRecentlyActive(result.conversation)
-      )) {
-        state.lastConversationActivityAt = Date.now();
-      }
-      state.lastUpdatedAt = Date.now();
+      state.lastConversationActivityAt = lastConversationActivityAt;
+      state.lastUpdatedAt = lastUpdatedAt;
       state.conversation = result.conversation;
       if (force || signature !== state.conversationSignature) {
         state.conversationSignature = signature;
@@ -975,7 +1255,7 @@
       if (!quiet) showToast(error.message);
       setConnected(false, '会话读取失败');
     } finally {
-      state.conversationRefreshInFlight = false;
+      state.conversationRequests.delete(sessionId);
       if (state.selectedSessionId) {
         scheduleConversationRefresh(sessionId === state.selectedSessionId ? refreshDelay() : 80);
       }
@@ -983,6 +1263,9 @@
   }
 
   async function selectSession(sessionId, quiet = false) {
+    if (state.selectedSessionId && state.selectedSessionId !== sessionId) {
+      removePendingImage();
+    }
     clearTimeout(state.conversationRefreshTimer);
     clearTimeout(state.conversationLoadingTimer);
     state.conversationSelectionVersion += 1;
@@ -994,15 +1277,20 @@
     state.lastConversationActivityAt = 0;
     state.followTail = true;
     renderSessions();
+    renderApprovals();
     $('#session-select').setAttribute('aria-busy', 'true');
-    $('#message-input').disabled = true;
-    $('#send-button').disabled = true;
     const session = state.sessions.find(item => item.id === sessionId);
+    const restored = restoreCachedConversation(session);
+    $('#message-input').disabled = !restored;
+    $('#send-button').disabled = !restored;
+    $('#attach-image').disabled = !restored;
     const selectionVersion = state.conversationSelectionVersion;
-    state.conversationLoadingTimer = setTimeout(() => {
-      if (selectionVersion === state.conversationSelectionVersion) renderConversationLoading(session);
-    }, 180);
-    await refreshSelectedSession({ force: true, quiet });
+    if (!restored) {
+      state.conversationLoadingTimer = setTimeout(() => {
+        if (selectionVersion === state.conversationSelectionVersion) renderConversationLoading(session);
+      }, 180);
+    }
+    await refreshSelectedSession({ force: !restored, quiet });
   }
 
   function formatDate(value) {
@@ -1082,11 +1370,16 @@
   }
 
   async function loadWorkspaceData() {
-    const tasks = [api('/api/remote/sessions')];
+    const tasks = [api('/api/remote/sessions'), api('/api/remote/approvals')];
     if (state.admin) tasks.push(api('/api/remote/devices'));
-    const [sessions, devices = []] = await Promise.all(tasks);
+    const [sessions, approvals, devices = []] = await Promise.all(tasks);
     state.sessions = sessions;
+    state.approvals = approvals;
     state.devices = devices;
+    const activeSessionIds = new Set(sessions.map(session => session.id));
+    for (const sessionId of state.conversationCache.keys()) {
+      if (!activeSessionIds.has(sessionId)) state.conversationCache.delete(sessionId);
+    }
     if (state.selectedSessionId && !sessions.some(item => item.id === state.selectedSessionId)) state.selectedSessionId = '';
     if (!state.selectedSessionId && sessions.length) state.selectedSessionId = sessions[0].id;
     renderSessions();
@@ -1096,13 +1389,95 @@
     setConnected(true);
   }
 
+  function loadScreenshot(file) {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(image);
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('\u65e0\u6cd5\u8bfb\u53d6\u8fd9\u5f20\u622a\u56fe\u3002'));
+      };
+      image.src = objectUrl;
+    });
+  }
+
+  function renderPendingImage() {
+    const preview = $('#attachment-preview');
+    if (!state.pendingImage) {
+      preview.hidden = true;
+      $('#attachment-thumbnail').removeAttribute('src');
+      $('#attachment-name').textContent = '';
+      return;
+    }
+    $('#attachment-thumbnail').src = state.pendingImage.dataUrl;
+    $('#attachment-name').textContent = state.pendingImage.label;
+    preview.hidden = false;
+  }
+
+  function removePendingImage() {
+    state.pendingImage = null;
+    $('#image-input').value = '';
+    renderPendingImage();
+  }
+
+  async function prepareScreenshot(file) {
+    if (!file) return;
+    if (!SCREENSHOT_TYPES.has(file.type)) {
+      throw new Error('\u4ec5\u652f\u6301 PNG\u3001JPEG \u6216 WebP \u622a\u56fe\u3002');
+    }
+    if (file.size > SCREENSHOT_MAX_SOURCE_BYTES) {
+      throw new Error('\u539f\u59cb\u622a\u56fe\u8fc7\u5927\uff0c\u8bf7\u88c1\u526a\u540e\u91cd\u8bd5\u3002');
+    }
+    const image = await loadScreenshot(file);
+    const sourceWidth = image.naturalWidth || image.width;
+    const sourceHeight = image.naturalHeight || image.height;
+    if (!sourceWidth || !sourceHeight) {
+      throw new Error('\u622a\u56fe\u5c3a\u5bf8\u65e0\u6548\u3002');
+    }
+    let scale = Math.min(1, SCREENSHOT_MAX_DIMENSION / Math.max(sourceWidth, sourceHeight));
+    let dataUrl = '';
+    for (let resizeAttempt = 0; resizeAttempt < 4 && !dataUrl; resizeAttempt += 1) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) throw new Error('\u5f53\u524d\u6d4f\u89c8\u5668\u65e0\u6cd5\u5904\u7406\u622a\u56fe\u3002');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      for (const quality of [0.86, 0.74, 0.62, 0.52]) {
+        const candidate = canvas.toDataURL('image/jpeg', quality);
+        if (candidate.length <= SCREENSHOT_MAX_DATA_URL_LENGTH) {
+          dataUrl = candidate;
+          break;
+        }
+      }
+      scale *= 0.78;
+    }
+    if (!dataUrl) {
+      throw new Error('\u622a\u56fe\u538b\u7f29\u540e\u4ecd\u8fc7\u5927\uff0c\u8bf7\u88c1\u526a\u540e\u91cd\u8bd5\u3002');
+    }
+    const encodedLength = dataUrl.length - dataUrl.indexOf(',') - 1;
+    const approximateBytes = Math.ceil(encodedLength * 0.75);
+    state.pendingImage = {
+      dataUrl,
+      label: `${file.name || '\u622a\u56fe'} \u00b7 ${Math.max(1, Math.round(approximateBytes / 1024))} KB`,
+    };
+    renderPendingImage();
+  }
+
   async function sendMessage(event) {
     event.preventDefault();
     const input = $('#message-input');
     const message = input.value.trim();
-    if (!message || !state.selectedSessionId) return;
+    if ((!message && !state.pendingImage) || !state.selectedSessionId) return;
     const button = $('#send-button');
     button.disabled = true;
+    $('#attach-image').disabled = true;
     state.followTail = true;
     state.lastConversationActivityAt = Date.now();
     $('#runtime-strip').className = 'runtime-strip running';
@@ -1113,10 +1488,12 @@
     scrollToLatest('smooth');
     try {
       const result = await api(`/api/remote/sessions/${encodeURIComponent(state.selectedSessionId)}/messages`, {
-        method: 'POST', body: JSON.stringify({ message }),
+        method: 'POST',
+        body: JSON.stringify({ message, image: state.pendingImage?.dataUrl || null }),
       });
       input.value = '';
       input.style.height = '';
+      removePendingImage();
       showToast(result.delivery === 'steered' ? '消息已加入当前运行中的任务。' : '消息已启动新的任务轮次。');
       clearTimeout(state.conversationRefreshTimer);
       scheduleConversationRefresh(150);
@@ -1124,18 +1501,22 @@
       showToast(error.message);
     } finally {
       button.disabled = false;
+      $('#attach-image').disabled = !state.selectedSessionId;
       input.focus();
     }
   }
 
   function scheduleEventRefresh(events = []) {
+    const approvalChanged = events.some(event => event.method?.startsWith('remote/approval'));
+    if (approvalChanged) loadApprovals().catch(error => showToast(error.message));
     const selected = state.sessions.find(session => session.id === state.selectedSessionId);
     const relevant = [...events].reverse().find(event => event.threadId === selected?.threadId);
     if (!relevant) return;
     state.lastEvent = relevant;
     const terminalTurn = relevant.method === 'turn/completed';
+    const approvalEvent = relevant.method?.startsWith('remote/approval');
     const eventTime = Date.parse(relevant.timestamp || '');
-    state.lastEventAt = !terminalTurn && Number.isFinite(eventTime) ? eventTime : 0;
+    state.lastEventAt = !terminalTurn && !approvalEvent && Number.isFinite(eventTime) ? eventTime : 0;
     clearTimeout(state.conversationRefreshTimer);
     scheduleConversationRefresh(60);
   }
@@ -1205,27 +1586,104 @@
     }
   }
 
+  function openSessionDrawer() {
+    if (state.drawerOpen) return;
+    state.drawerOpen = true;
+    state.drawerReturnFocus = document.activeElement;
+    document.body.classList.add('drawer-open');
+    $('#session-drawer').setAttribute('aria-hidden', 'false');
+    $('#open-session-drawer').setAttribute('aria-expanded', 'true');
+    requestAnimationFrame(() => $('#close-session-drawer').focus({ preventScroll: true }));
+  }
+
+  function closeSessionDrawer({ restoreFocus = true } = {}) {
+    if (!state.drawerOpen) return;
+    state.drawerOpen = false;
+    document.body.classList.remove('drawer-open');
+    $('#session-drawer').setAttribute('aria-hidden', 'true');
+    $('#open-session-drawer').setAttribute('aria-expanded', 'false');
+    if (restoreFocus) {
+      const target = state.drawerReturnFocus?.isConnected
+        ? state.drawerReturnFocus
+        : $('#open-session-drawer');
+      target.focus({ preventScroll: true });
+    }
+    state.drawerReturnFocus = null;
+  }
+
+  function setupSessionDrawerGestures() {
+    const drawer = $('#session-drawer');
+    drawer.addEventListener('touchstart', event => {
+      const touch = event.changedTouches[0];
+      state.drawerTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
+    }, { passive: true });
+    drawer.addEventListener('touchend', event => {
+      const start = state.drawerTouchStart;
+      state.drawerTouchStart = null;
+      const touch = event.changedTouches[0];
+      if (!start || !touch) return;
+      const deltaX = touch.clientX - start.x;
+      const deltaY = touch.clientY - start.y;
+      if (deltaX < -60 && Math.abs(deltaY) < 80) closeSessionDrawer();
+    }, { passive: true });
+
+    document.addEventListener('keydown', event => {
+      if (!state.drawerOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSessionDrawer();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = $$(
+        '#session-drawer a[href], #session-drawer button:not([disabled]):not([hidden]), '
+        + '#session-drawer input:not([disabled]), #session-drawer select:not([disabled]), '
+        + '#session-drawer textarea:not([disabled]), #session-drawer [tabindex]:not([tabindex="-1"])'
+      ).filter(element => !element.hidden && element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
   function switchView(view) {
-    $$('.view-tab').forEach(tab => {
-      const active = tab.dataset.view === view;
-      tab.classList.toggle('active', active);
-      tab.setAttribute('aria-pressed', String(active));
+    state.currentView = view === 'devices' && state.admin ? 'devices' : 'sessions';
+    $$('.drawer-tool[data-view]').forEach(tool => {
+      const active = tool.dataset.view === state.currentView;
+      tool.classList.toggle('active', active);
+      tool.setAttribute('aria-pressed', String(active));
     });
     $$('[data-view-panel]').forEach(panel => {
-      const active = panel.dataset.viewPanel === view;
+      const active = panel.dataset.viewPanel === state.currentView;
       panel.classList.toggle('active', active);
       panel.hidden = !active;
     });
-  }
-
-  function switchMobileView(view) {
-    document.body.dataset.mobileView = view;
-    $$('.mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.mobileView === view));
-    if (view === 'devices') switchView('devices');
-    else switchView('sessions');
+    const session = state.sessions.find(item => item.id === state.selectedSessionId);
+    $('#conversation-title').textContent = state.currentView === 'devices'
+      ? '配对设备'
+      : (session?.name || '远程会话');
+    closeSessionDrawer();
   }
 
   function setupInteractions() {
+    $('#open-session-drawer').addEventListener('click', () => {
+      if (state.drawerOpen) closeSessionDrawer();
+      else openSessionDrawer();
+    });
+    $('#close-session-drawer').addEventListener('click', () => closeSessionDrawer());
+    $('#session-drawer-backdrop').addEventListener('click', () => closeSessionDrawer());
+    $('#remote-theme-toggle').addEventListener('click', toggleRemoteTheme);
+    $$('.drawer-tool[data-view]').forEach(tool => {
+      tool.addEventListener('click', () => switchView(tool.dataset.view));
+    });
+    setupSessionDrawerGestures();
     $('#start-qr-scan').addEventListener('click', startQrScanner);
     $('#stop-qr-scan').addEventListener('click', stopQrScanner);
     $('#reset-pairing').addEventListener('click', resetPairing);
@@ -1238,6 +1696,24 @@
     $('#create-pairing').addEventListener('click', createPairing);
     $('#copy-pairing-link').addEventListener('click', copyPairingLink);
     $('#composer').addEventListener('submit', sendMessage);
+    $('#attach-image').addEventListener('click', () => $('#image-input').click());
+    $('#image-input').addEventListener('change', async event => {
+      const button = $('#attach-image');
+      button.disabled = true;
+      try {
+        await prepareScreenshot(event.target.files?.[0]);
+      } catch (error) {
+        removePendingImage();
+        showToast(error.message);
+      } finally {
+        button.disabled = !state.selectedSessionId;
+      }
+    });
+    $('#remove-attachment').addEventListener('click', removePendingImage);
+    $('#approval-view-session').addEventListener('click', viewApprovalSession);
+    $('#approval-decline').addEventListener('click', () => resolveApproval('decline'));
+    $('#approval-accept-session').addEventListener('click', () => resolveApproval('acceptForTurn'));
+    $('#approval-accept').addEventListener('click', () => resolveApproval('accept'));
     $('#session-select').addEventListener('change', event => {
       if (event.target.value) selectSession(event.target.value);
       else {
@@ -1245,7 +1721,10 @@
         clearConversation();
       }
     });
-    $('#manage-synced-sessions').addEventListener('click', openSyncManager);
+    $('#manage-synced-sessions').addEventListener('click', () => {
+      closeSessionDrawer({ restoreFocus: false });
+      openSyncManager();
+    });
     $('#local-session-select').addEventListener('change', event => {
       const selected = state.localSessions.find(session => session.threadId === event.target.value);
       $('#sync-session-name').value = selected?.name || '';
@@ -1265,10 +1744,13 @@
     }, { passive: true });
     $('#message-input').addEventListener('input', event => {
       event.target.style.height = 'auto';
-      event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const maximumHeight = Math.min(160, Math.max(72, Math.round(viewportHeight * .32)));
+      event.target.style.height = `${Math.min(event.target.scrollHeight, maximumHeight)}px`;
     });
-    $$('.view-tab').forEach(tab => tab.addEventListener('click', () => switchView(tab.dataset.view)));
-    $$('.mobile-nav button').forEach(button => button.addEventListener('click', () => switchMobileView(button.dataset.mobileView)));
+    addEventListener('storage', event => {
+      if (event.key === THEME_KEY && ['light', 'dark'].includes(event.newValue)) applyTheme(event.newValue);
+    });
     addEventListener('online', () => {
       setConnected(true);
       if (!state.polling && (state.admin || state.token)) startWorkspace({ quiet: true });
@@ -1308,6 +1790,8 @@
   }
 
   async function initialize() {
+    setupVisualViewport();
+    renderRemoteTheme();
     setupInteractions();
     parsePairingLink();
     state.token = readToken();

@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from remote.application import RemoteApplication
+from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
 from remote.router import AdminRemoteApi, RemoteHttpApi, RemoteResponse
 from remote.setup import RelaySetupApi, RelaySetupService
@@ -549,7 +550,9 @@ class UnavailableCodexAdapter:
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
         raise CodexAdapterError("Codex App Server is unavailable")
 
-    def send_message(self, thread_id: str, prompt: str) -> dict:
+    def send_message(
+        self, thread_id: str, prompt: str, image_url: str | None = None
+    ) -> dict:
         raise CodexAdapterError("Codex App Server is unavailable")
 
     def close(self) -> None:
@@ -581,13 +584,28 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     secrets = DpapiSecretStore(
         entropy=b"localhost-project-console/watchdog/v1"
     )
+    remote_store = RemoteStore(base_path / "watchdog.db")
+    remote_store.initialize()
+    event_hub = RemoteEventHub(
+        lambda: {
+            session["threadId"] for session in remote_store.list_synced_sessions()
+        }
+    )
+    approval_broker = RemoteApprovalBroker(
+        lambda: {
+            session["threadId"] for session in remote_store.list_synced_sessions()
+        },
+        publish_event=event_hub.publish,
+        record_audit=remote_store.record_approval_audit,
+    )
     codex_connected = True
     try:
         client = StdioJsonRpcClient(
             approval_policy=lambda thread_id, _turn_id: bool(
                 store.get_settings()["resumeActionsEnabled"]
                 and store.unattended_approvals_enabled(thread_id)
-            )
+            ),
+            approval_broker=approval_broker,
         )
         adapter: object = CodexAppServerAdapter(client)
     except Exception:
@@ -596,14 +614,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     monitor_service = WatchdogService(
         store, secrets, probe_channel, adapter
     )
-    remote_store = RemoteStore(base_path / "watchdog.db")
-    remote_store.initialize()
     tunnel = FrpTunnelManager.from_base_path(base_path)
-    event_hub = RemoteEventHub(
-        lambda: {
-            session["threadId"] for session in remote_store.list_synced_sessions()
-        }
-    )
     if codex_connected:
         def handle_event(method: str, params: dict) -> None:
             try:
@@ -629,6 +640,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         _remote_projects,
         default_base_url=_default_remote_base_url(),
         codex_connected=codex_connected,
+        approval_broker=approval_broker,
         tunnel_status_provider=tunnel.status,
         tunnel_start_provider=tunnel.start,
     )
@@ -1024,7 +1036,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
-        if length > 256_000:
+        if length > 2_100_000:
             raise ValueError("request too large")
         value = json.loads(self.rfile.read(length).decode("utf-8"))
         return value if isinstance(value, dict) else {}

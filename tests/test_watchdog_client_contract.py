@@ -132,6 +132,8 @@ class WatchdogClientContractTests(unittest.TestCase):
             self.assertIn(f'name="{field}"', html)
         for decision_label in ("静默", "已续跑", "续跑失败", "需要关注"):
             self.assertIn(decision_label, html)
+        self.assertIn('value="resume_cancelled"', html)
+        self.assertIn("续跑已取消", html)
         self.assertIn("/api/watchdog/runs", html)
 
     def test_local_threads_are_loaded_only_from_a_user_action(self) -> None:

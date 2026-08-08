@@ -78,12 +78,26 @@ class RemoteStore:
                     name TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS remote_approval_audit (
+                    id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    turn_id TEXT NOT NULL DEFAULT '',
+                    method TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    actor_device_id TEXT NOT NULL DEFAULT '',
+                    actor_device_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS remote_pairings_expiry
                     ON remote_pairings(expires_at, claimed_at);
                 CREATE INDEX IF NOT EXISTS remote_devices_active
                     ON remote_devices(revoked_at, last_seen_at);
                 CREATE INDEX IF NOT EXISTS remote_synced_sessions_created
                     ON remote_synced_sessions(created_at, name);
+                CREATE INDEX IF NOT EXISTS remote_approval_audit_resolved
+                    ON remote_approval_audit(resolved_at DESC, id);
                 INSERT OR IGNORE INTO remote_settings(id, public_base_url)
                     VALUES (1, '');
                 """
@@ -259,3 +273,48 @@ class RemoteStore:
                 "DELETE FROM remote_synced_sessions WHERE id = ?", (session_id,)
             )
         return cursor.rowcount == 1
+
+    def record_approval_audit(self, record: dict) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO remote_approval_audit(
+                       id, thread_id, turn_id, method, decision, outcome,
+                       actor_device_id, actor_device_name, created_at, resolved_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record["id"],
+                    record["threadId"],
+                    record.get("turnId") or "",
+                    record["method"],
+                    record["decision"],
+                    record["outcome"],
+                    record.get("actorDeviceId") or "",
+                    record.get("actorDeviceName") or "",
+                    record["createdAt"],
+                    record["resolvedAt"],
+                ),
+            )
+
+    def list_approval_audit(self, limit: int = 50) -> list[dict]:
+        bounded = max(1, min(int(limit), 200))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM remote_approval_audit
+                   ORDER BY resolved_at DESC, id DESC LIMIT ?""",
+                (bounded,),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "threadId": row["thread_id"],
+                "turnId": row["turn_id"],
+                "method": row["method"],
+                "decision": row["decision"],
+                "outcome": row["outcome"],
+                "actorDeviceId": row["actor_device_id"],
+                "actorDeviceName": row["actor_device_name"],
+                "createdAt": row["created_at"],
+                "resolvedAt": row["resolved_at"],
+            }
+            for row in rows
+        ]

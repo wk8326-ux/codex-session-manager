@@ -33,7 +33,9 @@ Windows 也可以双击 `start-console.bat`。随后访问：
 - 项目控制台：`http://127.0.0.1:8765/`
 - 会话监控：`http://127.0.0.1:8765/watchdog`
 
-调度器随控制台进程启动。正常关闭终端或中断 `app.py` 后，HTTP 服务、调度线程和由控制台创建的 Codex App Server 子进程会一并关闭。无需安装系统服务或计划任务。
+调度器随控制台进程启动。手工运行时，正常关闭终端或中断 `app.py` 后，HTTP 服务、调度线程和由控制台创建的 Codex App Server 子进程会一并关闭。
+
+需要后台常驻时，可以双击仓库根目录的 `install-system-startup.bat`。它会为当前 Windows 用户注册登录启动、异常重启的计划任务；使用方法和卸载命令见 README 的“Windows 后台常驻”。
 
 ## 添加监控渠道
 
