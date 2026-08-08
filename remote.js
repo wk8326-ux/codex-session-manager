@@ -4,6 +4,14 @@
   const PENDING_PAIRING_KEY = 'localhost-project-console.remote-pending-pairing';
   const THEME_KEY = 'localhost-project-console.theme';
   const DRAWER_STATE_KEY = 'localhost-project-console.remote-drawer-open';
+  const SCREENSHOT_SHORTCUT_KEY = 'localhost-project-console.remote-screenshot-shortcut';
+  const DEFAULT_SCREENSHOT_SHORTCUT = Object.freeze({
+    code: 'KeyS',
+    ctrlKey: false,
+    altKey: true,
+    shiftKey: true,
+    metaKey: false,
+  });
   const ACTIVE_REFRESH_MS = 1200;
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
@@ -52,6 +60,9 @@
     conversationRequests: new Set(),
     sessionStatusOverrides: new Map(),
     pendingImage: null,
+    screenshotShortcut: readScreenshotShortcut(),
+    screenshotShortcutDraft: null,
+    capturingScreen: false,
     followTail: true,
     lastUpdatedAt: 0,
     lastEvent: null,
@@ -82,6 +93,90 @@
       visualViewport.addEventListener('resize', syncVisualViewport, { passive: true });
       visualViewport.addEventListener('scroll', syncVisualViewport, { passive: true });
     }
+  }
+
+  function normalizedScreenshotShortcut(value) {
+    if (!value || typeof value !== 'object' || typeof value.code !== 'string') {
+      return { ...DEFAULT_SCREENSHOT_SHORTCUT };
+    }
+    const shortcut = {
+      code: value.code,
+      ctrlKey: Boolean(value.ctrlKey),
+      altKey: Boolean(value.altKey),
+      shiftKey: Boolean(value.shiftKey),
+      metaKey: Boolean(value.metaKey),
+    };
+    if (!shortcut.code || !(shortcut.ctrlKey || shortcut.altKey || shortcut.metaKey)) {
+      return { ...DEFAULT_SCREENSHOT_SHORTCUT };
+    }
+    return shortcut;
+  }
+
+  function readScreenshotShortcut() {
+    try {
+      return normalizedScreenshotShortcut(
+        JSON.parse(localStorage.getItem(SCREENSHOT_SHORTCUT_KEY) || 'null')
+      );
+    } catch {
+      return { ...DEFAULT_SCREENSHOT_SHORTCUT };
+    }
+  }
+
+  function storeScreenshotShortcut(value) {
+    const shortcut = normalizedScreenshotShortcut(value);
+    try { localStorage.setItem(SCREENSHOT_SHORTCUT_KEY, JSON.stringify(shortcut)); } catch {}
+    state.screenshotShortcut = shortcut;
+  }
+
+  function screenshotShortcutKeyLabel(code) {
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+    if (/^Digit\d$/.test(code)) return code.slice(5);
+    if (/^F(?:[1-9]|1[0-2])$/.test(code)) return code;
+    return {
+      Backquote: '`',
+      Minus: '-',
+      Equal: '=',
+      BracketLeft: '[',
+      BracketRight: ']',
+      Backslash: '\\',
+      Semicolon: ';',
+      Quote: "'",
+      Comma: ',',
+      Period: '.',
+      Slash: '/',
+      Space: 'Space',
+    }[code] || code.replace(/^(Arrow|Numpad)/, '');
+  }
+
+  function formatScreenshotShortcut(shortcut) {
+    const parts = [];
+    if (shortcut.ctrlKey) parts.push('Ctrl');
+    if (shortcut.altKey) parts.push('Alt');
+    if (shortcut.shiftKey) parts.push('Shift');
+    if (shortcut.metaKey) parts.push('Command');
+    parts.push(screenshotShortcutKeyLabel(shortcut.code));
+    return parts.join(' + ');
+  }
+
+  function screenshotShortcutFromEvent(event) {
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null;
+    if (!(event.ctrlKey || event.altKey || event.metaKey)) return false;
+    return normalizedScreenshotShortcut({
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+    });
+  }
+
+  function matchesScreenshotShortcut(event) {
+    const shortcut = state.screenshotShortcut;
+    return event.code === shortcut.code
+      && event.ctrlKey === shortcut.ctrlKey
+      && event.altKey === shortcut.altKey
+      && event.shiftKey === shortcut.shiftKey
+      && event.metaKey === shortcut.metaKey;
   }
 
   function readToken() {
@@ -724,6 +819,7 @@
     $('#message-input').disabled = true;
     $('#send-button').disabled = true;
     $('#attach-image').disabled = true;
+    $('#capture-screen').disabled = true;
     removePendingImage();
     $('#runtime-strip').className = 'runtime-strip';
     $('#runtime-signal').className = 'runtime-signal runtime-rotor';
@@ -868,12 +964,66 @@
     if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
   }
 
+  function splitMarkdownTableRow(line) {
+    const value = String(line || '').trim();
+    const cells = [];
+    let cell = '';
+    let escaped = false;
+    for (const character of value) {
+      if (escaped) {
+        cell += character === '|' || character === '\\' ? character : `\\${character}`;
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '|') {
+        cells.push(cell.trim());
+        cell = '';
+      } else {
+        cell += character;
+      }
+    }
+    if (escaped) cell += '\\';
+    cells.push(cell.trim());
+    if (value.startsWith('|') && cells[0] === '') cells.shift();
+    if (value.endsWith('|') && cells.at(-1) === '') cells.pop();
+    return cells;
+  }
+
+  function markdownTableAt(lines, index) {
+    if (index + 1 >= lines.length || !lines[index].includes('|')) return null;
+    const headers = splitMarkdownTableRow(lines[index]);
+    const delimiters = splitMarkdownTableRow(lines[index + 1]);
+    if (headers.length < 2 || headers.length !== delimiters.length) return null;
+    if (!delimiters.every(cell => /^:?-{3,}:?$/.test(cell))) return null;
+    const alignments = delimiters.map(cell => {
+      if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
+      if (cell.endsWith(':')) return 'right';
+      return 'left';
+    });
+    return { headers, alignments };
+  }
+
+  function appendMarkdownTableRow(section, cells, tagName, alignments) {
+    const row = document.createElement('tr');
+    alignments.forEach((alignment, index) => {
+      const cell = document.createElement(tagName);
+      cell.className = `align-${alignment}`;
+      if (tagName === 'th') cell.setAttribute('scope', 'col');
+      appendInlineMarkup(cell, cells[index] || '');
+      row.append(cell);
+    });
+    section.append(row);
+  }
+
   function appendRichText(container, text) {
     container.replaceChildren();
     container.classList.add('rich-text');
     const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
     let index = 0;
-    const blockStart = line => /^\s*(```|#{1,4}\s+|[-*+]\s+|\d+[.)]\s+|>\s*|\*\*[^*]+\*\*\s*$|---+\s*$)/.test(line);
+    const blockStart = (line, lineIndex) => (
+      /^\s*(```|#{1,4}\s+|[-*+]\s+|\d+[.)]\s+|>\s*|\*\*[^*]+\*\*\s*$|---+\s*$)/.test(line)
+      || Boolean(markdownTableAt(lines, lineIndex))
+    );
     while (index < lines.length) {
       const line = lines[index];
       if (!line.trim()) {
@@ -896,6 +1046,35 @@
         code.textContent = codeLines.join('\n');
         pre.append(code);
         container.append(pre);
+        continue;
+      }
+      const tableDefinition = markdownTableAt(lines, index);
+      if (tableDefinition) {
+        const table = document.createElement('table');
+        table.className = 'message-table';
+        const head = document.createElement('thead');
+        const body = document.createElement('tbody');
+        appendMarkdownTableRow(
+          head,
+          tableDefinition.headers,
+          'th',
+          tableDefinition.alignments,
+        );
+        index += 2;
+        while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+          const cells = splitMarkdownTableRow(lines[index]);
+          if (cells.length < 2) break;
+          appendMarkdownTableRow(body, cells, 'td', tableDefinition.alignments);
+          index += 1;
+        }
+        table.append(head, body);
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-table-scroll';
+        wrapper.tabIndex = 0;
+        wrapper.setAttribute('role', 'region');
+        wrapper.setAttribute('aria-label', '消息表格');
+        wrapper.append(table);
+        container.append(wrapper);
         continue;
       }
       const headingMatch = line.match(/^\s*#{1,4}\s+(.+)$/);
@@ -943,7 +1122,7 @@
       }
       const paragraphLines = [line.trim()];
       index += 1;
-      while (index < lines.length && lines[index].trim() && !blockStart(lines[index])) {
+      while (index < lines.length && lines[index].trim() && !blockStart(lines[index], index)) {
         paragraphLines.push(lines[index].trim());
         index += 1;
       }
@@ -1196,6 +1375,7 @@
     $('#message-input').disabled = false;
     $('#send-button').disabled = false;
     $('#attach-image').disabled = false;
+    $('#capture-screen').disabled = false;
     renderRuntime(detail);
     const transcript = $('#transcript');
     const previousScrollTop = transcript.scrollTop;
@@ -1357,6 +1537,7 @@
     $('#message-input').disabled = !restored;
     $('#send-button').disabled = !restored;
     $('#attach-image').disabled = !restored;
+    $('#capture-screen').disabled = !restored;
     const selectionVersion = state.conversationSelectionVersion;
     if (!restored) {
       state.conversationLoadingTimer = setTimeout(() => {
@@ -1466,6 +1647,60 @@
     setConnected(true);
   }
 
+  function renderScreenshotShortcut() {
+    const label = formatScreenshotShortcut(state.screenshotShortcut);
+    $('#screenshot-shortcut-label').textContent = label;
+    const captureButton = $('#capture-screen');
+    captureButton.title = `截取屏幕（${label}）`;
+    captureButton.setAttribute('aria-label', `截取屏幕，快捷键 ${label}`);
+  }
+
+  function openScreenshotShortcutSettings() {
+    closeSessionDrawer({ restoreFocus: false });
+    state.screenshotShortcutDraft = { ...state.screenshotShortcut };
+    $('#screenshot-shortcut-input').value = formatScreenshotShortcut(
+      state.screenshotShortcutDraft
+    );
+    $('#screenshot-shortcut-error').textContent = '';
+    const dialog = $('#screenshot-shortcut-dialog');
+    dialog.showModal();
+    requestAnimationFrame(() => $('#screenshot-shortcut-input').focus());
+  }
+
+  function recordScreenshotShortcut(event) {
+    if (event.key === 'Tab') return;
+    if (event.key === 'Escape') {
+      $('#screenshot-shortcut-dialog').close('cancel');
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const shortcut = screenshotShortcutFromEvent(event);
+    if (shortcut === null) return;
+    if (shortcut === false) {
+      $('#screenshot-shortcut-error').textContent = '快捷键需包含 Ctrl、Alt 或 Command。';
+      return;
+    }
+    state.screenshotShortcutDraft = shortcut;
+    $('#screenshot-shortcut-input').value = formatScreenshotShortcut(shortcut);
+    $('#screenshot-shortcut-error').textContent = '';
+  }
+
+  function resetScreenshotShortcut() {
+    state.screenshotShortcutDraft = { ...DEFAULT_SCREENSHOT_SHORTCUT };
+    $('#screenshot-shortcut-input').value = formatScreenshotShortcut(
+      state.screenshotShortcutDraft
+    );
+    $('#screenshot-shortcut-error').textContent = '';
+  }
+
+  function saveScreenshotShortcut() {
+    storeScreenshotShortcut(state.screenshotShortcutDraft || DEFAULT_SCREENSHOT_SHORTCUT);
+    renderScreenshotShortcut();
+    $('#screenshot-shortcut-dialog').close('saved');
+    showToast(`截图快捷键已设为 ${formatScreenshotShortcut(state.screenshotShortcut)}。`);
+  }
+
   function loadScreenshot(file) {
     return new Promise((resolve, reject) => {
       const objectUrl = URL.createObjectURL(file);
@@ -1547,6 +1782,99 @@
     renderPendingImage();
   }
 
+  function clipboardImageFile(event) {
+    const items = Array.from(event.clipboardData?.items || []);
+    const imageItem = items.find(item => item.kind === 'file' && item.type.startsWith('image/'));
+    return imageItem?.getAsFile() || null;
+  }
+
+  async function handleComposerPaste(event) {
+    const file = clipboardImageFile(event);
+    if (!file) return;
+    event.preventDefault();
+    const hadPendingImage = Boolean(state.pendingImage);
+    const attachButton = $('#attach-image');
+    const captureButton = $('#capture-screen');
+    attachButton.disabled = true;
+    captureButton.disabled = true;
+    try {
+      await prepareScreenshot(file);
+      showToast(hadPendingImage ? '已替换待发送截图。' : '已粘贴截图，可随消息发送。');
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      const disabled = !state.selectedSessionId;
+      attachButton.disabled = disabled;
+      captureButton.disabled = disabled;
+    }
+  }
+
+  async function captureScreenScreenshot() {
+    if (state.capturingScreen || !state.selectedSessionId) return;
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      showToast('当前浏览器不支持屏幕截图，请直接粘贴图片或使用 + 选择文件。');
+      return;
+    }
+    const button = $('#capture-screen');
+    const attachButton = $('#attach-image');
+    let stream = null;
+    state.capturingScreen = true;
+    button.disabled = true;
+    button.classList.add('capturing');
+    button.setAttribute('aria-busy', 'true');
+    attachButton.disabled = true;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await new Promise((resolve, reject) => {
+        if (video.readyState >= 1) {
+          resolve();
+          return;
+        }
+        video.onloadedmetadata = resolve;
+        video.onerror = () => reject(new Error('无法读取选择的屏幕画面。'));
+      });
+      await video.play();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      if (!width || !height) throw new Error('选择的屏幕画面尺寸无效。');
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) throw new Error('当前浏览器无法处理屏幕截图。');
+      context.drawImage(video, 0, 0, width, height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('无法生成屏幕截图。');
+      video.srcObject = null;
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const file = new File([blob], `screen-${timestamp}.png`, { type: 'image/png' });
+      await prepareScreenshot(file);
+      showToast('已截取当前画面，可随消息发送。');
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        const fallback = ['NotAllowedError', 'SecurityError'].includes(error?.name)
+          ? '未取得屏幕画面，请直接粘贴图片或使用 + 选择文件。'
+          : error.message;
+        showToast(fallback);
+      }
+    } finally {
+      stream?.getTracks().forEach(track => track.stop());
+      state.capturingScreen = false;
+      button.classList.remove('capturing');
+      button.setAttribute('aria-busy', 'false');
+      const disabled = !state.selectedSessionId;
+      button.disabled = disabled;
+      attachButton.disabled = disabled;
+    }
+  }
+
   async function sendMessage(event) {
     event.preventDefault();
     const input = $('#message-input');
@@ -1555,6 +1883,7 @@
     const button = $('#send-button');
     button.disabled = true;
     $('#attach-image').disabled = true;
+    $('#capture-screen').disabled = true;
     state.followTail = true;
     state.lastConversationActivityAt = Date.now();
     const selectedSession = state.sessions.find(item => item.id === state.selectedSessionId);
@@ -1582,6 +1911,7 @@
     } finally {
       button.disabled = false;
       $('#attach-image').disabled = !state.selectedSessionId;
+      $('#capture-screen').disabled = !state.selectedSessionId;
       input.focus();
     }
   }
@@ -1803,19 +2133,34 @@
     $('#copy-pairing-link').addEventListener('click', copyPairingLink);
     $('#composer').addEventListener('submit', sendMessage);
     $('#attach-image').addEventListener('click', () => $('#image-input').click());
+    $('#capture-screen').addEventListener('click', captureScreenScreenshot);
     $('#image-input').addEventListener('change', async event => {
       const button = $('#attach-image');
+      const captureButton = $('#capture-screen');
       button.disabled = true;
+      captureButton.disabled = true;
       try {
         await prepareScreenshot(event.target.files?.[0]);
       } catch (error) {
         removePendingImage();
         showToast(error.message);
       } finally {
-        button.disabled = !state.selectedSessionId;
+        const disabled = !state.selectedSessionId;
+        button.disabled = disabled;
+        captureButton.disabled = disabled;
       }
     });
     $('#remove-attachment').addEventListener('click', removePendingImage);
+    $('#screenshot-shortcut-settings').addEventListener('click', openScreenshotShortcutSettings);
+    $('#screenshot-shortcut-input').addEventListener('keydown', recordScreenshotShortcut);
+    $('#reset-screenshot-shortcut').addEventListener('click', resetScreenshotShortcut);
+    $('#save-screenshot-shortcut').addEventListener('click', saveScreenshotShortcut);
+    $('#screenshot-shortcut-dialog').addEventListener('click', event => {
+      if (event.target === event.currentTarget) event.currentTarget.close('cancel');
+    });
+    $('#screenshot-shortcut-dialog').addEventListener('close', () => {
+      $('#open-session-drawer').focus({ preventScroll: true });
+    });
     $('#approval-view-session').addEventListener('click', viewApprovalSession);
     $('#approval-decline').addEventListener('click', () => resolveApproval('decline'));
     $('#approval-accept-session').addEventListener('click', () => resolveApproval('acceptForTurn'));
@@ -1854,8 +2199,23 @@
       const maximumHeight = Math.min(160, Math.max(72, Math.round(viewportHeight * .32)));
       event.target.style.height = `${Math.min(event.target.scrollHeight, maximumHeight)}px`;
     });
+    $('#message-input').addEventListener('paste', handleComposerPaste);
+    document.addEventListener('keydown', event => {
+      if (
+        event.repeat
+        || event.defaultPrevented
+        || $('#screenshot-shortcut-dialog').open
+        || !matchesScreenshotShortcut(event)
+      ) return;
+      event.preventDefault();
+      captureScreenScreenshot();
+    });
     addEventListener('storage', event => {
       if (event.key === THEME_KEY && ['light', 'dark'].includes(event.newValue)) applyTheme(event.newValue);
+      if (event.key === SCREENSHOT_SHORTCUT_KEY) {
+        state.screenshotShortcut = readScreenshotShortcut();
+        renderScreenshotShortcut();
+      }
     });
     addEventListener('online', () => {
       setConnected(true);
@@ -1898,6 +2258,7 @@
   async function initialize() {
     setupVisualViewport();
     renderRemoteTheme();
+    renderScreenshotShortcut();
     state.drawerOpen = readDrawerOpenPreference();
     syncSessionDrawerAccessibility();
     setupInteractions();

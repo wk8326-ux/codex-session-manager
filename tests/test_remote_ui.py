@@ -388,6 +388,213 @@ for (const item of cases) {
         self.assertIn(".composer-row", stylesheet)
         self.assertIn(".attachment-preview", stylesheet)
 
+    def test_composer_accepts_capture_paste_and_a_configurable_page_shortcut(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        for element_id in (
+            "capture-screen",
+            "screenshot-shortcut-settings",
+            "screenshot-shortcut-dialog",
+            "screenshot-shortcut-input",
+            "save-screenshot-shortcut",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("SCREENSHOT_SHORTCUT_KEY", script)
+        self.assertIn("function captureScreenScreenshot()", script)
+        self.assertIn("navigator.mediaDevices?.getDisplayMedia", script)
+        self.assertIn("function clipboardImageFile(event)", script)
+        self.assertIn("function handleComposerPaste(event)", script)
+        self.assertIn("await prepareScreenshot(file)", script)
+        self.assertIn(".capture-screen", stylesheet)
+        self.assertIn(".shortcut-recorder", stylesheet)
+
+        start = script.index("  function clipboardImageFile(event) {")
+        end = script.index("\n  async function handleComposerPaste", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const context = {};
+vm.createContext(context);
+vm.runInContext(`${source}; this.clipboardImageFile = clipboardImageFile;`, context);
+const expected = { name: 'pasted.png' };
+const event = { clipboardData: { items: [
+  { kind: 'string', type: 'text/plain', getAsFile: () => null },
+  { kind: 'file', type: 'image/png', getAsFile: () => expected },
+] } };
+if (context.clipboardImageFile(event) !== expected) process.exit(1);
+if (context.clipboardImageFile({ clipboardData: { items: [] } }) !== null) process.exit(2);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_screen_capture_stops_media_tracks_before_image_processing(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  async function captureScreenScreenshot() {")
+        end = script.index("\n  async function sendMessage", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const calls = [];
+const tracks = [
+  { stop: () => calls.push('stop-video') },
+  { stop: () => calls.push('stop-audio') },
+];
+const stream = { getTracks: () => tracks };
+const classList = { add: () => {}, remove: () => {} };
+const controls = {
+  '#capture-screen': { disabled: false, classList, setAttribute: () => {} },
+  '#attach-image': { disabled: false },
+};
+const document = {
+  createElement: tagName => {
+    if (tagName === 'video') {
+      return {
+        readyState: 1,
+        videoWidth: 120,
+        videoHeight: 80,
+        muted: false,
+        playsInline: false,
+        srcObject: null,
+        play: async () => {},
+      };
+    }
+    if (tagName === 'canvas') {
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage: () => calls.push('draw') }),
+        toBlob: callback => callback({ size: 10, type: 'image/png' }),
+      };
+    }
+    throw new Error('unexpected element ' + tagName);
+  },
+};
+class FakeFile {
+  constructor(parts, name, options) {
+    this.parts = parts;
+    this.name = name;
+    this.type = options.type;
+  }
+}
+const context = {
+  state: { capturingScreen: false, selectedSessionId: 'session-1' },
+  navigator: { mediaDevices: { getDisplayMedia: async () => stream } },
+  document,
+  File: FakeFile,
+  requestAnimationFrame: callback => callback(),
+  prepareScreenshot: async () => calls.push('prepare'),
+  showToast: () => {},
+  $: selector => controls[selector],
+  Date,
+};
+vm.createContext(context);
+vm.runInContext(source + '; this.captureScreenScreenshot = captureScreenScreenshot;', context);
+
+(async () => {
+  await context.captureScreenScreenshot();
+  const firstStop = calls.findIndex(value => value.startsWith('stop-'));
+  const prepare = calls.indexOf('prepare');
+  if (firstStop < 0 || prepare < 0 || firstStop > prepare) process.exit(1);
+  if (calls.filter(value => value.startsWith('stop-')).length !== 2) process.exit(2);
+})().catch(error => {
+  console.error(error);
+  process.exit(3);
+});
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_markdown_pipe_tables_render_as_safe_semantic_tables(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  function appendInlineMarkup(container, text) {")
+        end = script.index("\n  function appendStreamCaret", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+
+class FakeNode {
+  constructor(tagName, text = '') {
+    this.tagName = tagName;
+    this.childNodes = [];
+    this.attributes = {};
+    this.dataset = {};
+    this.className = '';
+    this._text = text;
+    this.classList = {
+      add: (...names) => {
+        const values = new Set(this.className.split(/\s+/).filter(Boolean));
+        names.forEach(name => values.add(name));
+        this.className = [...values].join(' ');
+      },
+    };
+  }
+  append(...children) { this.childNodes.push(...children); }
+  replaceChildren(...children) { this.childNodes = [...children]; this._text = ''; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  set textContent(value) { this._text = String(value); this.childNodes = []; }
+  get textContent() { return this._text + this.childNodes.map(node => node.textContent).join(''); }
+}
+
+const document = {
+  createElement: tagName => new FakeNode(tagName.toUpperCase()),
+  createTextNode: text => new FakeNode('#text', String(text)),
+};
+const context = { document };
+vm.createContext(context);
+vm.runInContext(`${source}; this.appendRichText = appendRichText;`, context);
+
+const container = new FakeNode('DIV');
+context.appendRichText(container, `| 优先级 | 增强项 | 具体效果 |
+| :--- | :---: | ---: |
+| P0 | 状态缓存 | 页面立即显示 |
+| P1 | 支持转义 \\| 竖线 | 保持可读 |`);
+
+const wrapper = container.childNodes[0];
+const table = wrapper?.childNodes[0];
+if (wrapper?.className !== 'message-table-scroll') process.exit(1);
+if (table?.tagName !== 'TABLE' || table.className !== 'message-table') process.exit(2);
+if (table.childNodes[0]?.tagName !== 'THEAD') process.exit(3);
+if (table.childNodes[1]?.tagName !== 'TBODY') process.exit(4);
+if (table.childNodes[0].childNodes[0].childNodes.length !== 3) process.exit(5);
+if (table.childNodes[1].childNodes.length !== 2) process.exit(6);
+if (table.childNodes[1].textContent.includes('\\|')) process.exit(7);
+if (!table.childNodes[1].textContent.includes('支持转义 | 竖线')) process.exit(8);
+if (table.childNodes[0].childNodes[0].childNodes[0].attributes.scope !== 'col') process.exit(9);
+
+const malformed = new FakeNode('DIV');
+context.appendRichText(
+  malformed,
+  '| 列一 | 列二 |\n| -- | 不是分隔符 |\n| 内容 | <img src=x onerror=alert(1)> |'
+);
+if (malformed.childNodes.some(node => node.tagName === 'TABLE')) process.exit(10);
+if (!malformed.textContent.includes('| 列一 | 列二 |')) process.exit(11);
+if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exit(12);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_mobile_pairing_flow_starts_near_the_top_on_short_screens(self) -> None:
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
 
@@ -484,9 +691,9 @@ for (const item of cases) {
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=20', script)
-        self.assertIn('href="/remote.css?v=20"', html)
-        self.assertIn('/remote.js?v=18', script)
+        self.assertIn('/remote.css?v=21', script)
+        self.assertIn('href="/remote.css?v=21"', html)
+        self.assertIn('/remote.js?v=19', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

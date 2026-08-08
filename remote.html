@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/assets/project-console-icon.png">
-  <link rel="stylesheet" href="/remote.css?v=20">
+  <link rel="stylesheet" href="/remote.css?v=21">
   <script>
     (() => {
       const key = 'localhost-project-console.theme';
@@ -112,6 +112,11 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c-5 2-10-3-9-9Z"/></svg>
           <span id="remote-theme-label">深色模式</span>
         </button>
+        <button class="drawer-tool shortcut-settings" id="screenshot-shortcut-settings" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h.01M11 9h.01M15 9h.01M19 9h.01M8 13h.01M12 13h.01M16 13h.01M8 16h8"/></svg>
+          <span>截图快捷键</span>
+          <kbd id="screenshot-shortcut-label">Alt + Shift + S</kbd>
+        </button>
         <a class="drawer-tool" href="/">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18-6-6 6-6M3 12h18"/></svg>
           <span>返回项目工作台</span>
@@ -182,11 +187,14 @@
               <button class="remove-attachment" id="remove-attachment" type="button" aria-label="&#31227;&#38500;&#25130;&#22270;" title="&#31227;&#38500;&#25130;&#22270;">&times;</button>
             </div>
             <div class="composer-row">
-              <button class="attach-image" id="attach-image" type="button" aria-label="&#28155;&#21152;&#25130;&#22270;" title="&#28155;&#21152;&#25130;&#22270;" disabled>+</button>
+              <button class="attach-image" id="attach-image" type="button" aria-label="选择图片" title="选择图片" disabled>+</button>
               <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-            <label class="sr-only" for="message-input">发送到当前 Codex 会话</label>
-            <textarea id="message-input" rows="1" maxlength="20000" placeholder="发送消息到当前会话" disabled></textarea>
-            <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">↑</button>
+              <button class="capture-screen" id="capture-screen" type="button" aria-label="截取屏幕" title="截取屏幕" aria-busy="false" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></svg>
+              </button>
+              <label class="sr-only" for="message-input">发送到当前 Codex 会话</label>
+              <textarea id="message-input" rows="1" maxlength="20000" placeholder="发送消息到当前会话" disabled></textarea>
+              <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">↑</button>
             </div>
           </form>
         </section>
@@ -272,9 +280,29 @@
     </form>
   </dialog>
 
+  <dialog class="sync-dialog shortcut-dialog" id="screenshot-shortcut-dialog" aria-labelledby="screenshot-shortcut-title">
+    <form method="dialog" class="dialog-shell">
+      <header class="dialog-head">
+        <div><p class="eyebrow">PAGE SHORTCUT</p><h2 id="screenshot-shortcut-title">截图快捷键</h2></div>
+        <button class="icon-button dialog-close" type="submit" value="cancel" aria-label="关闭" title="关闭">×</button>
+      </header>
+      <div class="dialog-body">
+        <label for="screenshot-shortcut-input">页面内快捷键</label>
+        <input class="shortcut-recorder" id="screenshot-shortcut-input" name="screenshot-shortcut" readonly autocomplete="off" aria-describedby="screenshot-shortcut-help screenshot-shortcut-error">
+        <p class="shortcut-help" id="screenshot-shortcut-help">点击输入框后按下新的组合键。快捷键仅在远程会话页面打开时生效。</p>
+        <p class="form-error" id="screenshot-shortcut-error" role="alert"></p>
+        <div class="shortcut-dialog-actions">
+          <button class="button" id="reset-screenshot-shortcut" type="button">恢复默认</button>
+          <button class="button" type="submit" value="cancel">取消</button>
+          <button class="button primary" id="save-screenshot-shortcut" type="button">保存快捷键</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="/assets/vendor/qrcode.min.js"></script>
   <script src="/assets/vendor/jsQR.js?v=1" defer></script>
-  <script src="/remote.js?v=18" defer></script>
+  <script src="/remote.js?v=19" defer></script>
 </body>
 </html>
