@@ -312,6 +312,21 @@ class DesktopBridgeTests(unittest.TestCase):
                 "2026-08-02T02:00:32Z",
             )
 
+    def test_switching_to_direct_mode_cancels_unstarted_bridge_jobs(self) -> None:
+        self._queue_job()
+
+        settings = self.store.update_settings(
+            {"resumeDispatchMode": "direct_app_server"}
+        )
+
+        bridge = self.store.get_desktop_bridge_status()
+        run = self.store.list_monitor_runs({})[0]
+        self.assertEqual(settings["resumeDispatchMode"], "direct_app_server")
+        self.assertEqual(bridge["pending"], 0)
+        self.assertEqual(bridge["terminal"], 1)
+        self.assertEqual(run["decision"], "resume_cancelled")
+        self.assertIn("direct App Server", run["detailSanitized"])
+
     def test_completed_bridge_history_does_not_block_session_deletion(self) -> None:
         self._queue_job()
         job = self.store.claim_desktop_bridge_job(

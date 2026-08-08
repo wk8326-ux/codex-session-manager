@@ -128,10 +128,10 @@ Invoke-RestMethod `
 
 页面顶部可以选择两种恢复通道：
 
-- `Codex Desktop · 实时同步`：推荐。控制台只创建持久化 bridge job，由 Codex Desktop heartbeat runner 领取并通过桌面原生任务接口发送，因此 commentary、工具调用、审批和最终状态会实时显示在桌面端。runner 登记新 turn ID 后立即退出，控制台通过后续检查或 App Server 事件收敛最终状态。
-- `独立 App Server · 兼容`：保留原有 `thread/resume` + `turn/start` 路径，适用于未配置桌面 runner 的环境。该路径能恢复任务，但运行中状态不会实时同步到 Codex Desktop。
+- `本机 App Server · 推荐`：监控器直接调用常驻 App Server 的 `thread/resume` + `turn/start`，并与远程 PWA 共用同一个 adapter 和事件订阅。无需桥接会话或 heartbeat runner；远程 PWA 可以实时显示运行事件，Codex Desktop 可能需要重新打开会话后才会读取外部实例写入的新内容。
+- `Codex Desktop · 兼容桥接`：仅在必须让恢复过程立即显示在 Codex Desktop 时使用。控制台创建持久化 bridge job，由 Desktop heartbeat runner 领取并通过桌面原生任务接口发送；runner 登记新 turn ID 后立即退出。
 
-新数据库默认使用兼容模式，避免没有 runner 时任务停留在待领取状态。桌面桥接的设置步骤、heartbeat 提示词和回调协议见 [Codex Desktop 实时桥接](codex-desktop-bridge.md)。
+新数据库默认使用本机 App Server 模式。切换到该模式时，控制台会取消尚未启动的旧 bridge job，避免两套执行器交叉发送。桌面桥接的兼容设置步骤、heartbeat 提示词和回调协议见 [Codex Desktop 实时桥接](codex-desktop-bridge.md)。
 
 Desktop runner 是当前控制台的全局单例。添加监控会话不会额外创建定时任务，所有已启用会话共用同一个 runner。删除会话会取消该会话尚未执行的 bridge job，但不会删除全局 runner；删除或暂停 runner 则会让所有会话的 Desktop 实时恢复停止工作。
 
@@ -195,7 +195,7 @@ python scripts/probe_codex_app_server.py `
 
 ### 续跑开始与最终结果
 
-桌面桥接任务创建后先记录为 `resume_queued`。runner 回传新的 turn ID 后更新为 `resume_started`，表示续跑已经启动，并不表示任务已经完成。桌面 runner 会等待目标任务并回传终态。兼容直连模式则继续订阅独立 App Server 的事件：
+本机 App Server 模式在 `turn/start` 返回新 turn ID 后记录为 `resume_started`，并通过同一 App Server 的事件订阅收敛终态。桌面桥接任务先记录为 `resume_queued`；runner 回传新的 turn ID 后同样更新为 `resume_started` 并立即退出，最终状态仍由控制台事件订阅或后续检查收敛：
 
 - `turn/completed` 且状态为 `completed`：更新为 `resume_completed`。
 - 最终状态为 `failed`：更新为 `resume_failed`；若新 turn 本身又是明确的可恢复 API 异常，后续检查会把它视为新的 incident。
@@ -213,7 +213,7 @@ python scripts/probe_codex_app_server.py `
 - 三次仍明确失败后转为“需要关注”。
 - `turn/start` 发送结果不确定时不会盲目重试，而是立即转为人工确认。
 - `turn/start` 被接受不等于任务恢复完成；只有后续 `turn/completed` 的最终状态为 `completed` 才记为续跑完成。
-- 控制台异常退出时，兼容直连模式中仍处于发送中的事件会在下次启动时转为人工确认；已持久化的待领取桌面 bridge job 会保留并在控制台恢复后继续等待 runner。
+- 控制台异常退出时，本机 App Server 模式中仍处于发送中的事件会在下次启动时转为人工确认；桌面桥接模式下已持久化的待领取 job 会保留并在控制台恢复后继续等待 runner。
 
 “立即检查”走同一套渠道、会话、恢复规则、去重和重试逻辑，不会绕过安全限制。
 

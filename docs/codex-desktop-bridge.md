@@ -1,5 +1,7 @@
 # Codex Desktop 实时桥接
 
+> 这是需要 Codex Desktop 即时显示恢复过程时使用的兼容方案。默认和推荐部署使用控制台自带的本机 App Server 恢复代理，不需要桥接会话或 heartbeat 自动化。
+
 ## 为什么需要桥接
 
 控制台通过 `codex app-server --listen stdio://` 启动的 App Server 与 Codex Desktop 自己使用的 App Server 不是同一个进程。独立 App Server 可以读取已经持久化的会话历史，也可以创建新的 turn，但它创建的 turn 不会把运行中的 commentary、工具调用和审批状态实时推送到 Codex Desktop。
@@ -17,7 +19,7 @@
 ## 启用步骤
 
 1. 启动控制台，并确认 `http://127.0.0.1:8765/api/watchdog/status` 可访问。
-2. 在会话监控页把“恢复通道”切换为 `Codex Desktop · 实时同步`。
+2. 在会话监控页把“恢复通道”切换为 `Codex Desktop · 兼容桥接`。
 3. 在 Codex Desktop 中选择一个专用的本地桥接任务，为它创建 heartbeat 自动化。runner 可以绑定任意本地任务，不要把设备名或个人路径写进项目代码。
 4. 使用一次性测试会话完成领取、启动、实时显示和完成回执测试。
 5. 测试通过后，再开启全局自动续跑并启用实际监控会话。

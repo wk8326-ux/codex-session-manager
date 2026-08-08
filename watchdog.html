@@ -436,8 +436,8 @@
             <label class="dispatch-field" for="resume-dispatch-mode">
               <span>恢复通道</span>
               <select id="resume-dispatch-mode" name="resumeDispatchMode">
-                <option value="desktop_bridge">Codex Desktop · 实时同步</option>
-                <option value="direct_app_server">独立 App Server · 兼容</option>
+                <option value="direct_app_server">本机 App Server · 推荐</option>
+                <option value="desktop_bridge">Codex Desktop · 兼容桥接</option>
               </select>
               <small id="bridge-status-copy" aria-live="polite">正在读取桥接状态</small>
             </label>
@@ -861,7 +861,7 @@
       const bridge = appState.status.desktopBridge || {};
       document.getElementById('bridge-status-copy').textContent = dispatchMode === 'desktop_bridge'
         ? `全局桥接 · ${Number(bridge.pending || 0)} 待领取 · ${Number(bridge.started || 0)} 运行中`
-        : '兼容直连模式';
+        : '本机恢复代理 · 直接续跑';
 
       const channelHealthy = appState.channels.some(item => item.enabled && item.lastProbeCategory === 'healthy');
       const sessionKnown = appState.sessions.some(item => item.enabled && ['running', 'idle', 'attention'].includes(item.state));

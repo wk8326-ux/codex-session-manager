@@ -169,8 +169,8 @@ npm run dev -- --host 127.0.0.1 --port 4173 --strictPort
 
 恢复通道支持两种模式：
 
-- **Codex Desktop · 实时同步**：推荐。控制台创建持久化 bridge job，由 Codex Desktop Runner 领取并向目标会话发送提示词，运行过程会实时显示在桌面端。
-- **独立 App Server · 兼容**：使用独立 App Server 的 `thread/resume` 和 `turn/start`，可以恢复任务，但运行中的状态不会实时同步到 Codex Desktop。
+- **本机 App Server · 推荐**：控制台直接使用常驻 App Server 的 `thread/resume` 和 `turn/start` 恢复任务，并与远程 PWA 共用事件流；无需额外桥接会话或定时任务。Codex Desktop 可能需要重新打开会话才能看到外部实例写入的新内容。
+- **Codex Desktop · 兼容桥接**：仅在必须让恢复过程立即显示在 Codex Desktop 时使用。控制台创建持久化 bridge job，由暂停状态之外的 Desktop Runner 领取并向目标会话发送提示词。
 
 桌面桥接的链路如下：
 

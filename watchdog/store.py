@@ -453,6 +453,16 @@ class WatchdogStore:
             values.append(self._bool(value) if key.endswith("Enabled") else value)
         with self._connect() as connection:
             connection.execute(f"UPDATE watchdog_settings SET {', '.join(assignments)} WHERE id = 1", values)
+            if columns.get("resumeDispatchMode") == "direct_app_server":
+                self._cancel_unstarted_desktop_bridge_jobs(
+                    connection,
+                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    all_sessions=True,
+                    detail=(
+                        "desktop bridge dispatch was cancelled after switching "
+                        "to direct App Server mode"
+                    ),
+                )
         return self.get_settings()
 
     def create_channel(self, data: dict) -> dict:
@@ -548,9 +558,23 @@ class WatchdogStore:
         cancelled_at: str,
         *,
         session_id: str | None = None,
+        all_sessions: bool = False,
+        detail: str = "monitoring session was disabled before bridge dispatch",
     ) -> int:
-        detail = "monitoring session was disabled before bridge dispatch"
-        if session_id is None:
+        if session_id is not None:
+            rows = connection.execute(
+                """SELECT id, monitor_run_id, incident_fingerprint, session_id
+                   FROM desktop_bridge_jobs
+                   WHERE session_id = ? AND status IN ('pending', 'claimed')""",
+                (session_id,),
+            ).fetchall()
+        elif all_sessions:
+            rows = connection.execute(
+                """SELECT id, monitor_run_id, incident_fingerprint, session_id
+                   FROM desktop_bridge_jobs
+                   WHERE status IN ('pending', 'claimed')"""
+            ).fetchall()
+        else:
             rows = connection.execute(
                 """SELECT job.id, job.monitor_run_id,
                           job.incident_fingerprint, job.session_id
@@ -559,13 +583,6 @@ class WatchdogStore:
                      ON session.id = job.session_id
                    WHERE job.status IN ('pending', 'claimed')
                      AND (session.id IS NULL OR session.enabled = 0)"""
-            ).fetchall()
-        else:
-            rows = connection.execute(
-                """SELECT id, monitor_run_id, incident_fingerprint, session_id
-                   FROM desktop_bridge_jobs
-                   WHERE session_id = ? AND status IN ('pending', 'claimed')""",
-                (session_id,),
             ).fetchall()
         for row in rows:
             connection.execute(
