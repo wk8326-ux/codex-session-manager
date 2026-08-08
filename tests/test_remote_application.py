@@ -9,6 +9,7 @@ from remote.application import RemoteApplication, RemoteNotFound, RemoteValidati
 from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
 from remote.store import RemoteStore
+from watchdog.codex_adapter import CodexAdapterError
 
 
 THREAD_ID = "00000000-0000-4000-8000-000000000001"
@@ -39,6 +40,19 @@ class Adapter:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, str | None]] = []
         self.last_turn_limit: int | None = None
+        self.read_thread_ids: list[str] = []
+        self.read_thread_error: CodexAdapterError | None = None
+        self.thread_snapshot = SimpleNamespace(
+            thread_id=THREAD_ID,
+            name="Local Woxsheet",
+            thread_status="active",
+            active_flags=("waiting",),
+            latest_turn=SimpleNamespace(
+                status="failed",
+                error_message="unexpected status 503 Service Unavailable",
+                http_status=503,
+            ),
+        )
 
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
         self.last_turn_limit = turn_limit
@@ -48,6 +62,12 @@ class Adapter:
         self.sent.append((thread_id, prompt, image_url))
         return {"turnId": "turn-2", "delivery": "started"}
 
+    def read_thread(self, thread_id: str) -> object:
+        self.read_thread_ids.append(thread_id)
+        if self.read_thread_error is not None:
+            raise self.read_thread_error
+        return self.thread_snapshot
+
     def list_threads(self, limit: int) -> list[object]:
         return [
             SimpleNamespace(
@@ -55,11 +75,7 @@ class Adapter:
                 name="Local Woxsheet",
                 thread_status="active",
                 active_flags=("waiting",),
-                latest_turn=SimpleNamespace(
-                    status="failed",
-                    error_message="unexpected status 503 Service Unavailable",
-                    http_status=503,
-                ),
+                latest_turn=None,
             )
         ][:limit]
 
@@ -196,9 +212,44 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(listed[0]["latestTurnStatus"], "failed")
         self.assertTrue(listed[0]["latestTurnHasError"])
         self.assertEqual(listed[0]["latestTurnHttpStatus"], 503)
+        self.assertTrue(listed[0]["statusKnown"])
+        self.assertEqual(self.adapter.read_thread_ids, [THREAD_ID])
 
         self.application.delete_synced_session(synced["id"])
         self.assertEqual(self.application.list_sessions(), [])
+
+    def test_session_list_reads_the_latest_turn_without_opening_the_session(self) -> None:
+        self.adapter.thread_snapshot = SimpleNamespace(
+            thread_id=THREAD_ID,
+            name="Local Woxsheet",
+            thread_status="idle",
+            active_flags=(),
+            latest_turn=SimpleNamespace(
+                status="completed",
+                error_message="",
+                http_status=None,
+            ),
+        )
+        self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+
+        listed = self.application.list_sessions()
+
+        self.assertEqual(listed[0]["latestTurnStatus"], "completed")
+        self.assertTrue(listed[0]["statusKnown"])
+        self.assertEqual(self.adapter.read_thread_ids, [THREAD_ID])
+
+    def test_session_list_marks_an_unreadable_status_as_unknown(self) -> None:
+        self.adapter.read_thread_error = CodexAdapterError("temporarily unavailable")
+        self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+
+        listed = self.application.list_sessions()
+
+        self.assertFalse(listed[0]["statusKnown"])
+        self.assertEqual(listed[0]["latestTurnStatus"], "")
 
     def test_duplicate_synced_thread_is_rejected(self) -> None:
         payload = {"name": "Woxsheet", "threadId": THREAD_ID}

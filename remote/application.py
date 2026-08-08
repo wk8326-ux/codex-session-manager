@@ -4,6 +4,7 @@ import base64
 import binascii
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from watchdog.codex_adapter import CodexAdapterError
@@ -200,24 +201,48 @@ class RemoteApplication:
         summaries = [self._session_summary(session) for session in sessions]
         if not sessions:
             return summaries
-        try:
-            snapshots = self.adapter.list_threads(limit=max(50, len(sessions)))
-        except CodexAdapterError:
-            return summaries
-        by_thread_id = {snapshot.thread_id: snapshot for snapshot in snapshots}
+
+        read_thread = getattr(self.adapter, "read_thread", None)
+        exact_by_thread_id: dict[str, tuple[bool, object | None]] = {}
+        if callable(read_thread):
+            def read_exact(thread_id: str) -> tuple[bool, object | None]:
+                try:
+                    return True, read_thread(thread_id)
+                except CodexAdapterError:
+                    return False, None
+
+            thread_ids = [summary["threadId"] for summary in summaries]
+            with ThreadPoolExecutor(max_workers=min(8, len(thread_ids))) as executor:
+                exact_by_thread_id = dict(zip(thread_ids, executor.map(read_exact, thread_ids)))
+
+        unresolved = [
+            summary for summary in summaries
+            if not exact_by_thread_id.get(summary["threadId"], (False, None))[0]
+        ]
+        fallback_by_thread_id = {}
+        if unresolved:
+            try:
+                snapshots = self.adapter.list_threads(limit=max(50, len(sessions)))
+            except CodexAdapterError:
+                snapshots = []
+            fallback_by_thread_id = {
+                snapshot.thread_id: snapshot for snapshot in snapshots
+            }
+
         enriched = []
         for summary in summaries:
-            snapshot = by_thread_id.get(summary["threadId"])
-            if snapshot is None:
-                enriched.append(summary)
-                continue
-            if not hasattr(snapshot, "latest_turn"):
-                enriched.append(summary)
-                continue
+            exact_known, exact = exact_by_thread_id.get(
+                summary["threadId"], (False, None)
+            )
+            snapshot = exact if exact_known else fallback_by_thread_id.get(
+                summary["threadId"]
+            )
             latest = getattr(snapshot, "latest_turn", None)
+            status_known = exact_known or latest is not None
             enriched.append(
                 {
                     **summary,
+                    "statusKnown": status_known,
                     "threadStatus": getattr(snapshot, "thread_status", ""),
                     "activeFlags": list(getattr(snapshot, "active_flags", ())),
                     "latestTurnStatus": getattr(latest, "status", "") if latest else "",

@@ -117,7 +117,11 @@ class RemoteRouterTests(unittest.TestCase):
         self.assertEqual(created.status, 201)
 
         listed = self.admin.dispatch("GET", "/api/remote/synced-sessions", None)
-        self.assertEqual(listed.body, [created.body])
+        self.assertEqual(
+            {key: listed.body[0][key] for key in created.body},
+            created.body,
+        )
+        self.assertFalse(listed.body[0]["statusKnown"])
 
         deleted = self.admin.dispatch(
             "DELETE", f"/api/remote/synced-sessions/{created.body['id']}", None

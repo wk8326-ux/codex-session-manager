@@ -97,8 +97,56 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn("drawer-session-indicator", script)
         self.assertIn("drawer-session-status", script)
         self.assertIn(".drawer-session-indicator.running", stylesheet)
+        self.assertIn(".drawer-session-indicator.loading", stylesheet)
         self.assertIn(".drawer-session-indicator.failed", stylesheet)
         self.assertIn(".drawer-session-indicator.completed", stylesheet)
+
+    def test_session_summary_never_reports_an_unknown_state_as_stopped(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  function stateLabel(value) {")
+        end = script.index("\n  function updateSessionStatusesFromEvents", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const context = {};
+vm.createContext(context);
+vm.runInContext(`${source}; this.stateLabel = stateLabel; this.sessionSnapshotStatus = sessionSnapshotStatus;`, context);
+const cases = [
+  {
+    expected: 'unknown',
+    session: { statusKnown: false, threadStatus: 'idle', latestTurnStatus: '' },
+  },
+  {
+    expected: 'completed',
+    session: { statusKnown: true, threadStatus: 'idle', latestTurnStatus: 'completed' },
+  },
+  {
+    expected: 'interrupted',
+    session: { statusKnown: true, threadStatus: 'notLoaded', latestTurnStatus: 'interrupted' },
+  },
+  {
+    expected: 'inProgress',
+    session: { statusKnown: true, threadStatus: 'active', latestTurnStatus: 'inProgress' },
+  },
+];
+for (const item of cases) {
+  const actual = context.sessionSnapshotStatus(item.session);
+  if (actual !== item.expected) {
+    console.error(JSON.stringify({ expected: item.expected, actual, session: item.session }));
+    process.exit(1);
+  }
+}
+if (context.stateLabel('unknown') !== '状态未知') process.exit(2);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_chat_surface_uses_a_central_reading_column_and_integrated_composer(self) -> None:
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
@@ -436,9 +484,9 @@ for (const item of cases) {
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=19', script)
-        self.assertIn('href="/remote.css?v=19"', html)
-        self.assertIn('/remote.js?v=17', script)
+        self.assertIn('/remote.css?v=20', script)
+        self.assertIn('href="/remote.css?v=20"', html)
+        self.assertIn('/remote.js?v=18', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

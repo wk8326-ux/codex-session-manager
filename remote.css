@@ -144,6 +144,7 @@ body.drawer-open .session-drawer { transform: translateX(0); pointer-events: aut
 .drawer-session.active { color: var(--ink); background: var(--accent-soft); border-color: rgba(45, 113, 91, .14); }
 .drawer-session-indicator { position: relative; width: 10px; height: 10px; color: var(--ink-3); border: 1.5px solid currentColor; border-radius: 50%; }
 .drawer-session-indicator.running { color: var(--running); border-color: rgba(39, 132, 90, .3); border-top-color: currentColor; animation: activity-spin .8s linear infinite; }
+.drawer-session-indicator.loading { color: var(--ink-3); border-color: var(--border-strong); border-top-color: var(--accent); animation: activity-spin .8s linear infinite; }
 .drawer-session-indicator.failed { color: var(--danger); background: currentColor; border: 0; border-radius: 2px; transform: rotate(45deg); }
 .drawer-session-indicator.failed::after { content: ""; position: absolute; inset: 4px 2px; background: var(--surface); transform: rotate(45deg); }
 .drawer-session-indicator.completed { color: var(--accent); background: currentColor; border: 0; }
@@ -155,6 +156,7 @@ body.drawer-open .session-drawer { transform: translateX(0); pointer-events: aut
 .drawer-session-copy strong { font-size: 13px; font-weight: 600; }
 .drawer-session-copy small { color: var(--ink-3); font: 9px/1.2 "Cascadia Mono", Consolas, monospace; }
 .drawer-session-status.running { color: var(--running); }
+.drawer-session-status.loading { color: var(--ink-3); }
 .drawer-session-status.failed { color: var(--danger); }
 .drawer-session-status.waiting { color: var(--warning); }
 .drawer-session-status.completed { color: var(--accent-strong); }

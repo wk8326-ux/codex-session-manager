@@ -449,13 +449,14 @@
     const labels = {
       active: '正在运行', inProgress: '正在运行', idle: '已停止', completed: '已完成',
       failed: '运行失败', interrupted: '已中断', systemError: '系统错误', notLoaded: '已停止',
-      waitingOnApproval: '等待授权',
+      waitingOnApproval: '等待授权', unknown: '状态未知',
       running: '正在运行', started: '正在运行', online: '在线', stopped: '已停止', offline: '离线',
     };
     return labels[value] || value || '未知';
   }
 
   function sessionSnapshotStatus(session) {
+    if (session?.statusKnown === false) return 'unknown';
     const latestStatus = session?.latestTurnStatus || '';
     const threadStatus = session?.threadStatus || '';
     const activeStates = ['active', 'inProgress', 'running', 'started'];
@@ -1029,6 +1030,7 @@
   function conversationStatusClass(status) {
     if (status === 'inProgress') return 'running';
     if (status === 'waitingOnApproval') return 'waiting';
+    if (status === 'unknown') return 'loading';
     if (['failed', 'interrupted', 'systemError'].includes(status)) return 'failed';
     if (status === 'completed') return 'completed';
     return 'stopped';
