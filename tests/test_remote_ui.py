@@ -309,6 +309,18 @@ const cases = [
     expected: 'interrupted',
     detail: { status: 'active', activeFlags: ['active'], turns: [{ status: 'interrupted' }] },
   },
+  {
+    expected: 'failed',
+    detail: {
+      status: 'notLoaded',
+      latestTurnStatus: 'failed',
+      latestTurnError: 'Selected model is at capacity. Please try a different model.',
+      turns: [
+        { status: 'failed', error: 'Selected model is at capacity. Please try a different model.' },
+        { status: 'completed', items: [{ type: 'reasoning' }] },
+      ],
+    },
+  },
 ];
 for (const item of cases) {
   const actual = context.conversationStatus(item.detail);
@@ -696,7 +708,7 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         server = (ROOT / "app.py").read_text(encoding="utf-8")
         self.assertIn('/remote.css?v=21', script)
         self.assertIn('href="/remote.css?v=21"', html)
-        self.assertIn('/remote.js?v=20', script)
+        self.assertIn('/remote.js?v=21', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

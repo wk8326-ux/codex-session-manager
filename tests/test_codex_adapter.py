@@ -247,6 +247,73 @@ class CodexAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_trailing_compatibility_rollouts_do_not_hide_a_real_turn_failure(self) -> None:
+        capacity_message = (
+            "Selected model is at capacity. Please try a different model."
+        )
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "name": "capacity-failure",
+                        "status": {"type": "notLoaded"},
+                        "turns": [
+                            {
+                                "id": "019fe24f-5fc3-73a2-8100-925351d63fc8",
+                                "status": "failed",
+                                "startedAt": 1786208280,
+                                "completedAt": 1786209374,
+                                "durationMs": 1093924,
+                                "error": {
+                                    "message": capacity_message,
+                                    "codexErrorInfo": "serverOverloaded",
+                                },
+                                "items": [],
+                            },
+                            {
+                                "id": "rollout-21503",
+                                "status": "completed",
+                                "startedAt": None,
+                                "completedAt": None,
+                                "durationMs": None,
+                                "items": [
+                                    {"id": "compact", "type": "contextCompaction"}
+                                ],
+                            },
+                            {
+                                "id": "rollout-21511",
+                                "status": "completed",
+                                "startedAt": None,
+                                "completedAt": None,
+                                "durationMs": None,
+                                "items": [
+                                    {
+                                        "id": "reasoning",
+                                        "type": "reasoning",
+                                        "summary": ["unfinished work"],
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                }
+            }
+        )
+        adapter = CodexAppServerAdapter(transport)
+
+        snapshot = adapter.read_thread(THREAD_ID)
+        detail = adapter.read_thread_detail(THREAD_ID)
+
+        self.assertEqual(
+            snapshot.latest_turn.id, "019fe24f-5fc3-73a2-8100-925351d63fc8"
+        )
+        self.assertEqual(snapshot.latest_turn.status, "failed")
+        self.assertEqual(snapshot.latest_turn.error_message, capacity_message)
+        self.assertEqual(detail["latestTurnStatus"], "failed")
+        self.assertEqual(detail["latestTurnError"], capacity_message)
+        self.assertEqual(detail["turns"][-1]["status"], "completed")
+
     def test_codex_error_requires_exactly_one_documented_error_key(self) -> None:
         errors = (
             None,

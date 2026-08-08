@@ -87,6 +87,22 @@ def _thread_state(status: object) -> tuple[str, tuple[str, ...]]:
     return normalized_status, tuple(flag for flag in raw_flags if isinstance(flag, str))
 
 
+def _latest_status_turn(turns: list[object]) -> object | None:
+    if not turns:
+        return None
+    # App Server can append compatibility rollout transcripts after the real
+    # turn record. Those transcripts have null lifecycle fields and their
+    # synthetic "completed" status must not hide a monitored turn failure.
+    for turn in reversed(turns):
+        if not isinstance(turn, dict):
+            continue
+        if any(turn.get(field) is not None for field in (
+            "startedAt", "completedAt", "durationMs"
+        )):
+            return turn
+    return turns[-1]
+
+
 def _turn_snapshot(turn: object) -> TurnSnapshot:
     if not isinstance(turn, dict):
         raise CodexProtocolError("thread/read returned a malformed turn")
@@ -125,7 +141,8 @@ def _session_snapshot(thread: object, *, require_turns: bool) -> SessionSnapshot
         raise CodexProtocolError("thread/read returned a malformed turns list")
     if turns is not None and not isinstance(turns, list):
         raise CodexProtocolError("App Server returned a malformed turns list")
-    latest_turn = _turn_snapshot(turns[-1]) if turns else None
+    latest_turn_data = _latest_status_turn(turns) if isinstance(turns, list) else None
+    latest_turn = _turn_snapshot(latest_turn_data) if latest_turn_data is not None else None
     return SessionSnapshot(
         thread_id=thread_id,
         name=name if isinstance(name, str) else "",
@@ -215,6 +232,10 @@ def _safe_thread_detail(thread: object, *, turn_limit: int) -> dict:
     raw_turns = thread.get("turns")
     if not isinstance(raw_turns, list):
         raise CodexProtocolError("thread/read returned a malformed turns list")
+    latest_turn_data = _latest_status_turn(raw_turns)
+    latest_turn = (
+        _turn_snapshot(latest_turn_data) if latest_turn_data is not None else None
+    )
     turns = []
     for raw_turn in raw_turns[-turn_limit:]:
         if not isinstance(raw_turn, dict):
@@ -243,6 +264,10 @@ def _safe_thread_detail(thread: object, *, turn_limit: int) -> dict:
         "name": thread.get("name") if isinstance(thread.get("name"), str) else "",
         "status": status,
         "activeFlags": list(active_flags),
+        "latestTurnId": latest_turn.id if latest_turn else "",
+        "latestTurnStatus": latest_turn.status if latest_turn else "",
+        "latestTurnError": latest_turn.error_message if latest_turn else "",
+        "latestTurnHttpStatus": latest_turn.http_status if latest_turn else None,
         "turns": turns,
     }
 

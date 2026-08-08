@@ -1165,16 +1165,18 @@
     const latest = turns.at(-1);
     const latestItem = (latest?.items || []).at(-1);
     const activeStates = ['active', 'inProgress', 'running', 'started'];
-    const latestError = typeof latest?.error === 'string' ? latest.error.trim() : '';
+    const latestStatus = detail?.latestTurnStatus || latest?.status || '';
+    const detailError = typeof detail?.latestTurnError === 'string' ? detail.latestTurnError : '';
+    const latestError = (detailError || (typeof latest?.error === 'string' ? latest.error : '')).trim();
     if (latestError) return 'failed';
-    if (['failed', 'systemError'].includes(latest?.status)) return latest.status;
-    if (activeStates.includes(latest?.status)) return 'inProgress';
+    if (['failed', 'systemError'].includes(latestStatus)) return latestStatus;
+    if (activeStates.includes(latestStatus)) return 'inProgress';
     if (activeStates.includes(latestItem?.status)) return 'inProgress';
-    if (latest?.status === 'completed') return 'completed';
+    if (latestStatus === 'completed') return 'completed';
     const recentContent = Date.now() - (activity.lastConversationActivityAt || 0) < LIVE_ACTIVITY_GRACE_MS;
     const recentEvent = Date.now() - (activity.lastEventAt || 0) < LIVE_ACTIVITY_GRACE_MS;
     if (recentContent || recentEvent) return 'inProgress';
-    if (latest?.status) return latest.status;
+    if (latestStatus) return latestStatus;
     if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
     return detail?.status === 'notLoaded' ? 'idle' : (detail?.status || 'idle');
   }
@@ -1188,7 +1190,9 @@
 
   function conversationLooksRecentlyActive(detail) {
     const latest = (detail?.turns || []).at(-1);
-    if (!latest || latest.error || latest.status === 'completed') return false;
+    const latestStatus = detail?.latestTurnStatus || latest?.status || '';
+    const latestError = detail?.latestTurnError || latest?.error || '';
+    if (!latest || latestError || ['completed', 'failed', 'interrupted', 'cancelled'].includes(latestStatus)) return false;
     const lastItem = (latest.items || []).at(-1);
     const activeStates = ['active', 'inProgress', 'running', 'started'];
     const terminalStates = ['completed', 'failed', 'interrupted', 'cancelled'];
