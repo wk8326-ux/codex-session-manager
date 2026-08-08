@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Status', 'Restart', 'Uninstall')]
+    [ValidateSet('Install', 'Status', 'Start', 'Restart', 'Uninstall')]
     [string]$Action = 'Install',
     [string]$TaskName = 'Local Project Console',
     [string]$ProjectRoot = '',
@@ -14,13 +14,50 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $runnerPath = Join-Path $ProjectRoot 'scripts\run-console-service.ps1'
 $healthUrl = 'http://127.0.0.1:8765/api/shell/project-summary'
+$remoteHealthUrl = 'http://127.0.0.1:8766/remote'
+$consolePorts = @(8765, 8766)
+
+function Get-ConsoleListenerProcessIds {
+    $listeners = @(
+        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalPort -in $consolePorts }
+    )
+    return @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+}
+
+function Test-ConsoleListenerOwnership {
+    $owners = @(Get-ConsoleListenerProcessIds)
+    return $owners.Count -eq 1
+}
 
 function Test-ConsoleHealth {
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
-        return $response.StatusCode -eq 200
+        $adminResponse = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
+        $remoteResponse = Invoke-WebRequest -UseBasicParsing -Uri $remoteHealthUrl -TimeoutSec 2
+        return (
+            $adminResponse.StatusCode -eq 200 -and
+            $remoteResponse.StatusCode -eq 200 -and
+            (Test-ConsoleListenerOwnership)
+        )
     } catch {
         return $false
+    }
+}
+
+function Stop-StrayConsoleProcesses {
+    $processIds = @(Get-ConsoleListenerProcessIds)
+    foreach ($processId in $processIds) {
+        if ($processId -eq $PID) { continue }
+        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
+        if ($null -eq $processInfo) { continue }
+        $commandLine = [string]$processInfo.CommandLine
+        if ($commandLine -notmatch '(?i)(^|[\\/"\s])app\.py(["\s]|$)') {
+            throw "Port 8765 or 8766 is held by another process (PID $processId); refusing to terminate it."
+        }
+        & taskkill.exe /PID $processId /T /F | Out-Null
+        if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+            throw "Could not stop stale Local Project Console process $processId."
+        }
     }
 }
 
@@ -39,6 +76,22 @@ function Wait-ConsoleHealth {
 
 function Get-ConsoleTask {
     return Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+}
+
+function Wait-ConsoleTaskState {
+    param(
+        [string]$Expected,
+        [int]$TimeoutSeconds
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $task = Get-ConsoleTask
+        if ($null -ne $task -and [string]$task.State -eq $Expected) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    return $false
 }
 
 switch ($Action) {
@@ -98,12 +151,47 @@ switch ($Action) {
             ConsoleUrl = 'http://127.0.0.1:8765/'
         } | Format-List
     }
+    'Start' {
+        $task = Get-ConsoleTask
+        if ($null -eq $task) { throw "Scheduled task is not installed: $TaskName" }
+        if ([string]$task.State -eq 'Running' -and (Test-ConsoleHealth)) {
+            Write-Host '[LPC] Console is already running at http://127.0.0.1:8765/'
+            break
+        }
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if (-not (Wait-ConsoleTaskState -Expected 'Ready' -TimeoutSeconds 10)) {
+            throw 'The scheduled task did not become ready before startup.'
+        }
+        Start-Sleep -Milliseconds 500
+        Stop-StrayConsoleProcesses
+        if (-not (Wait-ConsoleHealth -Expected $false -TimeoutSeconds 10)) {
+            throw 'The previous console instance did not stop cleanly.'
+        }
+        Start-ScheduledTask -TaskName $TaskName
+        if (-not (Wait-ConsoleTaskState -Expected 'Running' -TimeoutSeconds 10)) {
+            throw 'The scheduled task did not enter the running state.'
+        }
+        if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 30)) {
+            throw 'The console did not become healthy within 30 seconds. Check .runtime\system-startup\console-service.log.'
+        }
+        Write-Host '[LPC] Console started and is healthy at http://127.0.0.1:8765/'
+    }
     'Restart' {
         $task = Get-ConsoleTask
         if ($null -eq $task) { throw "Scheduled task is not installed: $TaskName" }
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        Wait-ConsoleHealth -Expected $false -TimeoutSeconds 10 | Out-Null
+        if (-not (Wait-ConsoleTaskState -Expected 'Ready' -TimeoutSeconds 10)) {
+            throw 'The scheduled task did not become ready before restart.'
+        }
+        Start-Sleep -Milliseconds 500
+        Stop-StrayConsoleProcesses
+        if (-not (Wait-ConsoleHealth -Expected $false -TimeoutSeconds 10)) {
+            throw 'The previous console instance did not stop cleanly.'
+        }
         Start-ScheduledTask -TaskName $TaskName
+        if (-not (Wait-ConsoleTaskState -Expected 'Running' -TimeoutSeconds 10)) {
+            throw 'The scheduled task did not enter the running state.'
+        }
         if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 30)) {
             throw 'The console did not become healthy within 30 seconds. Check .runtime\system-startup\console-service.log.'
         }
@@ -116,6 +204,9 @@ switch ($Action) {
             break
         }
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Wait-ConsoleTaskState -Expected 'Ready' -TimeoutSeconds 10 | Out-Null
+        Start-Sleep -Milliseconds 500
+        Stop-StrayConsoleProcesses
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Host '[LPC] Scheduled task removed.'
     }
