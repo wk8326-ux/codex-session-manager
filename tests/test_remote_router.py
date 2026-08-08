@@ -76,7 +76,17 @@ class RemoteRouterTests(unittest.TestCase):
             codex_connected=True,
             approval_broker=self.approvals,
         )
-        self.admin = AdminRemoteApi(application)
+        self.native_capture_calls = 0
+
+        def capture_region() -> dict:
+            self.native_capture_calls += 1
+            return {
+                "captured": True,
+                "image": "data:image/png;base64,iVBORw0KGgo=",
+                "name": "region.png",
+            }
+
+        self.admin = AdminRemoteApi(application, native_capture=capture_region)
         self.remote = RemoteHttpApi(application)
 
     def tearDown(self) -> None:
@@ -103,6 +113,25 @@ class RemoteRouterTests(unittest.TestCase):
         response = self.remote.dispatch("GET", "/api/remote/sessions", {}, None)
 
         self.assertEqual(response.status, 401)
+
+    def test_native_region_capture_is_available_only_on_the_local_admin_api(self) -> None:
+        response = self.admin.dispatch(
+            "POST", "/api/remote/native-screenshot", {}
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.body["captured"])
+        self.assertEqual(self.native_capture_calls, 1)
+
+        token = self.pair()
+        remote_response = self.remote.dispatch(
+            "POST",
+            "/api/remote/native-screenshot",
+            {"Authorization": f"Bearer {token}"},
+            {},
+        )
+        self.assertIsNone(remote_response)
+        self.assertEqual(self.native_capture_calls, 1)
 
     def test_admin_can_select_local_session_for_remote_sync(self) -> None:
         local = self.admin.dispatch("GET", "/api/remote/local-sessions?limit=50", None)

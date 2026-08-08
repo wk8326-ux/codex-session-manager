@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
 from .application import (
@@ -10,6 +11,7 @@ from .application import (
     RemoteNotFound,
     RemoteValidationError,
 )
+from .native_capture import NativeCaptureError
 
 
 @dataclass(frozen=True)
@@ -30,8 +32,14 @@ def _turn_limit(parsed) -> int:
 
 
 class AdminRemoteApi:
-    def __init__(self, application: RemoteApplication) -> None:
+    def __init__(
+        self,
+        application: RemoteApplication,
+        *,
+        native_capture: Callable[[], dict] | None = None,
+    ) -> None:
         self.application = application
+        self.native_capture = native_capture
 
     def dispatch(self, method: str, path: str, payload: object) -> RemoteResponse | None:
         try:
@@ -39,6 +47,13 @@ class AdminRemoteApi:
             route = parsed.path
             if method == "GET" and route == "/api/remote/status":
                 return RemoteResponse(HTTPStatus.OK, self.application.admin_status())
+            if method == "POST" and route == "/api/remote/native-screenshot":
+                if self.native_capture is None:
+                    return RemoteResponse(
+                        HTTPStatus.NOT_IMPLEMENTED,
+                        {"message": "当前设备不支持原生区域截图。"},
+                    )
+                return RemoteResponse(HTTPStatus.OK, self.native_capture())
             if method == "POST" and route == "/api/remote/pairings":
                 return RemoteResponse(
                     HTTPStatus.CREATED,
@@ -123,6 +138,8 @@ class AdminRemoteApi:
         except (TypeError, ValueError):
             return RemoteResponse(HTTPStatus.BAD_REQUEST, {"message": "事件游标或等待时间无效。"})
         except RemoteApplicationError as error:
+            return RemoteResponse(HTTPStatus.BAD_GATEWAY, {"message": str(error)})
+        except NativeCaptureError as error:
             return RemoteResponse(HTTPStatus.BAD_GATEWAY, {"message": str(error)})
         return None
 

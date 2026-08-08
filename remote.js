@@ -1649,10 +1649,11 @@
 
   function renderScreenshotShortcut() {
     const label = formatScreenshotShortcut(state.screenshotShortcut);
+    const action = state.admin ? '区域截图' : '截取屏幕';
     $('#screenshot-shortcut-label').textContent = label;
     const captureButton = $('#capture-screen');
-    captureButton.title = `截取屏幕（${label}）`;
-    captureButton.setAttribute('aria-label', `截取屏幕，快捷键 ${label}`);
+    captureButton.title = action + '（' + label + '）';
+    captureButton.setAttribute('aria-label', action + '，快捷键 ' + label);
   }
 
   function openScreenshotShortcutSettings() {
@@ -1809,9 +1810,32 @@
     }
   }
 
+  async function captureNativeRegionScreenshot() {
+    const result = await api('/api/remote/native-screenshot', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    if (!result?.captured) return false;
+    if (
+      typeof result.image !== 'string'
+      || !result.image.startsWith('data:image/png;base64,')
+    ) {
+      throw new Error('区域截图服务返回了无效图片。');
+    }
+    const response = await fetch(result.image);
+    const blob = await response.blob();
+    const file = new File(
+      [blob],
+      typeof result.name === 'string' ? result.name : 'region.png',
+      { type: 'image/png' },
+    );
+    await prepareScreenshot(file);
+    return true;
+  }
+
   async function captureScreenScreenshot() {
     if (state.capturingScreen || !state.selectedSessionId) return;
-    if (!navigator.mediaDevices?.getDisplayMedia) {
+    if (!state.admin && !navigator.mediaDevices?.getDisplayMedia) {
       showToast('当前浏览器不支持屏幕截图，请直接粘贴图片或使用 + 选择文件。');
       return;
     }
@@ -1824,6 +1848,11 @@
     button.setAttribute('aria-busy', 'true');
     attachButton.disabled = true;
     try {
+      if (state.admin) {
+        const captured = await captureNativeRegionScreenshot();
+        showToast(captured ? '已截取选定区域，可随消息发送。' : '已取消截图。');
+        return;
+      }
       stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
       const video = document.createElement('video');
       video.muted = true;
@@ -2273,6 +2302,7 @@
     state.admin = Boolean(status);
     document.body.classList.toggle('admin-mode', state.admin);
     document.body.classList.toggle('remote-mode', !state.admin);
+    renderScreenshotShortcut();
     renderDeviceIdentity();
     $$('.admin-only').forEach(element => {
       if (!state.admin) element.hidden = true;
