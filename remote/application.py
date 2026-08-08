@@ -196,10 +196,40 @@ class RemoteApplication:
         }
 
     def list_sessions(self) -> list[dict]:
-        return [
-            self._session_summary(session)
-            for session in self.remote_store.list_synced_sessions()
-        ]
+        sessions = self.remote_store.list_synced_sessions()
+        summaries = [self._session_summary(session) for session in sessions]
+        if not sessions:
+            return summaries
+        try:
+            snapshots = self.adapter.list_threads(limit=max(50, len(sessions)))
+        except CodexAdapterError:
+            return summaries
+        by_thread_id = {snapshot.thread_id: snapshot for snapshot in snapshots}
+        enriched = []
+        for summary in summaries:
+            snapshot = by_thread_id.get(summary["threadId"])
+            if snapshot is None:
+                enriched.append(summary)
+                continue
+            if not hasattr(snapshot, "latest_turn"):
+                enriched.append(summary)
+                continue
+            latest = getattr(snapshot, "latest_turn", None)
+            enriched.append(
+                {
+                    **summary,
+                    "threadStatus": getattr(snapshot, "thread_status", ""),
+                    "activeFlags": list(getattr(snapshot, "active_flags", ())),
+                    "latestTurnStatus": getattr(latest, "status", "") if latest else "",
+                    "latestTurnHasError": bool(
+                        latest and getattr(latest, "error_message", "")
+                    ),
+                    "latestTurnHttpStatus": (
+                        getattr(latest, "http_status", None) if latest else None
+                    ),
+                }
+            )
+        return enriched
 
     def list_local_sessions(self, limit: int) -> list[dict]:
         try:

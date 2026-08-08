@@ -55,6 +55,11 @@ class Adapter:
                 name="Local Woxsheet",
                 thread_status="active",
                 active_flags=("waiting",),
+                latest_turn=SimpleNamespace(
+                    status="failed",
+                    error_message="unexpected status 503 Service Unavailable",
+                    http_status=503,
+                ),
             )
         ][:limit]
 
@@ -181,7 +186,16 @@ class RemoteApplicationTests(unittest.TestCase):
         synced = self.application.create_synced_session(
             {"name": local[0]["name"], "threadId": local[0]["threadId"]}
         )
-        self.assertEqual(self.application.list_sessions(), [synced])
+        listed = self.application.list_sessions()
+        self.assertEqual(
+            {key: listed[0][key] for key in synced},
+            synced,
+        )
+        self.assertEqual(listed[0]["threadStatus"], "active")
+        self.assertEqual(listed[0]["activeFlags"], ["waiting"])
+        self.assertEqual(listed[0]["latestTurnStatus"], "failed")
+        self.assertTrue(listed[0]["latestTurnHasError"])
+        self.assertEqual(listed[0]["latestTurnHttpStatus"], 503)
 
         self.application.delete_synced_session(synced["id"])
         self.assertEqual(self.application.list_sessions(), [])

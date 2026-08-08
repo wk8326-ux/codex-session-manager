@@ -72,6 +72,43 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn("grid-template-rows: auto minmax(0, 1fr);", stylesheet)
         self.assertIn("padding-bottom: max(10px, env(safe-area-inset-bottom));", stylesheet)
 
+    def test_desktop_session_drawer_is_persistent_and_keeps_chat_interactive(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn('role="complementary"', html)
+        self.assertNotIn('aria-modal="true"', html)
+        self.assertIn("DRAWER_STATE_KEY", script)
+        self.assertIn("readDrawerOpenPreference", script)
+        self.assertIn("storeDrawerOpenPreference", script)
+        self.assertIn("drawerUsesModalOverlay", script)
+        self.assertIn("@media (min-width: 761px)", stylesheet)
+        self.assertIn("body.drawer-open .app-shell", stylesheet)
+        self.assertIn("grid-template-columns: var(--drawer-width) minmax(0, 1fr)", stylesheet)
+
+    def test_session_drawer_uses_visible_icon_and_text_statuses(self) -> None:
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("sessionStatusOverrides: new Map()", script)
+        self.assertIn("function sessionSnapshotStatus", script)
+        self.assertIn("function updateSessionStatusesFromEvents", script)
+        self.assertIn("drawer-session-indicator", script)
+        self.assertIn("drawer-session-status", script)
+        self.assertIn(".drawer-session-indicator.running", stylesheet)
+        self.assertIn(".drawer-session-indicator.failed", stylesheet)
+        self.assertIn(".drawer-session-indicator.completed", stylesheet)
+
+    def test_chat_surface_uses_a_central_reading_column_and_integrated_composer(self) -> None:
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        self.assertIn("--chat-column: 760px", stylesheet)
+        self.assertIn("width: min(var(--chat-column), 100%)", stylesheet)
+        self.assertIn(".conversation { width: 100%; height: 100%;", stylesheet)
+        self.assertIn(".composer-row { width: min(var(--chat-column), 100%);", stylesheet)
+        self.assertIn(".composer-row textarea", stylesheet)
+
     def test_sync_manager_uses_the_independent_remote_catalog_api(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
 
@@ -399,9 +436,9 @@ for (const item of cases) {
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=18', script)
-        self.assertIn('href="/remote.css?v=18"', html)
-        self.assertIn('/remote.js?v=16', script)
+        self.assertIn('/remote.css?v=19', script)
+        self.assertIn('href="/remote.css?v=19"', html)
+        self.assertIn('/remote.js?v=17', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

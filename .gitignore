@@ -1,7 +1,9 @@
 .superpowers/
 .playwright-cli/
 .codegraph/
-.ui-craft/
+.ui-craft/*
+!.ui-craft/brief.md
+!.ui-craft/tokens.md
 .runtime/
 __pycache__/
 *.py[cod]

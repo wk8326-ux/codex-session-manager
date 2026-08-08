@@ -3,6 +3,7 @@
   const DEVICE_KEY = 'localhost-project-console.remote-device';
   const PENDING_PAIRING_KEY = 'localhost-project-console.remote-pending-pairing';
   const THEME_KEY = 'localhost-project-console.theme';
+  const DRAWER_STATE_KEY = 'localhost-project-console.remote-drawer-open';
   const ACTIVE_REFRESH_MS = 1200;
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
@@ -49,6 +50,7 @@
     conversationSelectionVersion: 0,
     conversationCache: new Map(),
     conversationRequests: new Set(),
+    sessionStatusOverrides: new Map(),
     pendingImage: null,
     followTail: true,
     lastUpdatedAt: 0,
@@ -453,6 +455,56 @@
     return labels[value] || value || '未知';
   }
 
+  function sessionSnapshotStatus(session) {
+    const latestStatus = session?.latestTurnStatus || '';
+    const threadStatus = session?.threadStatus || '';
+    const activeStates = ['active', 'inProgress', 'running', 'started'];
+    const failedStates = ['failed', 'interrupted', 'systemError', 'cancelled'];
+    if (session?.latestTurnHasError || failedStates.includes(latestStatus)) {
+      return latestStatus || 'failed';
+    }
+    if (activeStates.includes(latestStatus)) return 'inProgress';
+    if (latestStatus === 'completed') return 'completed';
+    if ((session?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
+    if (failedStates.includes(threadStatus)) return threadStatus;
+    if (activeStates.includes(threadStatus)) return 'inProgress';
+    if (threadStatus === 'completed') return 'completed';
+    return 'stopped';
+  }
+
+  function updateSessionStatusesFromEvents(events = []) {
+    const activeStates = ['active', 'inProgress', 'running', 'started'];
+    const failedStates = ['failed', 'interrupted', 'systemError', 'cancelled'];
+    for (const event of events) {
+      if (!event?.threadId) continue;
+      if (event.method === 'remote/approvalRequested') {
+        state.sessionStatusOverrides.set(event.threadId, 'waitingOnApproval');
+        continue;
+      }
+      if (event.method === 'remote/approvalResolved') {
+        state.sessionStatusOverrides.set(event.threadId, 'inProgress');
+        continue;
+      }
+      if (failedStates.includes(event.status)) {
+        state.sessionStatusOverrides.set(event.threadId, event.status);
+        continue;
+      }
+      if (event.method === 'turn/completed') {
+        state.sessionStatusOverrides.set(
+          event.threadId,
+          event.status === 'completed' || !event.status ? 'completed' : event.status,
+        );
+        continue;
+      }
+      if (activeStates.includes(event.status)
+          || event.method?.startsWith('turn/')
+          || event.method?.startsWith('item/')) {
+        state.sessionStatusOverrides.set(event.threadId, 'inProgress');
+      }
+    }
+    if (events.length) renderSessionDrawer();
+  }
+
   function pendingApprovalForSelected() {
     const session = state.sessions.find(item => item.id === state.selectedSessionId);
     return state.approvals.find(item => item.threadId === session?.threadId) || null;
@@ -602,32 +654,41 @@
     }
 
     for (const session of state.sessions) {
-      const cached = session.id === state.selectedSessionId && state.conversation
+      const selectedDetail = session.id === state.selectedSessionId
         ? state.conversation
-        : state.conversationCache.get(session.id)?.conversation;
+        : null;
+      const cachedEntry = state.conversationCache.get(session.id);
       const pendingCount = state.approvals.filter(
         approval => approval.threadId === session.threadId
       ).length;
-      const status = pendingCount
-        ? 'waitingOnApproval'
-        : (cached ? conversationStatus(cached) : (session.threadStatus || 'idle'));
+      let status = sessionSnapshotStatus(session);
+      if (pendingCount) status = 'waitingOnApproval';
+      else if (selectedDetail) status = conversationStatus(selectedDetail);
+      else if (state.sessionStatusOverrides.has(session.threadId)) {
+        status = state.sessionStatusOverrides.get(session.threadId);
+      } else if (cachedEntry?.conversation) {
+        status = conversationStatusWithActivity(cachedEntry.conversation, cachedEntry);
+      }
       const statusClass = conversationStatusClass(status);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `drawer-session${session.id === state.selectedSessionId ? ' active' : ''}`;
       button.setAttribute('aria-current', session.id === state.selectedSessionId ? 'true' : 'false');
+      button.title = `${session.name || session.threadId} · ${stateLabel(status)}\n${session.threadId}`;
 
-      const dot = document.createElement('span');
-      dot.className = `drawer-session-dot ${statusClass}`;
-      dot.setAttribute('aria-hidden', 'true');
+      const indicator = document.createElement('span');
+      indicator.className = `drawer-session-indicator ${statusClass}`;
+      indicator.setAttribute('aria-hidden', 'true');
       const copy = document.createElement('span');
       copy.className = 'drawer-session-copy';
       const name = document.createElement('strong');
       name.textContent = session.name || session.threadId;
       const detail = document.createElement('small');
-      detail.textContent = cached ? stateLabel(status) : (session.threadId || stateLabel(status));
+      detail.className = `drawer-session-status ${statusClass}`;
+      detail.textContent = stateLabel(status);
+      detail.title = session.threadId;
       copy.append(name, detail);
-      button.append(dot, copy);
+      button.append(indicator, copy);
       if (pendingCount) {
         const badge = document.createElement('span');
         badge.className = 'drawer-session-badge';
@@ -637,7 +698,6 @@
       }
       button.addEventListener('click', async () => {
         switchView('sessions');
-        closeSessionDrawer({ restoreFocus: false });
         await selectSession(session.id);
         $('#message-input').focus({ preventScroll: true });
       });
@@ -917,6 +977,10 @@
   }
 
   function conversationStatus(detail) {
+    return conversationStatusWithActivity(detail, state);
+  }
+
+  function conversationStatusWithActivity(detail, activity) {
     const turns = detail?.turns || [];
     const latest = turns.at(-1);
     const latestItem = (latest?.items || []).at(-1);
@@ -927,8 +991,8 @@
     if (activeStates.includes(latest?.status)) return 'inProgress';
     if (activeStates.includes(latestItem?.status)) return 'inProgress';
     if (latest?.status === 'completed') return 'completed';
-    const recentContent = Date.now() - state.lastConversationActivityAt < LIVE_ACTIVITY_GRACE_MS;
-    const recentEvent = Date.now() - state.lastEventAt < LIVE_ACTIVITY_GRACE_MS;
+    const recentContent = Date.now() - (activity.lastConversationActivityAt || 0) < LIVE_ACTIVITY_GRACE_MS;
+    const recentEvent = Date.now() - (activity.lastEventAt || 0) < LIVE_ACTIVITY_GRACE_MS;
     if (recentContent || recentEvent) return 'inProgress';
     if (latest?.status) return latest.status;
     if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
@@ -1231,10 +1295,17 @@
         lastUpdatedAt,
         lastConversationActivityAt,
       });
+      const session = state.sessions.find(item => item.id === sessionId) || result;
+      state.sessionStatusOverrides.set(
+        session.threadId,
+        conversationStatusWithActivity(result.conversation, {
+          lastConversationActivityAt,
+          lastEventAt: state.lastEventAt,
+        }),
+      );
       if (sessionId !== state.selectedSessionId || selectionVersion !== state.conversationSelectionVersion) return;
       clearTimeout(state.conversationLoadingTimer);
       $('#session-select').setAttribute('aria-busy', 'false');
-      const session = state.sessions.find(item => item.id === sessionId) || result;
       state.lastConversationActivityAt = lastConversationActivityAt;
       state.lastUpdatedAt = lastUpdatedAt;
       state.conversation = result.conversation;
@@ -1377,8 +1448,12 @@
     state.approvals = approvals;
     state.devices = devices;
     const activeSessionIds = new Set(sessions.map(session => session.id));
+    const activeThreadIds = new Set(sessions.map(session => session.threadId));
     for (const sessionId of state.conversationCache.keys()) {
       if (!activeSessionIds.has(sessionId)) state.conversationCache.delete(sessionId);
+    }
+    for (const threadId of state.sessionStatusOverrides.keys()) {
+      if (!activeThreadIds.has(threadId)) state.sessionStatusOverrides.delete(threadId);
     }
     if (state.selectedSessionId && !sessions.some(item => item.id === state.selectedSessionId)) state.selectedSessionId = '';
     if (!state.selectedSessionId && sessions.length) state.selectedSessionId = sessions[0].id;
@@ -1480,6 +1555,9 @@
     $('#attach-image').disabled = true;
     state.followTail = true;
     state.lastConversationActivityAt = Date.now();
+    const selectedSession = state.sessions.find(item => item.id === state.selectedSessionId);
+    if (selectedSession) state.sessionStatusOverrides.set(selectedSession.threadId, 'inProgress');
+    renderSessionDrawer();
     $('#runtime-strip').className = 'runtime-strip running';
     $('#runtime-signal').className = 'runtime-signal runtime-rotor running';
     $('#runtime-activity').textContent = '等待 Codex 响应';
@@ -1507,6 +1585,7 @@
   }
 
   function scheduleEventRefresh(events = []) {
+    updateSessionStatusesFromEvents(events);
     const approvalChanged = events.some(event => event.method?.startsWith('remote/approval'));
     if (approvalChanged) loadApprovals().catch(error => showToast(error.message));
     const selected = state.sessions.find(session => session.id === state.selectedSessionId);
@@ -1517,6 +1596,7 @@
     const approvalEvent = relevant.method?.startsWith('remote/approval');
     const eventTime = Date.parse(relevant.timestamp || '');
     state.lastEventAt = !terminalTurn && !approvalEvent && Number.isFinite(eventTime) ? eventTime : 0;
+    renderSessionDrawer();
     clearTimeout(state.conversationRefreshTimer);
     scheduleConversationRefresh(60);
   }
@@ -1589,26 +1669,49 @@
   function openSessionDrawer() {
     if (state.drawerOpen) return;
     state.drawerOpen = true;
-    state.drawerReturnFocus = document.activeElement;
-    document.body.classList.add('drawer-open');
-    $('#session-drawer').setAttribute('aria-hidden', 'false');
-    $('#open-session-drawer').setAttribute('aria-expanded', 'true');
-    requestAnimationFrame(() => $('#close-session-drawer').focus({ preventScroll: true }));
+    const modal = drawerUsesModalOverlay();
+    state.drawerReturnFocus = modal ? document.activeElement : null;
+    storeDrawerOpenPreference(true);
+    syncSessionDrawerAccessibility();
+    if (modal) requestAnimationFrame(() => $('#close-session-drawer').focus({ preventScroll: true }));
   }
 
   function closeSessionDrawer({ restoreFocus = true } = {}) {
     if (!state.drawerOpen) return;
+    const modal = drawerUsesModalOverlay();
     state.drawerOpen = false;
-    document.body.classList.remove('drawer-open');
-    $('#session-drawer').setAttribute('aria-hidden', 'true');
-    $('#open-session-drawer').setAttribute('aria-expanded', 'false');
-    if (restoreFocus) {
+    storeDrawerOpenPreference(false);
+    syncSessionDrawerAccessibility();
+    if (restoreFocus && modal) {
       const target = state.drawerReturnFocus?.isConnected
         ? state.drawerReturnFocus
         : $('#open-session-drawer');
       target.focus({ preventScroll: true });
     }
     state.drawerReturnFocus = null;
+  }
+
+  function readDrawerOpenPreference() {
+    try { return localStorage.getItem(DRAWER_STATE_KEY) === 'true'; } catch { return false; }
+  }
+
+  function storeDrawerOpenPreference(open) {
+    try { localStorage.setItem(DRAWER_STATE_KEY, String(Boolean(open))); } catch {}
+  }
+
+  function drawerUsesModalOverlay() {
+    return matchMedia('(max-width: 760px)').matches;
+  }
+
+  function syncSessionDrawerAccessibility() {
+    const drawer = $('#session-drawer');
+    const modal = drawerUsesModalOverlay();
+    document.body.classList.toggle('drawer-open', state.drawerOpen);
+    drawer.setAttribute('role', modal ? 'dialog' : 'complementary');
+    drawer.setAttribute('aria-hidden', String(!state.drawerOpen));
+    if (modal && state.drawerOpen) drawer.setAttribute('aria-modal', 'true');
+    else drawer.removeAttribute('aria-modal');
+    $('#open-session-drawer').setAttribute('aria-expanded', String(state.drawerOpen));
   }
 
   function setupSessionDrawerGestures() {
@@ -1634,7 +1737,7 @@
         closeSessionDrawer();
         return;
       }
-      if (event.key !== 'Tab') return;
+      if (event.key !== 'Tab' || !drawerUsesModalOverlay()) return;
       const focusable = $$(
         '#session-drawer a[href], #session-drawer button:not([disabled]):not([hidden]), '
         + '#session-drawer input:not([disabled]), #session-drawer select:not([disabled]), '
@@ -1669,7 +1772,7 @@
     $('#conversation-title').textContent = state.currentView === 'devices'
       ? '配对设备'
       : (session?.name || '远程会话');
-    closeSessionDrawer();
+    if (drawerUsesModalOverlay()) closeSessionDrawer();
   }
 
   function setupInteractions() {
@@ -1684,6 +1787,7 @@
       tool.addEventListener('click', () => switchView(tool.dataset.view));
     });
     setupSessionDrawerGestures();
+    matchMedia('(max-width: 760px)').addEventListener('change', syncSessionDrawerAccessibility);
     $('#start-qr-scan').addEventListener('click', startQrScanner);
     $('#stop-qr-scan').addEventListener('click', stopQrScanner);
     $('#reset-pairing').addEventListener('click', resetPairing);
@@ -1792,6 +1896,8 @@
   async function initialize() {
     setupVisualViewport();
     renderRemoteTheme();
+    state.drawerOpen = readDrawerOpenPreference();
+    syncSessionDrawerAccessibility();
     setupInteractions();
     parsePairingLink();
     state.token = readToken();
