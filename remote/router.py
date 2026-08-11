@@ -31,6 +31,11 @@ def _turn_limit(parsed) -> int:
     return max(1, min(30, int(raw)))
 
 
+def _summary_only(parsed) -> bool:
+    raw = parse_qs(parsed.query).get("summary", ["0"])[0]
+    return str(raw).strip().lower() in {"1", "true", "yes"}
+
+
 class AdminRemoteApi:
     def __init__(
         self,
@@ -83,7 +88,12 @@ class AdminRemoteApi:
                 self.application.revoke_device(route[len(prefix):])
                 return RemoteResponse(HTTPStatus.NO_CONTENT, {})
             if method == "GET" and route == "/api/remote/sessions":
-                return RemoteResponse(HTTPStatus.OK, self.application.list_sessions())
+                sessions = (
+                    self.application.list_session_summaries()
+                    if _summary_only(parsed)
+                    else self.application.list_sessions()
+                )
+                return RemoteResponse(HTTPStatus.OK, sessions)
             if method == "GET" and route == "/api/remote/local-sessions":
                 query = parse_qs(parsed.query)
                 limit = max(1, min(100, int(query.get("limit", ["50"])[0])))
@@ -191,7 +201,12 @@ class RemoteHttpApi:
                     ),
                 )
             if method == "GET" and path == "/api/remote/sessions":
-                return RemoteResponse(HTTPStatus.OK, self.application.list_sessions())
+                sessions = (
+                    self.application.list_session_summaries()
+                    if _summary_only(parsed)
+                    else self.application.list_sessions()
+                )
+                return RemoteResponse(HTTPStatus.OK, sessions)
             session_prefix = "/api/remote/sessions/"
             if path.startswith(session_prefix):
                 remainder = path[len(session_prefix):]

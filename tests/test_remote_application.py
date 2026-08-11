@@ -240,6 +240,21 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertTrue(listed[0]["statusKnown"])
         self.assertEqual(self.adapter.read_thread_ids, [THREAD_ID])
 
+    def test_session_summary_list_returns_without_reading_codex(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+
+        listed = self.application.list_session_summaries()
+
+        self.assertEqual(
+            {key: listed[0][key] for key in synced},
+            synced,
+        )
+        self.assertFalse(listed[0]["statusKnown"])
+        self.assertEqual(listed[0]["latestTurnStatus"], "")
+        self.assertEqual(self.adapter.read_thread_ids, [])
+
     def test_session_list_marks_an_unreadable_status_as_unknown(self) -> None:
         self.adapter.read_thread_error = CodexAdapterError("temporarily unavailable")
         self.application.create_synced_session(

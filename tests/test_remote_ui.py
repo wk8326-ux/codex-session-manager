@@ -9,6 +9,59 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RemoteUiContractTests(unittest.TestCase):
+    def test_remote_pwa_has_a_native_app_loading_shell_and_session_lifeline(self) -> None:
+        html = (ROOT / "remote.html").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        worker = (ROOT / "service-worker.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="app-boot"', html)
+        self.assertIn('id="boot-status"', html)
+        self.assertIn('aria-label="会话生命线"', html)
+        self.assertIn('class="runtime-progress"', html)
+        self.assertIn('class="composer-tools"', html)
+        self.assertIn('function revealAppSurface', script)
+        self.assertIn('function renderWorkspaceLoading', script)
+        self.assertIn("document.body.classList.toggle('workspace-loading'", script)
+        self.assertIn(".app-boot", stylesheet)
+        self.assertIn(".runtime-strip.running .runtime-progress", stylesheet)
+        self.assertIn(".composer-tools", stylesheet)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
+        self.assertIn("remote.css?v=23", html)
+        self.assertIn("remote.js?v=23", html)
+        self.assertIn("remote.css?v=23", worker)
+        self.assertIn("remote.js?v=23", worker)
+
+    def test_mobile_session_navigation_does_not_open_the_keyboard(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("function releaseMessageFocus()", script)
+        self.assertIn("if (!drawerUsesModalOverlay()) $('#message-input').focus", script)
+        self.assertIn("if (document.visibilityState === 'hidden') releaseMessageFocus()", script)
+        self.assertNotIn("      input.focus();\n", script)
+
+    def test_messages_render_optimistically_and_block_duplicate_submits(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
+
+        self.assertIn("messageSending: false", script)
+        self.assertIn("function appendOutgoingMessage", script)
+        self.assertIn("function updateOutgoingMessage", script)
+        self.assertIn("正在送达", script)
+        self.assertIn("已送达，Codex 正在响应", script)
+        self.assertIn("if (state.messageSending)", script)
+        self.assertIn("/api/remote/sessions?summary=1", script)
+        self.assertIn("loadWorkspaceData({ includeStatuses: true })", script)
+        self.assertIn(".outgoing-delivery", stylesheet)
+        send_message_source = script[
+            script.index("async function sendMessage"):
+            script.index("function scheduleEventRefresh")
+        ]
+        self.assertLess(
+            send_message_source.index("const outgoing = appendOutgoingMessage"),
+            send_message_source.index("const result = await api"),
+        )
+
     def test_remote_page_has_stable_workspaces_and_mobile_controls(self) -> None:
         html = (ROOT / "remote.html").read_text(encoding="utf-8")
         sidebar = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
@@ -396,7 +449,7 @@ for (const item of cases) {
             self.assertIn(f'id="{element_id}"', html)
         self.assertIn('accept="image/png,image/jpeg,image/webp"', html)
         self.assertIn("function prepareScreenshot(file)", script)
-        self.assertIn("image: state.pendingImage?.dataUrl", script)
+        self.assertIn("image: pendingImage?.dataUrl", script)
         self.assertIn(".composer-row", stylesheet)
         self.assertIn(".attachment-preview", stylesheet)
 
@@ -706,9 +759,9 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=21', script)
-        self.assertIn('href="/remote.css?v=21"', html)
-        self.assertIn('/remote.js?v=21', script)
+        self.assertIn('/remote.css?v=23', script)
+        self.assertIn('href="/remote.css?v=23"', html)
+        self.assertIn('/remote.js?v=23', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
-  <meta name="theme-color" content="#e9eeeb">
+  <meta name="theme-color" content="#f4f8f6">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/assets/project-console-icon.png">
-  <link rel="stylesheet" href="/remote.css?v=21">
+  <link rel="stylesheet" href="/remote.css?v=23">
   <script>
     (() => {
       const key = 'localhost-project-console.theme';
@@ -26,6 +26,19 @@
 <body>
   <a class="skip-link" href="#remote-main">跳到远程会话内容</a>
   <div class="offline-banner" id="offline-banner" role="status" hidden>连接已中断，正在等待主机恢复</div>
+
+  <section class="app-boot" id="app-boot" role="status" aria-live="polite" aria-labelledby="boot-title">
+    <div class="boot-mark" aria-hidden="true">
+      <span class="boot-orbit"></span>
+      <img src="/assets/project-console-icon.png" alt="">
+    </div>
+    <div class="boot-copy">
+      <p>LOCAL PROJECT CONSOLE</p>
+      <h1 id="boot-title">远程会话</h1>
+      <span id="boot-status">正在连接你的工作台</span>
+    </div>
+    <div class="boot-progress" aria-hidden="true"><span></span></div>
+  </section>
 
   <section class="pair-screen" id="pair-screen" hidden aria-labelledby="pair-title">
     <div class="pair-brand"><img src="/assets/project-console-icon.png" alt=""><span>LOCAL PROJECT CONSOLE</span></div>
@@ -135,7 +148,7 @@
           <span class="status-badge stopped" id="conversation-status">未选择</span>
         </div>
         <button class="chat-header-button" id="refresh-button" type="button" title="立即刷新" aria-label="立即刷新">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/></svg>
         </button>
       </header>
 
@@ -145,13 +158,14 @@
 
       <section class="sessions-workspace view active" data-view-panel="sessions">
         <section class="conversation">
-          <section class="runtime-strip" id="runtime-strip">
+          <section class="runtime-strip" id="runtime-strip" aria-label="会话生命线">
             <span class="runtime-signal runtime-rotor" id="runtime-signal" aria-hidden="true"></span>
             <div class="runtime-copy">
               <strong id="runtime-activity" aria-live="polite">等待选择会话</strong>
               <small id="runtime-detail">选择后将持续同步 Codex 的最新活动</small>
             </div>
             <span class="runtime-metrics" id="runtime-metrics">未连接</span>
+            <span class="runtime-progress" aria-hidden="true"><span></span></span>
           </section>
           <section class="approval-tray" id="approval-tray" aria-labelledby="approval-title" aria-live="assertive" hidden>
             <span class="approval-mark" aria-hidden="true">!</span>
@@ -187,14 +201,20 @@
               <button class="remove-attachment" id="remove-attachment" type="button" aria-label="&#31227;&#38500;&#25130;&#22270;" title="&#31227;&#38500;&#25130;&#22270;">&times;</button>
             </div>
             <div class="composer-row">
-              <button class="attach-image" id="attach-image" type="button" aria-label="选择图片" title="选择图片" disabled>+</button>
-              <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-              <button class="capture-screen" id="capture-screen" type="button" aria-label="截取屏幕" title="截取屏幕" aria-busy="false" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></svg>
-              </button>
+              <div class="composer-tools">
+                <button class="attach-image" id="attach-image" type="button" aria-label="选择图片" title="选择图片" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                </button>
+                <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                <button class="capture-screen" id="capture-screen" type="button" aria-label="截取屏幕" title="截取屏幕" aria-busy="false" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></svg>
+                </button>
+              </div>
               <label class="sr-only" for="message-input">发送到当前 Codex 会话</label>
               <textarea id="message-input" rows="1" maxlength="20000" placeholder="发送消息到当前会话" disabled></textarea>
-              <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">↑</button>
+              <button class="send-button" id="send-button" type="submit" disabled aria-label="发送消息" title="发送消息">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
+              </button>
             </div>
           </form>
         </section>
@@ -303,6 +323,6 @@
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="/assets/vendor/qrcode.min.js"></script>
   <script src="/assets/vendor/jsQR.js?v=1" defer></script>
-  <script src="/remote.js?v=21" defer></script>
+  <script src="/remote.js?v=23" defer></script>
 </body>
 </html>

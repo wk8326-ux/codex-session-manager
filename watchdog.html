@@ -721,6 +721,9 @@
       });
       panels.forEach(panel => { panel.hidden = panel.id !== tab.getAttribute('aria-controls'); });
       if (focus) tab.focus();
+      refreshVisibleWatchdogData(tab.id).catch(() => {
+        /* The regular poll repairs transient tab refresh failures. */
+      });
     }
 
     function escapeHtml(value) {
@@ -1220,9 +1223,18 @@
       }
     }
 
+    async function refreshVisibleWatchdogData(tabId = null) {
+      const activeTabId = tabId || tabs.find(tab => tab.getAttribute('aria-selected') === 'true')?.id;
+      const requests = [refreshSessionsAndStatus(), refreshProjectSidebar()];
+      if (activeTabId === 'tab-runs') requests.push(refreshRuns());
+      if (activeTabId === 'tab-channels') requests.push(refreshChannels());
+      if (activeTabId === 'tab-rules') requests.push(refreshRules());
+      await Promise.all(requests);
+    }
+
     async function pollWatchdogOverview() {
       if (document.hidden) return;
-      try { await Promise.all([refreshSessionsAndStatus(), refreshProjectSidebar()]); }
+      try { await refreshVisibleWatchdogData(); }
       catch { /* Background polling stays silent; the next successful poll repairs state. */ }
     }
 
@@ -1544,6 +1556,9 @@
     });
 
     loadInitial();
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) pollWatchdogOverview();
+    });
     setInterval(pollWatchdogOverview, WATCHDOG_POLL_INTERVAL_MS);
     setInterval(updateSessionCountdowns, 1000);
   </script>

@@ -171,6 +171,22 @@ class WatchdogClientContractTests(unittest.TestCase):
         self.assertRegex(script, r"\bpollWatchdogOverview\b")
         self.assertNotRegex(script, r"setInterval\([^;]*(?:5_000|5000)[^;]*\)")
 
+    def test_background_poll_refreshes_the_visible_watchdog_tab(self) -> None:
+        script = self.read_html()
+
+        self.assertRegex(script, r"\brefreshVisibleWatchdogData\b")
+        self.assertRegex(script, r"(?s)tab-runs.{0,180}refreshRuns\(")
+        self.assertRegex(script, r"(?s)tab-channels.{0,180}refreshChannels\(")
+        self.assertRegex(script, r"(?s)tab-rules.{0,180}refreshRules\(")
+        self.assertRegex(
+            script,
+            r"addEventListener\(\s*['\"]visibilitychange['\"]",
+        )
+        self.assertRegex(
+            script,
+            r"(?s)function activateTab\([^)]*\).{0,700}refreshVisibleWatchdogData\(",
+        )
+
     def test_enabled_session_rows_show_live_next_check_countdown(self) -> None:
         html = self.read_html()
 

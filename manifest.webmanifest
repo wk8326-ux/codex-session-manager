@@ -5,8 +5,8 @@
   "start_url": "/remote",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#eef1ef",
-  "theme_color": "#2d715b",
+  "background_color": "#edf3f0",
+  "theme_color": "#276d56",
   "icons": [
     {
       "src": "/assets/project-console-icon.png",
@@ -16,4 +16,3 @@
     }
   ]
 }
-

@@ -114,6 +114,30 @@ class RemoteRouterTests(unittest.TestCase):
 
         self.assertEqual(response.status, 401)
 
+    def test_session_summary_route_skips_expensive_status_enrichment(self) -> None:
+        created = self.admin.dispatch(
+            "POST",
+            "/api/remote/synced-sessions",
+            {"name": "Remote Woxsheet", "threadId": THREAD_ID},
+        )
+        token = self.pair()
+
+        admin_list = self.admin.dispatch(
+            "GET", "/api/remote/sessions?summary=1", {}
+        )
+        remote_list = self.remote.dispatch(
+            "GET",
+            "/api/remote/sessions?summary=true",
+            {"Authorization": f"Bearer {token}"},
+            None,
+        )
+
+        self.assertEqual(admin_list.status, 200)
+        self.assertEqual(remote_list.status, 200)
+        self.assertEqual(admin_list.body[0]["id"], created.body["id"])
+        self.assertFalse(admin_list.body[0]["statusKnown"])
+        self.assertEqual(remote_list.body, admin_list.body)
+
     def test_native_region_capture_is_available_only_on_the_local_admin_api(self) -> None:
         response = self.admin.dispatch(
             "POST", "/api/remote/native-screenshot", {}

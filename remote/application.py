@@ -256,6 +256,20 @@ class RemoteApplication:
             )
         return enriched
 
+    def list_session_summaries(self) -> list[dict]:
+        return [
+            {
+                **self._session_summary(session),
+                "statusKnown": False,
+                "threadStatus": "",
+                "activeFlags": [],
+                "latestTurnStatus": "",
+                "latestTurnHasError": False,
+                "latestTurnHttpStatus": None,
+            }
+            for session in self.remote_store.list_synced_sessions()
+        ]
+
     def list_local_sessions(self, limit: int) -> list[dict]:
         try:
             snapshots = self.adapter.list_threads(limit=limit)
