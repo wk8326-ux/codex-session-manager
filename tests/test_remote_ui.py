@@ -27,10 +27,10 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn(".runtime-strip.running .runtime-progress", stylesheet)
         self.assertIn(".composer-tools", stylesheet)
         self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
-        self.assertIn("remote.css?v=23", html)
-        self.assertIn("remote.js?v=23", html)
-        self.assertIn("remote.css?v=23", worker)
-        self.assertIn("remote.js?v=23", worker)
+        self.assertIn("remote.css?v=24", html)
+        self.assertIn("remote.js?v=24", html)
+        self.assertIn("remote.css?v=24", worker)
+        self.assertIn("remote.js?v=24", worker)
 
     def test_mobile_session_navigation_does_not_open_the_keyboard(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -61,6 +61,42 @@ class RemoteUiContractTests(unittest.TestCase):
             send_message_source.index("const outgoing = appendOutgoingMessage"),
             send_message_source.index("const result = await api"),
         )
+
+    def test_overlapping_conversation_refresh_is_requeued(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        refresh_source = script[
+            script.index("async function refreshSelectedSession"):
+            script.index("async function selectSession")
+        ]
+
+        self.assertIn("conversationRefreshQueued: false", script)
+        self.assertRegex(
+            refresh_source,
+            r"conversationRequests\.has\(sessionId\)[^{]*\{[^}]*"
+            r"conversationRefreshQueued\s*=\s*true",
+        )
+        self.assertRegex(
+            refresh_source,
+            r"conversationRefreshQueued[^;]*;[^}]*scheduleConversationRefresh",
+        )
+
+    def test_stream_event_bursts_cannot_postpone_an_earlier_refresh(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        scheduler_source = script[
+            script.index("function scheduleConversationRefresh"):
+            script.index("function startConversationHeartbeat")
+        ]
+        event_source = script[
+            script.index("function scheduleEventRefresh"):
+            script.index("async function pollEvents")
+        ]
+
+        self.assertIn("conversationRefreshDueAt: 0", script)
+        self.assertIn("state.conversationRefreshDueAt <= dueAt", scheduler_source)
+        self.assertIn("scheduleConversationRefresh(60)", event_source)
+        self.assertNotIn("clearTimeout(state.conversationRefreshTimer)", event_source)
+        self.assertNotIn("cancelConversationRefresh()", event_source)
+        self.assertIn("remote-worker-reloaded-v28", script)
 
     def test_remote_page_has_stable_workspaces_and_mobile_controls(self) -> None:
         html = (ROOT / "remote.html").read_text(encoding="utf-8")
@@ -759,9 +795,9 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=23', script)
-        self.assertIn('href="/remote.css?v=23"', html)
-        self.assertIn('/remote.js?v=23', script)
+        self.assertIn('/remote.css?v=24', script)
+        self.assertIn('href="/remote.css?v=24"', html)
+        self.assertIn('/remote.js?v=24', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

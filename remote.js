@@ -15,6 +15,7 @@
   const ACTIVE_REFRESH_MS = 1200;
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
+  const CONVERSATION_HEARTBEAT_MS = 10000;
   const LIVE_ACTIVITY_GRACE_MS = 180000;
   const INITIAL_LIVE_TURN_MAX_AGE_MS = 7200000;
   const CONNECTION_FAILURE_THRESHOLD = 3;
@@ -54,6 +55,9 @@
     conversation: null,
     conversationSignature: '',
     conversationRefreshTimer: 0,
+    conversationRefreshDueAt: 0,
+    conversationRefreshQueued: false,
+    conversationHeartbeatTimer: 0,
     conversationLoadingTimer: 0,
     conversationSelectionVersion: 0,
     conversationCache: new Map(),
@@ -716,7 +720,7 @@
     } finally {
       state.approvalResolvingId = '';
       await loadApprovals().catch(error => showToast(error.message));
-      clearTimeout(state.conversationRefreshTimer);
+      cancelConversationRefresh();
       scheduleConversationRefresh(80);
     }
   }
@@ -819,7 +823,7 @@
   }
 
   function clearConversation() {
-    clearTimeout(state.conversationRefreshTimer);
+    cancelConversationRefresh();
     clearTimeout(state.conversationLoadingTimer);
     state.conversation = null;
     state.conversationSignature = '';
@@ -1580,10 +1584,36 @@
     return conversationStatus(state.conversation) === 'inProgress' ? ACTIVE_REFRESH_MS : IDLE_REFRESH_MS;
   }
 
+  function cancelConversationRefresh() {
+    cancelConversationRefresh();
+    state.conversationRefreshTimer = 0;
+    state.conversationRefreshDueAt = 0;
+  }
+
   function scheduleConversationRefresh(delay = refreshDelay()) {
-    clearTimeout(state.conversationRefreshTimer);
     if (!state.selectedSessionId) return;
-    state.conversationRefreshTimer = setTimeout(() => refreshSelectedSession(), delay);
+    const normalizedDelay = Math.max(0, Number(delay) || 0);
+    const dueAt = Date.now() + normalizedDelay;
+    if (
+      state.conversationRefreshTimer
+      && state.conversationRefreshDueAt
+      && state.conversationRefreshDueAt <= dueAt
+    ) return;
+    cancelConversationRefresh();
+    state.conversationRefreshDueAt = dueAt;
+    state.conversationRefreshTimer = setTimeout(() => {
+      state.conversationRefreshTimer = 0;
+      state.conversationRefreshDueAt = 0;
+      refreshSelectedSession();
+    }, normalizedDelay);
+  }
+
+  function startConversationHeartbeat() {
+    if (state.conversationHeartbeatTimer) return;
+    state.conversationHeartbeatTimer = setInterval(() => {
+      if (document.visibilityState === 'hidden' || !state.selectedSessionId) return;
+      refreshSelectedSession();
+    }, CONVERSATION_HEARTBEAT_MS);
   }
 
   function restoreCachedConversation(session) {
@@ -1600,7 +1630,10 @@
   async function refreshSelectedSession({ force = false, quiet = true } = {}) {
     if (!state.selectedSessionId) return;
     const sessionId = state.selectedSessionId;
-    if (state.conversationRequests.has(sessionId)) return;
+    if (state.conversationRequests.has(sessionId)) {
+      state.conversationRefreshQueued = true;
+      return;
+    }
     const selectionVersion = state.conversationSelectionVersion;
     state.conversationRequests.add(sessionId);
     if (!quiet) $('#sync-state').textContent = '读取会话中';
@@ -1657,7 +1690,13 @@
     } finally {
       state.conversationRequests.delete(sessionId);
       if (state.selectedSessionId) {
-        scheduleConversationRefresh(sessionId === state.selectedSessionId ? refreshDelay() : 80);
+        const refreshQueued = state.conversationRefreshQueued;
+        state.conversationRefreshQueued = false;
+        scheduleConversationRefresh(
+          refreshQueued && sessionId === state.selectedSessionId
+            ? 0
+            : (sessionId === state.selectedSessionId ? refreshDelay() : 80)
+        );
       }
     }
   }
@@ -2123,7 +2162,6 @@
       });
       $('#runtime-detail').textContent = '已送达，Codex 正在响应';
       showToast(result.delivery === 'steered' ? '消息已加入当前运行中的任务。' : '消息已启动新的任务轮次。');
-      clearTimeout(state.conversationRefreshTimer);
       scheduleConversationRefresh(150);
     } catch (error) {
       updateOutgoingMessage(outgoing.id, { status: 'failed' });
@@ -2157,7 +2195,6 @@
     const eventTime = Date.parse(relevant.timestamp || '');
     state.lastEventAt = !terminalTurn && !approvalEvent && Number.isFinite(eventTime) ? eventTime : 0;
     renderSessionDrawer();
-    clearTimeout(state.conversationRefreshTimer);
     scheduleConversationRefresh(60);
   }
 
@@ -2454,7 +2491,7 @@
       if (document.visibilityState === 'hidden') releaseMessageFocus();
       if (document.visibilityState === 'hidden') stopQrScanner();
       if (!state.selectedSessionId) return;
-      clearTimeout(state.conversationRefreshTimer);
+      cancelConversationRefresh();
       scheduleConversationRefresh(document.visibilityState === 'hidden' ? HIDDEN_REFRESH_MS : 80);
     });
   }
@@ -2475,6 +2512,7 @@
     try {
       await loadWorkspaceData();
       pollEvents();
+      startConversationHeartbeat();
     } catch (error) {
       if (!state.admin && error.authorizationFailed) showPairScreen(error.message);
       else {
@@ -2538,7 +2576,7 @@
     if ('serviceWorker' in navigator && window.isSecureContext) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (state.qrStream || state.pairingSecret || state.pendingToken) return;
-        const reloadKey = 'localhost-project-console.remote-worker-reloaded';
+        const reloadKey = 'localhost-project-console.remote-worker-reloaded-v28';
         if (sessionStorage.getItem(reloadKey)) return;
         sessionStorage.setItem(reloadKey, '1');
         location.reload();

@@ -68,6 +68,60 @@ REMOTE_HTTP_API: RemoteHttpApi | None = None
 RELAY_SETUP_API: RelaySetupApi | None = None
 
 
+class ConsoleInstanceLock:
+    """Hold one cross-process lock for the console, its event hub, and FRP child."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._handle = None
+
+    def acquire(self) -> None:
+        if self._handle is not None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        try:
+            if self.path.stat().st_size == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as error:
+            handle.close()
+            raise RuntimeError("Local Project Console is already running.") from error
+
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()).encode("ascii"))
+        handle.flush()
+        self._handle = handle
+
+    def release(self) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is None:
+            return
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 class NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -1096,49 +1150,69 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
 
 
-def run_console(base_path: Path = ROOT) -> None:
+def run_console(
+    base_path: Path = ROOT,
+    instance_lock: ConsoleInstanceLock | None = None,
+) -> None:
     global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API
-    LOG_DIR.mkdir(exist_ok=True)
-    runtime = create_console_runtime(base_path)
-    WATCHDOG_API = runtime.api
-    REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
-    REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
-    RELAY_SETUP_API = getattr(runtime, "relay_setup_api", None)
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    base_path = Path(base_path).resolve()
+    lock = instance_lock or ConsoleInstanceLock(
+        base_path / ".runtime" / "system-startup" / "console.lock"
+    )
+    lock.acquire()
+    runtime = None
+    server = None
     remote_server = None
     remote_thread = None
-    tunnel = getattr(runtime, "tunnel", None)
-    if REMOTE_HTTP_API is not None:
-        remote_server = ThreadingHTTPServer((REMOTE_HOST, REMOTE_PORT), RemoteHandler)
-        remote_thread = threading.Thread(
-            target=remote_server.serve_forever,
-            name="remote-workspace-http",
-            daemon=True,
-        )
-        remote_thread.start()
-    if tunnel is not None:
-        tunnel.start()
-    runtime.scheduler.start()
-    print(f"Local Project Console is running at http://{HOST}:{PORT}")
-    if remote_server is not None:
-        print(f"Remote workspace is listening on {REMOTE_HOST}:{REMOTE_PORT}")
+    tunnel = None
+    scheduler_started = False
     try:
+        LOG_DIR.mkdir(exist_ok=True)
+        runtime = create_console_runtime(base_path)
+        WATCHDOG_API = runtime.api
+        REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
+        REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
+        RELAY_SETUP_API = getattr(runtime, "relay_setup_api", None)
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+        if REMOTE_HTTP_API is not None:
+            remote_server = ThreadingHTTPServer(
+                (REMOTE_HOST, REMOTE_PORT), RemoteHandler
+            )
+            remote_thread = threading.Thread(
+                target=remote_server.serve_forever,
+                name="remote-workspace-http",
+                daemon=True,
+            )
+            remote_thread.start()
+        tunnel = getattr(runtime, "tunnel", None)
+        if tunnel is not None:
+            tunnel.start()
+        runtime.scheduler.start()
+        scheduler_started = True
+        print(f"Local Project Console is running at http://{HOST}:{PORT}")
+        if remote_server is not None:
+            print(f"Remote workspace is listening on {REMOTE_HOST}:{REMOTE_PORT}")
         server.serve_forever()
     finally:
-        runtime.scheduler.stop()
+        if scheduler_started and runtime is not None:
+            runtime.scheduler.stop()
         if tunnel is not None:
             tunnel.stop()
-        runtime.adapter.close()
+        if runtime is not None:
+            runtime.adapter.close()
         if remote_server is not None:
-            remote_server.shutdown()
+            if remote_thread is not None:
+                remote_server.shutdown()
             remote_server.server_close()
         if remote_thread is not None:
             remote_thread.join(timeout=2)
-        server.server_close()
+        if server is not None:
+            server.server_close()
         WATCHDOG_API = None
         REMOTE_ADMIN_API = None
         REMOTE_HTTP_API = None
         RELAY_SETUP_API = None
+        lock.release()
 
 
 if __name__ == "__main__":

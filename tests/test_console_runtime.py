@@ -8,6 +8,28 @@ import app
 
 
 class ConsoleRuntimeTests(unittest.TestCase):
+    class NoopInstanceLock:
+        def acquire(self) -> None:
+            return
+
+        def release(self) -> None:
+            return
+
+    def test_console_instance_lock_rejects_a_second_process(self) -> None:
+        with TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "console.lock"
+            first = app.ConsoleInstanceLock(lock_path)
+            second = app.ConsoleInstanceLock(lock_path)
+            first.acquire()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "already running"):
+                    second.acquire()
+            finally:
+                first.release()
+
+            second.acquire()
+            second.release()
+
     def test_codex_startup_failure_keeps_console_runtime_available(self) -> None:
         with TemporaryDirectory() as directory:
             with patch.object(app, "StdioJsonRpcClient", side_effect=OSError("missing")):
@@ -50,7 +72,7 @@ class ConsoleRuntimeTests(unittest.TestCase):
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
             self.assertRaises(RuntimeError),
         ):
-            app.run_console(Path("."))
+            app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
 
         self.assertEqual(
             events,
@@ -97,7 +119,7 @@ class ConsoleRuntimeTests(unittest.TestCase):
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
             self.assertRaises(RuntimeError),
         ):
-            app.run_console(Path("."))
+            app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
 
         self.assertEqual(
             events,
