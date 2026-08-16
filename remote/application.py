@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +22,7 @@ from .approvals import (
     RemoteApprovalBroker,
 )
 from .events import RemoteEventHub
-from .store import PairingRejected, RemoteStore
+from .store import MessageDeliveryConflict, PairingRejected, RemoteStore
 
 
 class RemoteApplicationError(RuntimeError):
@@ -41,6 +42,7 @@ _IMAGE_DATA_URL = re.compile(
     re.ASCII,
 )
 _MAX_IMAGE_BYTES = 1_200_000
+_CLIENT_MESSAGE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\Z", re.ASCII)
 
 
 def _validated_image_url(value: object) -> str | None:
@@ -376,19 +378,63 @@ class RemoteApplication:
         session = self._session(session_id)
         prompt = str(payload.get("message") or "").strip()
         image_url = _validated_image_url(payload.get("image"))
+        client_message_id = str(payload.get("clientMessageId") or "").strip()
+        if client_message_id and _CLIENT_MESSAGE_ID.fullmatch(client_message_id) is None:
+            raise RemoteValidationError("消息发送标识无效，请刷新页面后重试。")
         if len(prompt) > 20_000:
             raise RemoteValidationError("消息不能为空，且不能超过 20000 个字符。")
         if not prompt and not image_url:
             raise RemoteValidationError(
                 "\u8bf7\u8f93\u5165\u6d88\u606f\u6216\u6dfb\u52a0\u4e00\u5f20\u622a\u56fe\u3002"
             )
+        if client_message_id:
+            content_hash = hashlib.sha256(
+                (prompt + "\0" + (image_url or "")).encode("utf-8")
+            ).hexdigest()
+            try:
+                delivery = self.remote_store.claim_message_delivery(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    content_hash=content_hash,
+                )
+            except MessageDeliveryConflict as error:
+                raise RemoteValidationError(
+                    "同一消息标识不能用于不同内容，请刷新页面后重试。"
+                ) from error
+            if not delivery["claimed"]:
+                if delivery["state"] == "delivered" and delivery["result"]:
+                    return {**delivery["result"], "idempotentReplay": True}
+                return {
+                    "threadId": session["threadId"],
+                    "clientMessageId": client_message_id,
+                    "delivery": "confirming",
+                    "confirmationPending": True,
+                    "idempotentReplay": True,
+                }
         try:
             result = self.adapter.send_message(
                 session["threadId"], prompt, image_url=image_url
             )
         except CodexAdapterError as error:
+            if client_message_id:
+                self.remote_store.mark_message_delivery_uncertain(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                    error_message=str(error),
+                )
             raise RemoteApplicationError("消息未能由 Codex App Server 确认发送。") from error
-        return {**result, "threadId": session["threadId"]}
+        response = {
+            **result,
+            "threadId": session["threadId"],
+            "clientMessageId": client_message_id,
+        }
+        if client_message_id:
+            self.remote_store.complete_message_delivery(
+                session_id=session_id,
+                client_message_id=client_message_id,
+                result=response,
+            )
+        return response
 
     def list_projects(self) -> list[dict]:
         projects = self.project_provider()

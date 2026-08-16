@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 import sqlite3
 from contextlib import contextmanager
@@ -17,6 +18,10 @@ class RemoteStoreError(RuntimeError):
 
 class PairingRejected(RemoteStoreError):
     """A pairing secret is invalid, expired, or already used."""
+
+
+class MessageDeliveryConflict(RemoteStoreError):
+    """A client message ID was reused with different content."""
 
 
 def utc_now() -> str:
@@ -78,6 +83,19 @@ class RemoteStore:
                     name TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS remote_message_deliveries (
+                    session_id TEXT NOT NULL,
+                    client_message_id TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    result_json TEXT NOT NULL DEFAULT '',
+                    error_message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(session_id, client_message_id),
+                    FOREIGN KEY(session_id) REFERENCES remote_synced_sessions(id)
+                        ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS remote_approval_audit (
                     id TEXT PRIMARY KEY,
                     thread_id TEXT NOT NULL,
@@ -96,6 +114,8 @@ class RemoteStore:
                     ON remote_devices(revoked_at, last_seen_at);
                 CREATE INDEX IF NOT EXISTS remote_synced_sessions_created
                     ON remote_synced_sessions(created_at, name);
+                CREATE INDEX IF NOT EXISTS remote_message_deliveries_updated
+                    ON remote_message_deliveries(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS remote_approval_audit_resolved
                     ON remote_approval_audit(resolved_at DESC, id);
                 INSERT OR IGNORE INTO remote_settings(id, public_base_url)
@@ -273,6 +293,79 @@ class RemoteStore:
                 "DELETE FROM remote_synced_sessions WHERE id = ?", (session_id,)
             )
         return cursor.rowcount == 1
+
+    def claim_message_delivery(
+        self,
+        *,
+        session_id: str,
+        client_message_id: str,
+        content_hash: str,
+    ) -> dict:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT content_hash, state, result_json, error_message
+                   FROM remote_message_deliveries
+                   WHERE session_id = ? AND client_message_id = ?""",
+                (session_id, client_message_id),
+            ).fetchone()
+            if row is not None:
+                if row["content_hash"] != content_hash:
+                    raise MessageDeliveryConflict(
+                        "client message ID was reused with different content"
+                    )
+                result = json.loads(row["result_json"]) if row["result_json"] else None
+                return {
+                    "claimed": False,
+                    "state": row["state"],
+                    "result": result,
+                    "error": row["error_message"],
+                }
+            connection.execute(
+                """INSERT INTO remote_message_deliveries(
+                       session_id, client_message_id, content_hash, state,
+                       created_at, updated_at
+                   ) VALUES (?, ?, ?, 'pending', ?, ?)""",
+                (session_id, client_message_id, content_hash, now, now),
+            )
+        return {"claimed": True, "state": "pending", "result": None, "error": ""}
+
+    def complete_message_delivery(
+        self,
+        *,
+        session_id: str,
+        client_message_id: str,
+        result: dict,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE remote_message_deliveries
+                   SET state = 'delivered', result_json = ?, error_message = '',
+                       updated_at = ?
+                   WHERE session_id = ? AND client_message_id = ?""",
+                (
+                    json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    utc_now(),
+                    session_id,
+                    client_message_id,
+                ),
+            )
+
+    def mark_message_delivery_uncertain(
+        self,
+        *,
+        session_id: str,
+        client_message_id: str,
+        error_message: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE remote_message_deliveries
+                   SET state = 'uncertain', error_message = ?, updated_at = ?
+                   WHERE session_id = ? AND client_message_id = ?""",
+                (error_message[:500], utc_now(), session_id, client_message_id),
+            )
 
     def record_approval_audit(self, record: dict) -> None:
         with self._connect() as connection:

@@ -1205,7 +1205,8 @@
   }
 
   function outgoingMessageMatchesConversation(outgoing, detail, signature) {
-    if (outgoing.status !== 'delivered' || signature === outgoing.signatureAtSend) return false;
+    if (!['sending', 'confirming', 'delivered'].includes(outgoing.status)
+      || signature === outgoing.signatureAtSend) return false;
     const turns = detail?.turns || [];
     const candidates = outgoing.turnId
       ? turns.filter(turn => turn.id === outgoing.turnId)
@@ -1254,6 +1255,7 @@
       delivery.setAttribute('role', 'status');
       delivery.textContent = {
         sending: '正在送达',
+        confirming: '正在确认发送结果，请勿重复发送',
         delivered: '已送达，Codex 正在响应',
         failed: '发送失败，请重试',
       }[outgoing.status] || '正在送达';
@@ -1269,7 +1271,8 @@
       && outgoing.message === message
     ));
     const outgoing = {
-      id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      id: globalThis.crypto?.randomUUID?.()
+        || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       sessionId: state.selectedSessionId,
       message,
       image,
@@ -1280,6 +1283,65 @@
     state.outgoingMessages.push(outgoing);
     renderOutgoingMessages();
     return outgoing;
+  }
+
+  function sameOutgoingContent(outgoing, message, image) {
+    return outgoing.message === message
+      && Boolean(outgoing.image) === Boolean(image)
+      && (!image || outgoing.image?.dataUrl === image.dataUrl);
+  }
+
+  function hasUnconfirmedDuplicate(sessionId, message, image) {
+    return state.outgoingMessages.some(outgoing => (
+      outgoing.sessionId === sessionId
+      && ['sending', 'confirming'].includes(outgoing.status)
+      && sameOutgoingContent(outgoing, message, image)
+    ));
+  }
+
+  function messageDeliveryWasDefinitelyRejected(error) {
+    return Number.isInteger(error?.status)
+      && error.status >= 400
+      && error.status < 500
+      && ![408, 409, 425, 429].includes(error.status);
+  }
+
+  function scheduleOutgoingConfirmation(outgoingId, attempt = 0) {
+    const delays = [700, 1600, 3200, 6000];
+    const outgoing = state.outgoingMessages.find(item => item.id === outgoingId);
+    if (!outgoing || outgoing.status !== 'confirming' || attempt >= delays.length) return;
+    setTimeout(async () => {
+      const current = state.outgoingMessages.find(item => item.id === outgoingId);
+      if (!current || current.status !== 'confirming') return;
+      try {
+        const result = await api(
+          `/api/remote/sessions/${encodeURIComponent(current.sessionId)}/messages`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              message: current.message,
+              image: current.image?.dataUrl || null,
+              clientMessageId: current.id,
+            }),
+          },
+        );
+        if (result.confirmationPending) {
+          scheduleOutgoingConfirmation(outgoingId, attempt + 1);
+          return;
+        }
+        updateOutgoingMessage(outgoingId, {
+          status: 'delivered',
+          turnId: result.turnId || '',
+        });
+        if (current.sessionId === state.selectedSessionId) {
+          $('#runtime-detail').textContent = '已确认送达，Codex 正在响应';
+          showToast('消息已确认送达。');
+          scheduleConversationRefresh(80);
+        }
+      } catch {
+        scheduleOutgoingConfirmation(outgoingId, attempt + 1);
+      }
+    }, delays[attempt]);
   }
 
   function updateOutgoingMessage(outgoingId, updates) {
@@ -2128,6 +2190,11 @@
     const input = $('#message-input');
     const message = input.value.trim();
     if ((!message && !state.pendingImage) || !state.selectedSessionId) return;
+    if (hasUnconfirmedDuplicate(state.selectedSessionId, message, state.pendingImage)) {
+      showToast('这条消息仍在确认中，请勿重复发送。');
+      scheduleConversationRefresh(80);
+      return;
+    }
     state.messageSending = true;
     const sessionId = state.selectedSessionId;
     const pendingImage = state.pendingImage ? { ...state.pendingImage } : null;
@@ -2154,23 +2221,41 @@
     try {
       const result = await api(`/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ message, image: pendingImage?.dataUrl || null }),
+        body: JSON.stringify({
+          message,
+          image: pendingImage?.dataUrl || null,
+          clientMessageId: outgoing.id,
+        }),
       });
       updateOutgoingMessage(outgoing.id, {
-        status: 'delivered',
+        status: result.confirmationPending ? 'confirming' : 'delivered',
         turnId: result.turnId || '',
       });
-      $('#runtime-detail').textContent = '已送达，Codex 正在响应';
-      showToast(result.delivery === 'steered' ? '消息已加入当前运行中的任务。' : '消息已启动新的任务轮次。');
+      if (result.confirmationPending) {
+        $('#runtime-detail').textContent = '正在从会话记录确认发送结果';
+        showToast('发送结果正在确认，请勿重复发送。');
+        scheduleOutgoingConfirmation(outgoing.id);
+      } else {
+        $('#runtime-detail').textContent = '已送达，Codex 正在响应';
+        showToast(result.delivery === 'steered' ? '消息已加入当前运行中的任务。' : '消息已启动新的任务轮次。');
+      }
       scheduleConversationRefresh(150);
     } catch (error) {
-      updateOutgoingMessage(outgoing.id, { status: 'failed' });
-      if (!input.value) input.value = message;
-      if (!state.pendingImage && pendingImage) {
-        state.pendingImage = pendingImage;
-        renderPendingImage();
+      if (messageDeliveryWasDefinitelyRejected(error)) {
+        updateOutgoingMessage(outgoing.id, { status: 'failed' });
+        if (!input.value) input.value = message;
+        if (!state.pendingImage && pendingImage) {
+          state.pendingImage = pendingImage;
+          renderPendingImage();
+        }
+        showToast(error.message);
+      } else {
+        updateOutgoingMessage(outgoing.id, { status: 'confirming' });
+        $('#runtime-detail').textContent = '连接波动，正在从会话记录确认是否已送达';
+        showToast('连接有波动，正在确认发送结果，请勿重复发送。');
+        scheduleOutgoingConfirmation(outgoing.id);
+        scheduleConversationRefresh(80);
       }
-      showToast(error.message);
     } finally {
       state.messageSending = false;
       const disabled = !state.selectedSessionId;
@@ -2576,7 +2661,7 @@
     if ('serviceWorker' in navigator && window.isSecureContext) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (state.qrStream || state.pairingSecret || state.pendingToken) return;
-        const reloadKey = 'localhost-project-console.remote-worker-reloaded-v28';
+        const reloadKey = 'localhost-project-console.remote-worker-reloaded-v29';
         if (sessionStorage.getItem(reloadKey)) return;
         sessionStorage.setItem(reloadKey, '1');
         location.reload();

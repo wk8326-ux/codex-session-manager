@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from remote.store import PairingRejected, RemoteStore
+from remote.store import MessageDeliveryConflict, PairingRejected, RemoteStore
 
 
 class RemoteStoreTests(unittest.TestCase):
@@ -83,6 +83,40 @@ class RemoteStoreTests(unittest.TestCase):
 
         self.assertTrue(self.store.delete_synced_session(created["id"]))
         self.assertEqual(self.store.list_synced_sessions(), [])
+
+    def test_message_delivery_result_is_persistent_and_content_bound(self) -> None:
+        session = self.store.create_synced_session(
+            name="Woxsheet",
+            thread_id="00000000-0000-4000-8000-000000000001",
+        )
+        claimed = self.store.claim_message_delivery(
+            session_id=session["id"],
+            client_message_id="phone-message-1",
+            content_hash="content-a",
+        )
+        self.assertTrue(claimed["claimed"])
+        self.store.complete_message_delivery(
+            session_id=session["id"],
+            client_message_id="phone-message-1",
+            result={"turnId": "turn-1", "delivery": "started"},
+        )
+
+        reopened = RemoteStore(self.database)
+        replay = reopened.claim_message_delivery(
+            session_id=session["id"],
+            client_message_id="phone-message-1",
+            content_hash="content-a",
+        )
+
+        self.assertFalse(replay["claimed"])
+        self.assertEqual(replay["state"], "delivered")
+        self.assertEqual(replay["result"]["turnId"], "turn-1")
+        with self.assertRaises(MessageDeliveryConflict):
+            reopened.claim_message_delivery(
+                session_id=session["id"],
+                client_message_id="phone-message-1",
+                content_hash="content-b",
+            )
 
     def test_remote_approval_audit_excludes_command_content(self) -> None:
         self.store.record_approval_audit(

@@ -27,10 +27,10 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn(".runtime-strip.running .runtime-progress", stylesheet)
         self.assertIn(".composer-tools", stylesheet)
         self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
-        self.assertIn("remote.css?v=24", html)
-        self.assertIn("remote.js?v=24", html)
-        self.assertIn("remote.css?v=24", worker)
-        self.assertIn("remote.js?v=24", worker)
+        self.assertIn("remote.css?v=25", html)
+        self.assertIn("remote.js?v=25", html)
+        self.assertIn("remote.css?v=25", worker)
+        self.assertIn("remote.js?v=25", worker)
 
     def test_mobile_session_navigation_does_not_open_the_keyboard(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -49,7 +49,12 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn("function updateOutgoingMessage", script)
         self.assertIn("正在送达", script)
         self.assertIn("已送达，Codex 正在响应", script)
+        self.assertIn("正在确认发送结果", script)
         self.assertIn("if (state.messageSending)", script)
+        self.assertIn("clientMessageId", script)
+        self.assertIn("messageDeliveryWasDefinitelyRejected", script)
+        self.assertIn("hasUnconfirmedDuplicate", script)
+        self.assertIn("scheduleOutgoingConfirmation", script)
         self.assertIn("/api/remote/sessions?summary=1", script)
         self.assertIn("loadWorkspaceData({ includeStatuses: true })", script)
         self.assertIn(".outgoing-delivery", stylesheet)
@@ -61,6 +66,67 @@ class RemoteUiContractTests(unittest.TestCase):
             send_message_source.index("const outgoing = appendOutgoingMessage"),
             send_message_source.index("const result = await api"),
         )
+        catch_source = send_message_source[
+            send_message_source.index("} catch (error) {"):
+            send_message_source.index("} finally {")
+        ]
+        self.assertIn("status: 'confirming'", catch_source)
+        self.assertLess(
+            catch_source.index("messageDeliveryWasDefinitelyRejected(error)"),
+            catch_source.index("status: 'failed'"),
+        )
+        self.assertIn(".outgoing-delivery.confirming", stylesheet)
+
+    def test_confirmation_state_is_reconciled_when_the_message_reaches_codex(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  function outgoingMessageMatchesConversation")
+        end = script.index("\n  function renderOutgoingMessages", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const state = { outgoingMessages: [
+  { id: 'a', sessionId: 'session-1', message: 'hello', status: 'confirming', signatureAtSend: 'old', turnId: '' },
+  { id: 'b', sessionId: 'session-1', message: 'rejected', status: 'failed', signatureAtSend: 'old', turnId: '' },
+] };
+const context = { state };
+vm.createContext(context);
+vm.runInContext(`${source}; this.reconcile = reconcileOutgoingMessages;`, context);
+const detail = { turns: [{ id: 'turn-1', items: [{ type: 'userMessage', text: 'hello' }] }] };
+if (!context.reconcile(detail, 'session-1', 'new')) process.exit(1);
+if (state.outgoingMessages.length !== 1 || state.outgoingMessages[0].id !== 'b') process.exit(2);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_only_definite_client_rejections_are_reported_as_send_failures(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  function messageDeliveryWasDefinitelyRejected")
+        end = script.index("\n  function scheduleOutgoingConfirmation", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const context = {};
+vm.createContext(context);
+vm.runInContext(`${source}; this.rejected = messageDeliveryWasDefinitelyRejected;`, context);
+if (context.rejected(new Error('network'))) process.exit(1);
+if (context.rejected({ status: 502 })) process.exit(2);
+if (context.rejected({ status: 429 })) process.exit(3);
+if (!context.rejected({ status: 400 })) process.exit(4);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_overlapping_conversation_refresh_is_requeued(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -96,7 +162,7 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn("scheduleConversationRefresh(60)", event_source)
         self.assertNotIn("clearTimeout(state.conversationRefreshTimer)", event_source)
         self.assertNotIn("cancelConversationRefresh()", event_source)
-        self.assertIn("remote-worker-reloaded-v28", script)
+        self.assertIn("remote-worker-reloaded-v29", script)
 
     def test_remote_page_has_stable_workspaces_and_mobile_controls(self) -> None:
         html = (ROOT / "remote.html").read_text(encoding="utf-8")
@@ -795,9 +861,9 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=24', script)
-        self.assertIn('href="/remote.css?v=24"', html)
-        self.assertIn('/remote.js?v=24', script)
+        self.assertIn('/remote.css?v=25', script)
+        self.assertIn('href="/remote.css?v=25"', html)
+        self.assertIn('/remote.js?v=25', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

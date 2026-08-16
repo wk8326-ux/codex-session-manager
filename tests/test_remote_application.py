@@ -126,12 +126,47 @@ class RemoteApplicationTests(unittest.TestCase):
         synced = self.application.create_synced_session(
             {"name": "Woxsheet", "threadId": THREAD_ID}
         )
-        response = self.application.send_message(synced["id"], {"message": "继续"})
+        response = self.application.send_message(
+            synced["id"],
+            {"message": "继续", "clientMessageId": "phone-message-1"},
+        )
 
         self.assertEqual(response["threadId"], THREAD_ID)
+        self.assertEqual(response["clientMessageId"], "phone-message-1")
         self.assertEqual(self.adapter.sent, [(THREAD_ID, "继续", None)])
         with self.assertRaises(RemoteNotFound):
             self.application.send_message("unknown", {"message": "continue"})
+
+    def test_repeated_client_message_id_replays_result_without_sending_twice(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        payload = {"message": "只发送一次", "clientMessageId": "phone-message-retry"}
+
+        first = self.application.send_message(synced["id"], payload)
+        replay = self.application.send_message(synced["id"], payload)
+
+        self.assertEqual(first["turnId"], "turn-2")
+        self.assertEqual(replay["turnId"], "turn-2")
+        self.assertTrue(replay["idempotentReplay"])
+        self.assertEqual(self.adapter.sent, [(THREAD_ID, "只发送一次", None)])
+
+    def test_client_message_id_cannot_be_reused_for_different_content(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        self.application.send_message(
+            synced["id"],
+            {"message": "第一条", "clientMessageId": "phone-message-conflict"},
+        )
+
+        with self.assertRaises(RemoteValidationError):
+            self.application.send_message(
+                synced["id"],
+                {"message": "第二条", "clientMessageId": "phone-message-conflict"},
+            )
+
+        self.assertEqual(self.adapter.sent, [(THREAD_ID, "第一条", None)])
 
     def test_message_accepts_one_valid_screenshot_and_rejects_invalid_data(self) -> None:
         synced = self.application.create_synced_session(
