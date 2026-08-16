@@ -79,6 +79,14 @@ class HandlerWatchdogIsolationTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["counts"]["all"], 2)
         self.assertEqual(self.api.calls, [])
 
+    def test_health_endpoint_never_scans_projects_or_dispatches_watchdog(self) -> None:
+        with patch.object(app, "states_for", side_effect=AssertionError("slow scan")):
+            status, body = self.request("GET", "/api/health")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["service"], "local-project-console")
+        self.assertEqual(self.api.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

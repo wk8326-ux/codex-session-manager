@@ -146,6 +146,13 @@ class ProjectStateBatchTests(unittest.TestCase):
         self.assertEqual(active, {2048})
         check.assert_called_once_with(2048)
 
+    def test_multiple_managed_processes_use_only_targeted_pid_checks(self) -> None:
+        with patch("app.pid_is_running", side_effect=lambda pid: pid == 2048) as check:
+            active = running_pids(["2048", "4096", "2048"])
+
+        self.assertEqual(active, {2048})
+        self.assertEqual({call.args[0] for call in check.call_args_list}, {2048, 4096})
+
 
 class HandlerConnectionTests(unittest.TestCase):
     def test_client_disconnects_are_silent_and_close_the_connection(self) -> None:

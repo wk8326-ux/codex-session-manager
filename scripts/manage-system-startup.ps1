@@ -13,32 +13,37 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
 }
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $runnerPath = Join-Path $ProjectRoot 'scripts\run-console-service.ps1'
-$healthUrl = 'http://127.0.0.1:8765/api/shell/project-summary'
-$remoteHealthUrl = 'http://127.0.0.1:8766/remote'
+$healthUrl = 'http://127.0.0.1:8765/api/health'
 $consolePorts = @(8765, 8766)
 
 function Get-ConsoleListenerProcessIds {
-    $listeners = @(
-        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-            Where-Object { $_.LocalPort -in $consolePorts }
-    )
-    return @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
-}
-
-function Test-ConsoleListenerOwnership {
-    $owners = @(Get-ConsoleListenerProcessIds)
-    return $owners.Count -eq 1
+    $netstatPath = Join-Path $env:SystemRoot 'System32\netstat.exe'
+    $processIds = foreach ($line in (& $netstatPath -ano -p TCP)) {
+        $parts = @($line.Trim() -split '\s+')
+        if ($parts.Count -lt 5 -or $parts[0] -ne 'TCP' -or $parts[3] -ne 'LISTENING') {
+            continue
+        }
+        $localEndpoint = [string]$parts[1]
+        $separator = $localEndpoint.LastIndexOf(':')
+        if ($separator -lt 0) { continue }
+        $port = 0
+        $owner = 0
+        if (
+            [int]::TryParse($localEndpoint.Substring($separator + 1), [ref]$port) -and
+            $port -in $consolePorts -and
+            [int]::TryParse([string]$parts[-1], [ref]$owner)
+        ) {
+            $owner
+        }
+    }
+    return @($processIds | Select-Object -Unique)
 }
 
 function Test-ConsoleHealth {
     try {
-        $adminResponse = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
-        $remoteResponse = Invoke-WebRequest -UseBasicParsing -Uri $remoteHealthUrl -TimeoutSec 2
-        return (
-            $adminResponse.StatusCode -eq 200 -and
-            $remoteResponse.StatusCode -eq 200 -and
-            (Test-ConsoleListenerOwnership)
-        )
+        $curlPath = Join-Path $env:SystemRoot 'System32\curl.exe'
+        $response = & $curlPath --fail --silent --max-time 1 $healthUrl 2>$null
+        return $LASTEXITCODE -eq 0 -and [string]::Join('', @($response)).Contains('local-project-console')
     } catch {
         return $false
     }
@@ -54,10 +59,26 @@ function Stop-StrayConsoleProcesses {
         if ($commandLine -notmatch '(?i)(^|[\\/"\s])app\.py(["\s]|$)') {
             throw "Port 8765 or 8766 is held by another process (PID $processId); refusing to terminate it."
         }
-        & taskkill.exe /PID $processId /T /F | Out-Null
+        & taskkill.exe /PID $processId /T /F 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
             throw "Could not stop stale Local Project Console process $processId."
         }
+    }
+}
+
+function Test-ConsoleTaskExists {
+    & schtasks.exe /Query /TN $TaskName 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
+function Stop-ConsoleTaskFast {
+    & schtasks.exe /End /TN $TaskName 2>$null | Out-Null
+}
+
+function Start-ConsoleTaskFast {
+    & schtasks.exe /Run /TN $TaskName 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Scheduled task could not be started: $TaskName"
     }
 }
 
@@ -152,48 +173,34 @@ switch ($Action) {
         } | Format-List
     }
     'Start' {
-        $task = Get-ConsoleTask
-        if ($null -eq $task) { throw "Scheduled task is not installed: $TaskName" }
-        if ([string]$task.State -eq 'Running' -and (Test-ConsoleHealth)) {
+        if (Test-ConsoleHealth) {
             Write-Host '[LPC] Console is already running at http://127.0.0.1:8765/'
             break
         }
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        if (-not (Wait-ConsoleTaskState -Expected 'Ready' -TimeoutSeconds 10)) {
-            throw 'The scheduled task did not become ready before startup.'
-        }
-        Start-Sleep -Milliseconds 500
+        if (-not (Test-ConsoleTaskExists)) { throw "Scheduled task is not installed: $TaskName" }
+        Stop-ConsoleTaskFast
+        Start-Sleep -Milliseconds 200
         Stop-StrayConsoleProcesses
-        if (-not (Wait-ConsoleHealth -Expected $false -TimeoutSeconds 10)) {
+        if (-not (Wait-ConsoleHealth -Expected $false -TimeoutSeconds 5)) {
             throw 'The previous console instance did not stop cleanly.'
         }
-        Start-ScheduledTask -TaskName $TaskName
-        if (-not (Wait-ConsoleTaskState -Expected 'Running' -TimeoutSeconds 10)) {
-            throw 'The scheduled task did not enter the running state.'
-        }
-        if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 30)) {
-            throw 'The console did not become healthy within 30 seconds. Check .runtime\system-startup\console-service.log.'
+        Start-ConsoleTaskFast
+        if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 15)) {
+            throw 'The console did not become healthy within 15 seconds. Check .runtime\system-startup\console-service.log.'
         }
         Write-Host '[LPC] Console started and is healthy at http://127.0.0.1:8765/'
     }
     'Restart' {
-        $task = Get-ConsoleTask
-        if ($null -eq $task) { throw "Scheduled task is not installed: $TaskName" }
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        if (-not (Wait-ConsoleTaskState -Expected 'Ready' -TimeoutSeconds 10)) {
-            throw 'The scheduled task did not become ready before restart.'
-        }
-        Start-Sleep -Milliseconds 500
+        if (-not (Test-ConsoleTaskExists)) { throw "Scheduled task is not installed: $TaskName" }
+        Stop-ConsoleTaskFast
+        Start-Sleep -Milliseconds 200
         Stop-StrayConsoleProcesses
-        if (-not (Wait-ConsoleHealth -Expected $false -TimeoutSeconds 10)) {
+        if (-not (Wait-ConsoleHealth -Expected $false -TimeoutSeconds 5)) {
             throw 'The previous console instance did not stop cleanly.'
         }
-        Start-ScheduledTask -TaskName $TaskName
-        if (-not (Wait-ConsoleTaskState -Expected 'Running' -TimeoutSeconds 10)) {
-            throw 'The scheduled task did not enter the running state.'
-        }
-        if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 30)) {
-            throw 'The console did not become healthy within 30 seconds. Check .runtime\system-startup\console-service.log.'
+        Start-ConsoleTaskFast
+        if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 15)) {
+            throw 'The console did not become healthy within 15 seconds. Check .runtime\system-startup\console-service.log.'
         }
         Write-Host '[LPC] Console restarted and is healthy at http://127.0.0.1:8765/'
     }

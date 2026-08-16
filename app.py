@@ -6,7 +6,6 @@ Open:     http://127.0.0.1:8765
 
 from __future__ import annotations
 
-import csv
 import json
 import os
 import socket
@@ -25,29 +24,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
-from remote.application import RemoteApplication
-from remote.approvals import RemoteApprovalBroker
-from remote.events import RemoteEventHub
-from remote.native_capture import FlameshotRegionCapture
-from remote.router import AdminRemoteApi, RemoteHttpApi, RemoteResponse
-from remote.setup import RelaySetupApi, RelaySetupService
-from remote.store import RemoteStore
-from remote.tunnel import FrpTunnelManager
-
-from watchdog.application import WatchdogApplication
-from watchdog.channels import probe_channel
-from watchdog.codex_adapter import (
-    CodexAdapterError,
-    CodexAppServerAdapter,
-    StdioJsonRpcClient,
-)
-from watchdog.http_api import ApiResponse, WatchdogHttpApi
-from watchdog.scheduler import WatchdogScheduler
-from watchdog.secrets import DpapiSecretStore
-from watchdog.service import WatchdogService
-from watchdog.store import WatchdogStore
-
-
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "projects.json"
 LOG_DIR = ROOT / "logs"
@@ -62,10 +38,13 @@ WEBSITE_REFRESHING: set[str] = set()
 WEBSITE_CACHE_TTL = 15.0
 WEBSITE_TIMEOUT = 3.0
 WEBSITE_FAILURE_THRESHOLD = 3
-WATCHDOG_API: WatchdogHttpApi | None = None
-REMOTE_ADMIN_API: AdminRemoteApi | None = None
-REMOTE_HTTP_API: RemoteHttpApi | None = None
-RELAY_SETUP_API: RelaySetupApi | None = None
+WATCHDOG_API: object | None = None
+REMOTE_ADMIN_API: object | None = None
+REMOTE_HTTP_API: object | None = None
+RELAY_SETUP_API: object | None = None
+
+# Kept patchable for startup-failure tests; the real class is imported lazily.
+StdioJsonRpcClient = None
 
 
 class ConsoleInstanceLock:
@@ -346,7 +325,7 @@ def port_is_open(value: object) -> bool:
     except (TypeError, ValueError):
         return False
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
-        connection.settimeout(0.3)
+        connection.settimeout(0.1)
         return connection.connect_ex((HOST, port)) == 0
 
 
@@ -357,14 +336,22 @@ def pid_is_running(value: object) -> bool:
         return False
     if pid < 1:
         return False
-    result = subprocess.run(
-        ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-        capture_output=True,
-        text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        check=False,
-    )
-    return str(pid) in result.stdout
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information, False, pid
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def running_pids(values: list[object]) -> set[int]:
@@ -378,27 +365,7 @@ def running_pids(values: list[object]) -> set[int]:
             requested.add(pid)
     if not requested:
         return set()
-    if len(requested) == 1:
-        pid = next(iter(requested))
-        return {pid} if pid_is_running(pid) else set()
-    result = subprocess.run(
-        ["tasklist", "/FO", "CSV", "/NH"],
-        capture_output=True,
-        text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        check=False,
-    )
-    active: set[int] = set()
-    for row in csv.reader(result.stdout.splitlines()):
-        if len(row) < 2:
-            continue
-        try:
-            pid = int(row[1].replace(",", ""))
-        except ValueError:
-            continue
-        if pid in requested:
-            active.add(pid)
-    return active
+    return {pid for pid in requested if pid_is_running(pid)}
 
 
 def state_for(
@@ -583,32 +550,38 @@ def stop_project(project: dict) -> tuple[bool, str]:
 
 @dataclass
 class ConsoleRuntime:
-    api: WatchdogHttpApi
-    scheduler: WatchdogScheduler
+    api: object
+    scheduler: object
     adapter: object
-    remote_admin_api: AdminRemoteApi
-    remote_http_api: RemoteHttpApi
-    tunnel: FrpTunnelManager
-    relay_setup_api: RelaySetupApi
+    remote_admin_api: object
+    remote_http_api: object
+    tunnel: object
+    relay_setup_api: object
 
 
 class UnavailableCodexAdapter:
+    def __init__(self, error_type: type[Exception] = RuntimeError) -> None:
+        self._error_type = error_type
+
+    def _unavailable(self) -> None:
+        raise self._error_type("Codex App Server is unavailable")
+
     def read_thread(self, thread_id: str):
-        raise CodexAdapterError("Codex App Server is unavailable")
+        self._unavailable()
 
     def list_threads(self, limit: int = 5):
-        raise CodexAdapterError("Codex App Server is unavailable")
+        self._unavailable()
 
     def start_turn(self, thread_id: str, prompt: str) -> str:
-        raise CodexAdapterError("Codex App Server is unavailable")
+        self._unavailable()
 
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
-        raise CodexAdapterError("Codex App Server is unavailable")
+        self._unavailable()
 
     def send_message(
         self, thread_id: str, prompt: str, image_url: str | None = None
     ) -> dict:
-        raise CodexAdapterError("Codex App Server is unavailable")
+        self._unavailable()
 
     def close(self) -> None:
         return
@@ -634,6 +607,27 @@ def _remote_projects() -> list[dict]:
 
 
 def create_console_runtime(base_path: Path) -> ConsoleRuntime:
+    from remote.application import RemoteApplication
+    from remote.approvals import RemoteApprovalBroker
+    from remote.events import RemoteEventHub
+    from remote.native_capture import FlameshotRegionCapture
+    from remote.router import AdminRemoteApi, RemoteHttpApi
+    from remote.setup import RelaySetupApi, RelaySetupService
+    from remote.store import RemoteStore
+    from remote.tunnel import FrpTunnelManager
+    from watchdog.application import WatchdogApplication
+    from watchdog.channels import probe_channel
+    from watchdog.codex_adapter import (
+        CodexAdapterError,
+        CodexAppServerAdapter,
+        StdioJsonRpcClient as DefaultStdioJsonRpcClient,
+    )
+    from watchdog.http_api import WatchdogHttpApi
+    from watchdog.scheduler import WatchdogScheduler
+    from watchdog.secrets import DpapiSecretStore
+    from watchdog.service import WatchdogService
+    from watchdog.store import WatchdogStore
+
     store = WatchdogStore(base_path / "watchdog.db")
     store.initialize()
     secrets = DpapiSecretStore(
@@ -655,7 +649,8 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     )
     codex_connected = True
     try:
-        client = StdioJsonRpcClient(
+        client_factory = StdioJsonRpcClient or DefaultStdioJsonRpcClient
+        client = client_factory(
             approval_policy=lambda thread_id, _turn_id: bool(
                 store.get_settings()["resumeActionsEnabled"]
                 and store.unattended_approvals_enabled(thread_id)
@@ -664,7 +659,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
         )
         adapter: object = CodexAppServerAdapter(client)
     except Exception:
-        adapter = UnavailableCodexAdapter()
+        adapter = UnavailableCodexAdapter(CodexAdapterError)
         codex_connected = False
     monitor_service = WatchdogService(
         store, secrets, probe_channel, adapter
@@ -825,6 +820,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            self.respond_json(
+                HTTPStatus.OK,
+                {
+                    "service": "local-project-console",
+                    "ready": WATCHDOG_API is not None,
+                },
+            )
+            return
         if self.dispatch_watchdog("GET", parsed, None):
             return
         if self.dispatch_remote_admin("GET", self.path, None):
@@ -1162,18 +1166,36 @@ def run_console(
     lock.acquire()
     runtime = None
     server = None
+    server_thread = None
+    server_errors: list[BaseException] = []
     remote_server = None
     remote_thread = None
     tunnel = None
     scheduler_started = False
     try:
         LOG_DIR.mkdir(exist_ok=True)
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+
+        def serve_admin() -> None:
+            try:
+                server.serve_forever()
+            except BaseException as error:
+                server_errors.append(error)
+
+        server_thread = threading.Thread(
+            target=serve_admin,
+            name="project-console-http",
+            daemon=True,
+        )
+        server_thread.start()
+        print(f"Local Project Console shell is available at http://{HOST}:{PORT}")
         runtime = create_console_runtime(base_path)
+        if server_errors:
+            raise server_errors[0]
         WATCHDOG_API = runtime.api
         REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
         REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
         RELAY_SETUP_API = getattr(runtime, "relay_setup_api", None)
-        server = ThreadingHTTPServer((HOST, PORT), Handler)
         if REMOTE_HTTP_API is not None:
             remote_server = ThreadingHTTPServer(
                 (REMOTE_HOST, REMOTE_PORT), RemoteHandler
@@ -1189,10 +1211,13 @@ def run_console(
             tunnel.start()
         runtime.scheduler.start()
         scheduler_started = True
-        print(f"Local Project Console is running at http://{HOST}:{PORT}")
+        print(f"Local Project Console runtime is ready at http://{HOST}:{PORT}")
         if remote_server is not None:
             print(f"Remote workspace is listening on {REMOTE_HOST}:{REMOTE_PORT}")
-        server.serve_forever()
+        while server_thread.is_alive():
+            server_thread.join(timeout=1)
+        if server_errors:
+            raise server_errors[0]
     finally:
         if scheduler_started and runtime is not None:
             runtime.scheduler.stop()
@@ -1207,7 +1232,11 @@ def run_console(
         if remote_thread is not None:
             remote_thread.join(timeout=2)
         if server is not None:
+            if server_thread is not None and server_thread.is_alive():
+                server.shutdown()
             server.server_close()
+        if server_thread is not None:
+            server_thread.join(timeout=2)
         WATCHDOG_API = None
         REMOTE_ADMIN_API = None
         REMOTE_HTTP_API = None
