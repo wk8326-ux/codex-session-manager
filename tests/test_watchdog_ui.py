@@ -13,7 +13,7 @@ class WatchdogUiTests(unittest.TestCase):
                 html = (ROOT / filename).read_text(encoding="utf-8")
 
                 self.assertNotIn('id="theme-toggle"', html)
-                self.assertEqual(html.count('src="/assets/console-sidebar.js?v=9"'), 1)
+                self.assertEqual(html.count('src="/assets/console-sidebar.js?v=10"'), 1)
                 self.assertIn("prefers-color-scheme: dark", html)
                 self.assertIn("localhost-project-console.theme", html)
                 self.assertLess(
@@ -24,7 +24,7 @@ class WatchdogUiTests(unittest.TestCase):
 
         remote_html = (ROOT / "remote.html").read_text(encoding="utf-8")
         remote_script = (ROOT / "remote.js").read_text(encoding="utf-8")
-        self.assertNotIn('src="/assets/console-sidebar.js?v=9"', remote_html)
+        self.assertNotIn('src="/assets/console-sidebar.js?v=10"', remote_html)
         self.assertIn('id="remote-theme-toggle"', remote_html)
         self.assertIn("localhost-project-console.theme", remote_script)
 
@@ -92,6 +92,9 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn(".sidebar[data-console-sidebar]", sidebar_css)
         self.assertIn("/api/shell/project-summary", sidebar_script)
         self.assertIn("setInterval(refreshProjectSummary, 5000)", sidebar_script)
+        self.assertIn("if (active !== 'projects')", sidebar_script)
+        project_page = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("window.consoleSidebar?.setProjectSummary", project_page)
         self.assertIn("sessionStorage.setItem(SUMMARY_KEY", sidebar_script)
         self.assertIn("top: 50%", sidebar_css)
         self.assertIn("place-items: center", sidebar_css)

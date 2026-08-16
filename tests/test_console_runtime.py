@@ -1,5 +1,4 @@
 import unittest
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -43,19 +42,15 @@ class ConsoleRuntimeTests(unittest.TestCase):
             self.assertFalse(response.body["codexConnected"])
             runtime.adapter.close()
 
-    def test_http_shell_begins_serving_before_runtime_initialization(self) -> None:
+    def test_project_console_never_waits_for_auxiliary_runtime(self) -> None:
         events: list[str] = []
 
-        class Scheduler:
+        class Supervisor:
             def start(self) -> None:
-                events.append("scheduler-start")
+                events.append("auxiliary-start")
 
             def stop(self) -> None:
-                events.append("scheduler-stop")
-
-        class Adapter:
-            def close(self) -> None:
-                events.append("adapter-close")
+                events.append("auxiliary-stop")
 
         class Server:
             def serve_forever(self) -> None:
@@ -64,35 +59,35 @@ class ConsoleRuntimeTests(unittest.TestCase):
             def server_close(self) -> None:
                 events.append("server-close")
 
-        runtime = SimpleNamespace(api=object(), scheduler=Scheduler(), adapter=Adapter())
-
-        def create_runtime(_path: Path):
-            if "http-serve" not in events:
-                raise AssertionError("runtime initialized before the HTTP shell")
-            events.append("runtime-create")
-            return runtime
-
         with (
-            patch.object(app, "create_console_runtime", side_effect=create_runtime),
+            patch.object(
+                app,
+                "create_console_runtime",
+                side_effect=AssertionError("core must not initialize auxiliary runtime"),
+            ),
+            patch.object(
+                app,
+                "AuxiliaryRuntimeSupervisor",
+                return_value=Supervisor(),
+            ),
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
         ):
             app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
 
-        self.assertLess(events.index("http-serve"), events.index("runtime-create"))
+        self.assertEqual(
+            events,
+            ["auxiliary-start", "http-serve", "auxiliary-stop", "server-close"],
+        )
 
     def test_early_server_failure_does_not_start_background_resources(self) -> None:
         events: list[str] = []
 
-        class Scheduler:
+        class Supervisor:
             def start(self) -> None:
-                events.append("start")
+                events.append("auxiliary-start")
 
             def stop(self) -> None:
-                events.append("stop")
-
-        class Adapter:
-            def close(self) -> None:
-                events.append("adapter-close")
+                events.append("auxiliary-stop")
 
         class Server:
             def serve_forever(self) -> None:
@@ -102,19 +97,23 @@ class ConsoleRuntimeTests(unittest.TestCase):
             def server_close(self) -> None:
                 events.append("server-close")
 
-        runtime = SimpleNamespace(
-            api=object(), scheduler=Scheduler(), adapter=Adapter()
-        )
         with (
-            patch.object(app, "create_console_runtime", return_value=runtime),
+            patch.object(
+                app,
+                "AuxiliaryRuntimeSupervisor",
+                return_value=Supervisor(),
+            ),
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
             self.assertRaises(RuntimeError),
         ):
             app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
 
-        self.assertEqual(events, ["serve", "adapter-close", "server-close"])
+        self.assertEqual(
+            events,
+            ["auxiliary-start", "serve", "auxiliary-stop", "server-close"],
+        )
 
-    def test_console_owns_optional_tunnel_lifecycle(self) -> None:
+    def test_auxiliary_runtime_owns_optional_tunnel_lifecycle(self) -> None:
         events: list[str] = []
 
         class Scheduler:
@@ -138,9 +137,6 @@ class ConsoleRuntimeTests(unittest.TestCase):
         class Server:
             def serve_forever(self) -> None:
                 events.append("serve")
-                deadline = time.monotonic() + 2
-                while "scheduler-start" not in events and time.monotonic() < deadline:
-                    time.sleep(0.01)
                 raise RuntimeError("server failed")
 
             def server_close(self) -> None:
@@ -157,14 +153,16 @@ class ConsoleRuntimeTests(unittest.TestCase):
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
             self.assertRaises(RuntimeError),
         ):
-            app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
+            app.run_auxiliary_runtime(
+                Path("."), instance_lock=self.NoopInstanceLock()
+            )
 
         self.assertEqual(
             events,
             [
-                "serve",
                 "tunnel-start",
                 "scheduler-start",
+                "serve",
                 "scheduler-stop",
                 "tunnel-stop",
                 "adapter-close",

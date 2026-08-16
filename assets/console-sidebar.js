@@ -116,6 +116,8 @@
 
   window.consoleSidebar = { setProjectSummary };
   host.dataset.ready = 'true';
-  refreshProjectSummary();
-  setInterval(refreshProjectSummary, 5000);
+  if (active !== 'projects') {
+    refreshProjectSummary();
+    setInterval(refreshProjectSummary, 5000);
+  }
 })();

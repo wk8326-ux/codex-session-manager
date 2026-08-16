@@ -13,6 +13,9 @@ class SystemStartupContractTests(unittest.TestCase):
 
         self.assertIn("New-ScheduledTaskTrigger -AtLogOn", script)
         self.assertIn("-LogonType Interactive", script)
+        self.assertIn("function Get-PythonServiceExecutable", script)
+        self.assertIn("New-ScheduledTaskAction", script)
+        self.assertIn("--service", script)
         self.assertIn("-RestartCount 999", script)
         self.assertIn("-RestartInterval (New-TimeSpan -Minutes 1)", script)
         self.assertIn("-StartWhenAvailable", script)
@@ -26,7 +29,7 @@ class SystemStartupContractTests(unittest.TestCase):
         )
 
         for contract in (
-            "$consolePorts = @(8765, 8766)",
+            "$consolePorts = @(8765, 8766, 8767)",
             "function Get-ConsoleListenerProcessIds",
             "netstat.exe",
             "function Stop-StrayConsoleProcesses",
@@ -40,18 +43,12 @@ class SystemStartupContractTests(unittest.TestCase):
             restart.index("Start-ConsoleTaskFast"),
         )
 
-    def test_service_runner_uses_project_local_runtime_logs(self) -> None:
-        script = (ROOT / "scripts" / "run-console-service.ps1").read_text(encoding="utf-8")
+    def test_service_mode_uses_project_local_runtime_logs(self) -> None:
+        application = (ROOT / "app.py").read_text(encoding="utf-8")
 
-        self.assertIn(".runtime\\system-startup", script)
-        self.assertIn("console-service.log", script)
-        self.assertIn("Get-Command py.exe", script)
-        self.assertIn("Get-Command python.exe", script)
-        self.assertIn("'app.py'", script)
-        self.assertIn("Out-File -LiteralPath $logPath -Append -Encoding utf8", script)
-        self.assertIn("while ($true)", script)
-        self.assertIn("Start-Sleep -Seconds 3", script)
-        self.assertIn("restarting in 3 seconds", script)
+        self.assertIn("--service", application)
+        self.assertIn("console-service.log", application)
+        self.assertIn("console-service.previous.log", application)
 
     def test_one_click_installers_delegate_to_the_management_script(self) -> None:
         install = (ROOT / "install-system-startup.bat").read_text(encoding="utf-8")
@@ -62,18 +59,21 @@ class SystemStartupContractTests(unittest.TestCase):
         self.assertIn("manage-system-startup.ps1", uninstall)
         self.assertIn("-Action Uninstall", uninstall)
 
-    def test_desktop_launcher_uses_the_system_task_instead_of_starting_python(self) -> None:
+    def test_desktop_launcher_uses_the_fast_python_launcher(self) -> None:
         launcher = (ROOT / "start-console.bat").read_text(encoding="utf-8")
+        fast_launcher = (ROOT / "scripts" / "launch_console.py").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("manage-system-startup.ps1", launcher)
-        self.assertIn("-Action Start", launcher)
-        self.assertIn("/api/health", launcher)
-        self.assertIn("findstr.exe", launcher)
-        self.assertIn("http://127.0.0.1:8765/", launcher)
+        self.assertIn("launch_console.py", launcher)
+        self.assertIn("py.exe -3", launcher)
         self.assertNotIn("py app.py", launcher)
+        self.assertIn("console_is_ready", fast_launcher)
+        self.assertIn("schtasks.exe", fast_launcher)
+        self.assertIn("wait_until_ready(1.25)", fast_launcher)
         self.assertLess(
-            launcher.index("/api/health"),
-            launcher.index("manage-system-startup.ps1"),
+            fast_launcher.index("start_scheduled_task()"),
+            fast_launcher.index("recover_with_management_script()"),
         )
 
     def test_start_action_checks_lightweight_health_before_loading_task_scheduler(self) -> None:

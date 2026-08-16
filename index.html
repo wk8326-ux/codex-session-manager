@@ -398,7 +398,7 @@
   <a class="skip-link" href="#main-content">跳到项目列表</a>
   <div class="app-shell">
     <aside class="sidebar" data-console-sidebar data-active="projects" aria-label="控制台主导航"></aside>
-    <script src="/assets/console-sidebar.js?v=9"></script>
+    <script src="/assets/console-sidebar.js?v=10"></script>
 
     <main class="workspace" id="main-content">
       <div class="workspace-inner">
@@ -556,9 +556,10 @@
       const projects = currentProjects();
       const local = state.projects.filter(project => project.mode !== 'external');
       const running = local.filter(project => project.state === 'running').length;
-      $('#running-count').textContent = running;
-      $('#local-count').textContent = local.length;
-      $('#running-track').style.width = `${local.length ? Math.round(running / local.length * 100) : 0}%`;
+      window.consoleSidebar?.setProjectSummary({
+        runningCount: running,
+        localCount: local.length,
+      });
       $('#visible-count').textContent = `${projects.length} 项`;
       $('#projects').innerHTML = projects.length ? projects.map(projectRow).join('') : `<li class="empty-state">${icon('terminal')}<h3>还没有登记项目</h3><p>添加一个项目后，它会出现在这里。</p></li>`;
       $('#projects').setAttribute('aria-busy', 'false');

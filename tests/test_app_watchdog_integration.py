@@ -80,12 +80,33 @@ class HandlerWatchdogIsolationTests(unittest.TestCase):
         self.assertEqual(self.api.calls, [])
 
     def test_health_endpoint_never_scans_projects_or_dispatches_watchdog(self) -> None:
-        with patch.object(app, "states_for", side_effect=AssertionError("slow scan")):
+        with (
+            patch.object(app, "states_for", side_effect=AssertionError("slow scan")),
+            patch.object(app, "auxiliary_runtime_ready", return_value=False),
+        ):
             status, body = self.request("GET", "/api/health")
 
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["service"], "local-project-console")
+        payload = json.loads(body)
+        self.assertEqual(payload["service"], "local-project-console")
+        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["auxiliaryReady"])
         self.assertEqual(self.api.calls, [])
+
+    def test_watchdog_routes_proxy_when_auxiliary_runtime_is_isolated(self) -> None:
+        with (
+            patch.object(app, "WATCHDOG_API", None),
+            patch.object(
+                app,
+                "proxy_auxiliary_request",
+                return_value=(200, {"source": "auxiliary"}),
+            ) as proxy,
+        ):
+            status, body = self.request("GET", "/api/watchdog/status")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"source": "auxiliary"})
+        proxy.assert_called_once_with("GET", "/api/watchdog/status", None)
 
 
 if __name__ == "__main__":

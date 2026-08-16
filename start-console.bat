@@ -1,13 +1,18 @@
 @echo off
 cd /d "%~dp0"
-"%SystemRoot%\System32\curl.exe" --fail --silent --max-time 1 http://127.0.0.1:8765/api/health 2>nul | "%SystemRoot%\System32\findstr.exe" /C:"local-project-console" >nul
-if not errorlevel 1 goto open_console
+where py.exe >nul 2>nul
+if not errorlevel 1 (
+  py.exe -3 "%~dp0scripts\launch_console.py"
+  goto launcher_done
+)
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\manage-system-startup.ps1" -Action Start
+where python.exe >nul 2>nul
 if errorlevel 1 (
+  echo Python 3 was not found. Run install-system-startup.bat after installing Python.
   pause
   exit /b 1
 )
+python.exe "%~dp0scripts\launch_console.py"
 
-:open_console
-start "" "http://127.0.0.1:8765/"
+:launcher_done
+if errorlevel 1 pause

@@ -11,6 +11,7 @@ import os
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -18,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
+from http.client import HTTPConnection, RemoteDisconnected
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from pathlib import Path
@@ -31,6 +33,7 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("LPC_ADMIN_PORT", "8765"))
 REMOTE_HOST = os.environ.get("LPC_REMOTE_HOST", "0.0.0.0")
 REMOTE_PORT = int(os.environ.get("LPC_REMOTE_PORT", "8766"))
+AUXILIARY_PORT = int(os.environ.get("LPC_AUXILIARY_PORT", "8767"))
 LOCK = threading.RLock()
 WEBSITE_CACHE_LOCK = threading.RLock()
 WEBSITE_CACHE: dict[str, dict] = {}
@@ -47,8 +50,12 @@ RELAY_SETUP_API: object | None = None
 StdioJsonRpcClient = None
 
 
+class AuxiliaryRuntimeUnavailable(RuntimeError):
+    """The isolated session-monitoring runtime is not accepting requests."""
+
+
 class ConsoleInstanceLock:
-    """Hold one cross-process lock for the console, its event hub, and FRP child."""
+    """Hold one cross-process lock for a console-owned process."""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -101,6 +108,133 @@ class ConsoleInstanceLock:
             handle.close()
 
 
+def auxiliary_runtime_ready() -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(0.05)
+        return connection.connect_ex((HOST, AUXILIARY_PORT)) == 0
+
+
+def proxy_auxiliary_request(
+    method: str,
+    path: str,
+    payload: object,
+) -> tuple[int, object]:
+    body = None
+    headers: dict[str, str] = {}
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    connection = HTTPConnection(HOST, AUXILIARY_PORT, timeout=120)
+    try:
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+    except (ConnectionError, OSError, RemoteDisconnected, TimeoutError) as error:
+        raise AuxiliaryRuntimeUnavailable(
+            "Session monitoring runtime is unavailable"
+        ) from error
+    finally:
+        connection.close()
+    if not raw:
+        return response.status, None
+    try:
+        return response.status, json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AuxiliaryRuntimeUnavailable(
+            "Session monitoring runtime returned an invalid response"
+        ) from error
+
+
+class AuxiliaryRuntimeSupervisor:
+    """Keep heavyweight Codex, monitoring, remote, and FRP work off the core."""
+
+    def __init__(
+        self,
+        base_path: Path,
+        *,
+        startup_delay: float = 0.6,
+        restart_delay: float = 3.0,
+    ) -> None:
+        self.base_path = Path(base_path).resolve()
+        self.startup_delay = startup_delay
+        self.restart_delay = restart_delay
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._process: subprocess.Popen | None = None
+        self._process_lock = threading.Lock()
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="auxiliary-runtime-supervisor",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        if self._stop_event.wait(self.startup_delay):
+            return
+        runtime_directory = self.base_path / ".runtime" / "system-startup"
+        runtime_directory.mkdir(parents=True, exist_ok=True)
+        log_path = runtime_directory / "auxiliary-runtime.log"
+        previous_log_path = runtime_directory / "auxiliary-runtime.previous.log"
+        if log_path.exists() and log_path.stat().st_size > 10 * 1024 * 1024:
+            previous_log_path.unlink(missing_ok=True)
+            log_path.replace(previous_log_path)
+        command = [
+            sys.executable,
+            "-u",
+            str(ROOT / "app.py"),
+            "--runtime-worker",
+            str(self.base_path),
+        ]
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        while not self._stop_event.is_set():
+            with log_path.open("a", encoding="utf-8", buffering=1) as log:
+                log.write(f"[{now()}] Starting auxiliary runtime.\n")
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(ROOT),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags,
+                )
+                with self._process_lock:
+                    self._process = process
+                while process.poll() is None and not self._stop_event.wait(0.25):
+                    pass
+                if self._stop_event.is_set() and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=3)
+                log.write(
+                    f"[{now()}] Auxiliary runtime exited with code "
+                    f"{process.returncode}.\n"
+                )
+            with self._process_lock:
+                self._process = None
+            if self._stop_event.wait(self.restart_delay):
+                return
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._process_lock:
+            process = self._process
+        if process is not None and process.poll() is None:
+            process.terminate()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=5)
+        self._thread = None
+
+
 class NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -132,7 +266,12 @@ def load_projects() -> list[dict]:
 
 
 def save_projects(projects: list[dict]) -> None:
-    CONFIG_PATH.write_text(json.dumps(projects, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_path = CONFIG_PATH.with_suffix(f"{CONFIG_PATH.suffix}.tmp")
+    temporary_path.write_text(
+        json.dumps(projects, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary_path.replace(CONFIG_PATH)
 
 
 PROJECTS = load_projects()
@@ -601,8 +740,7 @@ def _default_remote_base_url() -> str:
 
 
 def _remote_projects() -> list[dict]:
-    with LOCK:
-        projects = [dict(project) for project in PROJECTS]
+    projects = [dict(project) for project in load_projects()]
     return states_for(projects)
 
 
@@ -731,6 +869,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def respond_empty(self, status: int) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def respond_from_auxiliary(
+        self,
+        method: str,
+        path: str,
+        payload: object,
+    ) -> None:
+        try:
+            status, body = proxy_auxiliary_request(method, path, payload)
+        except AuxiliaryRuntimeUnavailable:
+            self.respond_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"message": "会话监控与远程会话仍在启动，请稍后重试。"},
+            )
+            return
+        if status == HTTPStatus.NO_CONTENT:
+            self.respond_empty(status)
+        else:
+            self.respond_json(status, body)
+
     def respond_file(
         self, path: Path, content_type: str, *, cache: str | None = None
     ) -> None:
@@ -763,10 +925,7 @@ class Handler(BaseHTTPRequestHandler):
         if path != "/api/remote" and not path.startswith("/api/remote/"):
             return False
         if REMOTE_ADMIN_API is None:
-            self.respond_json(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                {"message": "Remote workspace is unavailable."},
-            )
+            self.respond_from_auxiliary(method, path, payload)
             return True
         response = REMOTE_ADMIN_API.dispatch(method, path, payload)
         if response is None:
@@ -779,10 +938,7 @@ class Handler(BaseHTTPRequestHandler):
         if path != "/api/relay-setup" and not path.startswith("/api/relay-setup/"):
             return False
         if RELAY_SETUP_API is None:
-            self.respond_json(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                {"message": "Relay setup is unavailable."},
-            )
+            self.respond_from_auxiliary(method, path, payload)
             return True
         response = RELAY_SETUP_API.dispatch(method, path, payload)
         if response is None:
@@ -798,10 +954,10 @@ class Handler(BaseHTTPRequestHandler):
         if path != "/api/watchdog" and not path.startswith("/api/watchdog/"):
             return False
         if WATCHDOG_API is None:
-            self.respond_json(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                {"message": "Watchdog runtime is unavailable."},
-            )
+            path_with_query = path
+            if parsed.query:
+                path_with_query = f"{path}?{parsed.query}"
+            self.respond_from_auxiliary(method, path_with_query, payload)
             return True
         response = WATCHDOG_API.dispatch(
             method,
@@ -825,7 +981,8 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "service": "local-project-console",
-                    "ready": WATCHDOG_API is not None,
+                    "ready": True,
+                    "auxiliaryReady": auxiliary_runtime_ready(),
                 },
             )
             return
@@ -1060,6 +1217,63 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.NO_CONTENT, {})
 
 
+class AuxiliaryHandler(Handler):
+    """Internal HTTP boundary for the heavyweight background runtime."""
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/auxiliary-health":
+            self.respond_json(HTTPStatus.OK, {"ready": True})
+            return
+        if self.dispatch_watchdog("GET", parsed, None):
+            return
+        if self.dispatch_remote_admin("GET", self.path, None):
+            return
+        if self.dispatch_relay_setup("GET", parsed.path, None):
+            return
+        self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+
+    def do_POST(self) -> None:
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.respond_json(HTTPStatus.BAD_REQUEST, {"message": "请求格式错误。"})
+            return
+        parsed = urlparse(self.path)
+        if self.dispatch_watchdog("POST", parsed, payload):
+            return
+        if self.dispatch_remote_admin("POST", self.path, payload):
+            return
+        if self.dispatch_relay_setup("POST", parsed.path, payload):
+            return
+        self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+
+    def do_PUT(self) -> None:
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.respond_json(HTTPStatus.BAD_REQUEST, {"message": "请求格式错误。"})
+            return
+        parsed = urlparse(self.path)
+        if self.dispatch_watchdog("PUT", parsed, payload):
+            return
+        if self.dispatch_remote_admin("PUT", self.path, payload):
+            return
+        if self.dispatch_relay_setup("PUT", parsed.path, payload):
+            return
+        self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if self.dispatch_watchdog("DELETE", parsed, None):
+            return
+        if self.dispatch_remote_admin("DELETE", self.path, None):
+            return
+        if self.dispatch_relay_setup("DELETE", parsed.path, None):
+            return
+        self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
+
+
 class RemoteHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -1154,48 +1368,31 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
 
 
-def run_console(
+def run_auxiliary_runtime(
     base_path: Path = ROOT,
     instance_lock: ConsoleInstanceLock | None = None,
 ) -> None:
     global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API
     base_path = Path(base_path).resolve()
     lock = instance_lock or ConsoleInstanceLock(
-        base_path / ".runtime" / "system-startup" / "console.lock"
+        base_path / ".runtime" / "system-startup" / "auxiliary.lock"
     )
     lock.acquire()
     runtime = None
-    server = None
-    server_thread = None
-    server_errors: list[BaseException] = []
+    auxiliary_server = None
     remote_server = None
     remote_thread = None
     tunnel = None
     scheduler_started = False
     try:
-        LOG_DIR.mkdir(exist_ok=True)
-        server = ThreadingHTTPServer((HOST, PORT), Handler)
-
-        def serve_admin() -> None:
-            try:
-                server.serve_forever()
-            except BaseException as error:
-                server_errors.append(error)
-
-        server_thread = threading.Thread(
-            target=serve_admin,
-            name="project-console-http",
-            daemon=True,
-        )
-        server_thread.start()
-        print(f"Local Project Console shell is available at http://{HOST}:{PORT}")
         runtime = create_console_runtime(base_path)
-        if server_errors:
-            raise server_errors[0]
         WATCHDOG_API = runtime.api
         REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
         REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
         RELAY_SETUP_API = getattr(runtime, "relay_setup_api", None)
+        auxiliary_server = ThreadingHTTPServer(
+            (HOST, AUXILIARY_PORT), AuxiliaryHandler
+        )
         if REMOTE_HTTP_API is not None:
             remote_server = ThreadingHTTPServer(
                 (REMOTE_HOST, REMOTE_PORT), RemoteHandler
@@ -1211,13 +1408,13 @@ def run_console(
             tunnel.start()
         runtime.scheduler.start()
         scheduler_started = True
-        print(f"Local Project Console runtime is ready at http://{HOST}:{PORT}")
+        print(
+            f"Session monitoring runtime is ready at "
+            f"http://{HOST}:{AUXILIARY_PORT}"
+        )
         if remote_server is not None:
             print(f"Remote workspace is listening on {REMOTE_HOST}:{REMOTE_PORT}")
-        while server_thread.is_alive():
-            server_thread.join(timeout=1)
-        if server_errors:
-            raise server_errors[0]
+        auxiliary_server.serve_forever()
     finally:
         if scheduler_started and runtime is not None:
             runtime.scheduler.stop()
@@ -1231,12 +1428,8 @@ def run_console(
             remote_server.server_close()
         if remote_thread is not None:
             remote_thread.join(timeout=2)
-        if server is not None:
-            if server_thread is not None and server_thread.is_alive():
-                server.shutdown()
-            server.server_close()
-        if server_thread is not None:
-            server_thread.join(timeout=2)
+        if auxiliary_server is not None:
+            auxiliary_server.server_close()
         WATCHDOG_API = None
         REMOTE_ADMIN_API = None
         REMOTE_HTTP_API = None
@@ -1244,5 +1437,74 @@ def run_console(
         lock.release()
 
 
-if __name__ == "__main__":
+def run_console(
+    base_path: Path = ROOT,
+    instance_lock: ConsoleInstanceLock | None = None,
+    auxiliary_supervisor: object | None = None,
+) -> None:
+    base_path = Path(base_path).resolve()
+    lock = instance_lock or ConsoleInstanceLock(
+        base_path / ".runtime" / "system-startup" / "console.lock"
+    )
+    lock.acquire()
+    server = None
+    supervisor = auxiliary_supervisor
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+        if supervisor is None:
+            supervisor = AuxiliaryRuntimeSupervisor(base_path)
+        print(f"Local Project Console is available at http://{HOST}:{PORT}")
+        supervisor.start()
+        server.serve_forever()
+    finally:
+        try:
+            if supervisor is not None:
+                supervisor.stop()
+        finally:
+            if server is not None:
+                server.server_close()
+            lock.release()
+
+
+def run_service(base_path: Path = ROOT) -> None:
+    runtime_directory = Path(base_path) / ".runtime" / "system-startup"
+    runtime_directory.mkdir(parents=True, exist_ok=True)
+    log_path = runtime_directory / "console-service.log"
+    previous_log_path = runtime_directory / "console-service.previous.log"
+    if log_path.exists() and log_path.stat().st_size > 10 * 1024 * 1024:
+        previous_log_path.unlink(missing_ok=True)
+        log_path.replace(previous_log_path)
+
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    with log_path.open("a", encoding="utf-8", buffering=1) as log:
+        sys.stdout = log
+        sys.stderr = log
+        print(f"[{now()}] Starting Local Project Console with {sys.executable}")
+        try:
+            run_console(base_path)
+        except BaseException:
+            import traceback
+
+            traceback.print_exc()
+            raise
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+
+def main() -> None:
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] == "--runtime-worker":
+        base_path = Path(arguments[1]) if len(arguments) > 1 else ROOT
+        run_auxiliary_runtime(base_path)
+        return
+    if arguments and arguments[0] == "--service":
+        run_service(ROOT)
+        return
     run_console()
+
+
+if __name__ == "__main__":
+    main()

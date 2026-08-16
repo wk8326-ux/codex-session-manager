@@ -9,6 +9,7 @@ __pycache__/
 *.py[cod]
 logs/
 projects.json
+projects.json.tmp
 watchdog.db
 watchdog.db-shm
 watchdog.db-wal

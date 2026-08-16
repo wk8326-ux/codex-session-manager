@@ -12,9 +12,31 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
     $ProjectRoot = Split-Path -Parent $PSScriptRoot
 }
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
-$runnerPath = Join-Path $ProjectRoot 'scripts\run-console-service.ps1'
+$appPath = Join-Path $ProjectRoot 'app.py'
 $healthUrl = 'http://127.0.0.1:8765/api/health'
-$consolePorts = @(8765, 8766)
+$consolePorts = @(8765, 8766, 8767)
+
+function Get-PythonServiceExecutable {
+    $pythonPath = ''
+    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($null -ne $launcher) {
+        $pythonPath = [string](& $launcher.Source -3 -c 'import sys; print(sys.executable)')
+        if ($LASTEXITCODE -ne 0) { $pythonPath = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($pythonPath)) {
+        $python = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($null -eq $python) {
+            throw 'Python 3 was not found. Install Python and make py.exe or python.exe available.'
+        }
+        $pythonPath = $python.Source
+    }
+    $pythonPath = [System.IO.Path]::GetFullPath($pythonPath.Trim())
+    $pythonwPath = Join-Path (Split-Path -Parent $pythonPath) 'pythonw.exe'
+    if (Test-Path -LiteralPath $pythonwPath -PathType Leaf) {
+        return $pythonwPath
+    }
+    return $pythonPath
+}
 
 function Get-ConsoleListenerProcessIds {
     $netstatPath = Join-Path $env:SystemRoot 'System32\netstat.exe'
@@ -57,7 +79,7 @@ function Stop-StrayConsoleProcesses {
         if ($null -eq $processInfo) { continue }
         $commandLine = [string]$processInfo.CommandLine
         if ($commandLine -notmatch '(?i)(^|[\\/"\s])app\.py(["\s]|$)') {
-            throw "Port 8765 or 8766 is held by another process (PID $processId); refusing to terminate it."
+            throw "A Local Project Console port is held by another process (PID $processId); refusing to terminate it."
         }
         & taskkill.exe /PID $processId /T /F 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
@@ -90,7 +112,7 @@ function Wait-ConsoleHealth {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         if ((Test-ConsoleHealth) -eq $Expected) { return $true }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $deadline)
     return $false
 }
@@ -117,13 +139,13 @@ function Wait-ConsoleTaskState {
 
 switch ($Action) {
     'Install' {
-        if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
-            throw "Service runner was not found: $runnerPath"
+        if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
+            throw "Application entry point was not found: $appPath"
         }
         $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $powerShellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
-        $taskArguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runnerPath`" -ProjectRoot `"$ProjectRoot`""
-        $taskAction = New-ScheduledTaskAction -Execute $powerShellPath -Argument $taskArguments -WorkingDirectory $ProjectRoot
+        $pythonServiceExecutable = Get-PythonServiceExecutable
+        $taskArguments = "-u `"$appPath`" --service"
+        $taskAction = New-ScheduledTaskAction -Execute $pythonServiceExecutable -Argument $taskArguments -WorkingDirectory $ProjectRoot
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
         $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet `
@@ -139,7 +161,7 @@ switch ($Action) {
             -Trigger $trigger `
             -Principal $principal `
             -Settings $settings `
-            -Description 'Keeps Local Project Console, session monitoring, remote PWA, and FRP available after Windows logon.'
+            -Description 'Starts the lightweight project console first, then its isolated session and remote runtime.'
         Register-ScheduledTask -TaskName $TaskName -InputObject $definition -Force | Out-Null
         Write-Host "[LPC] Scheduled task installed for $currentUser."
         Write-Host "[LPC] Project root: $ProjectRoot"

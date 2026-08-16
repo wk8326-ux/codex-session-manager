@@ -1,3 +1,4 @@
+import json
 import threading
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from app import (
     project_url_is_valid,
     reorder_projects,
     running_pids,
+    save_projects,
     state_for,
     states_for,
 )
@@ -33,6 +35,18 @@ class ProjectConfigPortabilityTests(unittest.TestCase):
                 self.assertEqual(load_projects(), [])
 
             self.assertEqual(config_path.read_text(encoding="utf-8"), "[]")
+
+    def test_project_catalog_is_replaced_atomically_for_auxiliary_readers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "projects.json"
+            with patch("app.CONFIG_PATH", config_path):
+                save_projects([{"id": "project-a"}])
+
+            self.assertEqual(
+                json.loads(config_path.read_text(encoding="utf-8")),
+                [{"id": "project-a"}],
+            )
+            self.assertFalse(config_path.with_suffix(".json.tmp").exists())
 
 
 class ProjectUrlValidationTests(unittest.TestCase):
