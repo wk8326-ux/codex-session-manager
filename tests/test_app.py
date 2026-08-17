@@ -2,6 +2,7 @@ import json
 import threading
 import tempfile
 import unittest
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -22,6 +23,31 @@ from app import (
     state_for,
     states_for,
 )
+
+
+class HealthContractTests(unittest.TestCase):
+    def test_health_metadata_preserves_core_readiness_contract(self) -> None:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            connection.request("GET", "/api/health")
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["service"], "local-project-console")
+        self.assertEqual(payload["version"], "0.1.0")
+        self.assertIn(payload["mode"], {"source", "installed", "portable"})
+        self.assertEqual(payload["ports"]["admin"], 8765)
+        self.assertGreater(payload["pid"], 0)
 
 
 class ProjectConfigPortabilityTests(unittest.TestCase):

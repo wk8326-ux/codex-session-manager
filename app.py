@@ -26,9 +26,16 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
-ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = ROOT / "projects.json"
-LOG_DIR = ROOT / "logs"
+from runtime_paths import APP_VERSION, ApplicationPaths
+
+
+SOURCE_ROOT = Path(__file__).resolve().parent
+PATHS = ApplicationPaths.resolve(SOURCE_ROOT)
+ROOT = PATHS.resource_root
+DATA_ROOT = PATHS.data_root
+RUNTIME_ROOT = PATHS.runtime_root
+CONFIG_PATH = PATHS.projects_path
+LOG_DIR = PATHS.log_root
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("LPC_ADMIN_PORT", "8765"))
 REMOTE_HOST = os.environ.get("LPC_REMOTE_HOST", "0.0.0.0")
@@ -45,6 +52,7 @@ WATCHDOG_API: object | None = None
 REMOTE_ADMIN_API: object | None = None
 REMOTE_HTTP_API: object | None = None
 RELAY_SETUP_API: object | None = None
+STARTED_AT = datetime.now().astimezone().isoformat(timespec="seconds")
 
 # Kept patchable for startup-failure tests; the real class is imported lazily.
 StdioJsonRpcClient = None
@@ -52,6 +60,31 @@ StdioJsonRpcClient = None
 
 class AuxiliaryRuntimeUnavailable(RuntimeError):
     """The isolated session-monitoring runtime is not accepting requests."""
+
+
+def auxiliary_worker_command(paths: ApplicationPaths) -> list[str]:
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, "--runtime-worker"]
+    else:
+        command = [
+            sys.executable,
+            "-u",
+            str(SOURCE_ROOT / "app.py"),
+            "--runtime-worker",
+        ]
+    command.extend(
+        [
+            "--data-dir",
+            str(paths.data_root),
+            "--runtime-dir",
+            str(paths.runtime_root),
+            "--log-dir",
+            str(paths.log_root),
+            "--mode",
+            paths.mode,
+        ]
+    )
+    return command
 
 
 class ConsoleInstanceLock:
@@ -150,12 +183,12 @@ class AuxiliaryRuntimeSupervisor:
 
     def __init__(
         self,
-        base_path: Path,
+        paths: ApplicationPaths,
         *,
         startup_delay: float = 0.6,
         restart_delay: float = 3.0,
     ) -> None:
-        self.base_path = Path(base_path).resolve()
+        self.paths = paths
         self.startup_delay = startup_delay
         self.restart_delay = restart_delay
         self._stop_event = threading.Event()
@@ -177,27 +210,21 @@ class AuxiliaryRuntimeSupervisor:
     def _run(self) -> None:
         if self._stop_event.wait(self.startup_delay):
             return
-        runtime_directory = self.base_path / ".runtime" / "system-startup"
-        runtime_directory.mkdir(parents=True, exist_ok=True)
-        log_path = runtime_directory / "auxiliary-runtime.log"
-        previous_log_path = runtime_directory / "auxiliary-runtime.previous.log"
+        log_directory = self.paths.system_log_root
+        log_directory.mkdir(parents=True, exist_ok=True)
+        log_path = log_directory / "auxiliary-runtime.log"
+        previous_log_path = log_directory / "auxiliary-runtime.previous.log"
         if log_path.exists() and log_path.stat().st_size > 10 * 1024 * 1024:
             previous_log_path.unlink(missing_ok=True)
             log_path.replace(previous_log_path)
-        command = [
-            sys.executable,
-            "-u",
-            str(ROOT / "app.py"),
-            "--runtime-worker",
-            str(self.base_path),
-        ]
+        command = auxiliary_worker_command(self.paths)
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         while not self._stop_event.is_set():
             with log_path.open("a", encoding="utf-8", buffering=1) as log:
                 log.write(f"[{now()}] Starting auxiliary runtime.\n")
                 process = subprocess.Popen(
                     command,
-                    cwd=str(ROOT),
+                    cwd=str(self.paths.resource_root),
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -266,6 +293,7 @@ def load_projects() -> list[dict]:
 
 
 def save_projects(projects: list[dict]) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = CONFIG_PATH.with_suffix(f"{CONFIG_PATH.suffix}.tmp")
     temporary_path.write_text(
         json.dumps(projects, ensure_ascii=False, indent=2),
@@ -274,7 +302,7 @@ def save_projects(projects: list[dict]) -> None:
     temporary_path.replace(CONFIG_PATH)
 
 
-PROJECTS = load_projects()
+PROJECTS = [] if "--migrate-from" in sys.argv else load_projects()
 
 
 def reorder_projects(projects: list[dict], ordered_ids: object) -> bool:
@@ -744,7 +772,12 @@ def _remote_projects() -> list[dict]:
     return states_for(projects)
 
 
-def create_console_runtime(base_path: Path) -> ConsoleRuntime:
+def create_console_runtime(
+    base_path: Path,
+    *,
+    runtime_path: Path | None = None,
+    resource_path: Path | None = None,
+) -> ConsoleRuntime:
     from remote.application import RemoteApplication
     from remote.approvals import RemoteApprovalBroker
     from remote.events import RemoteEventHub
@@ -766,6 +799,17 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     from watchdog.service import WatchdogService
     from watchdog.store import WatchdogStore
 
+    base_path = Path(base_path).resolve()
+    runtime_path = (
+        Path(runtime_path).resolve()
+        if runtime_path is not None
+        else base_path / ".runtime"
+    )
+    resource_path = (
+        Path(resource_path).resolve()
+        if resource_path is not None
+        else base_path
+    )
     store = WatchdogStore(base_path / "watchdog.db")
     store.initialize()
     secrets = DpapiSecretStore(
@@ -802,7 +846,7 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     monitor_service = WatchdogService(
         store, secrets, probe_channel, adapter
     )
-    tunnel = FrpTunnelManager.from_base_path(base_path)
+    tunnel = FrpTunnelManager.from_runtime_path(runtime_path)
     if codex_connected:
         def handle_event(method: str, params: dict) -> None:
             try:
@@ -834,7 +878,8 @@ def create_console_runtime(base_path: Path) -> ConsoleRuntime:
     )
     relay_setup_api = RelaySetupApi(
         RelaySetupService(
-            base_path,
+            resource_path,
+            runtime_path=runtime_path,
             tunnel_status_provider=tunnel.status,
             tunnel_start_provider=tunnel.start,
         )
@@ -981,8 +1026,17 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "service": "local-project-console",
+                    "version": APP_VERSION,
                     "ready": True,
                     "auxiliaryReady": auxiliary_runtime_ready(),
+                    "mode": PATHS.mode,
+                    "pid": os.getpid(),
+                    "startedAt": STARTED_AT,
+                    "ports": {
+                        "admin": PORT,
+                        "remote": REMOTE_PORT,
+                        "auxiliary": AUXILIARY_PORT,
+                    },
                 },
             )
             return
@@ -1368,14 +1422,28 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
 
 
+def _paths_for_base(base_path: Path | None) -> ApplicationPaths:
+    if base_path is None or Path(base_path).resolve() == PATHS.data_root:
+        return PATHS
+    resolved = Path(base_path).resolve()
+    return ApplicationPaths(
+        resource_root=resolved,
+        data_root=resolved,
+        runtime_root=resolved / ".runtime",
+        log_root=resolved / "logs",
+        mode="source",
+    )
+
+
 def run_auxiliary_runtime(
-    base_path: Path = ROOT,
+    base_path: Path | None = None,
     instance_lock: ConsoleInstanceLock | None = None,
 ) -> None:
     global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API
-    base_path = Path(base_path).resolve()
+    paths = _paths_for_base(base_path)
+    paths.ensure_writable_directories()
     lock = instance_lock or ConsoleInstanceLock(
-        base_path / ".runtime" / "system-startup" / "auxiliary.lock"
+        paths.system_runtime_root / "auxiliary.lock"
     )
     lock.acquire()
     runtime = None
@@ -1385,7 +1453,11 @@ def run_auxiliary_runtime(
     tunnel = None
     scheduler_started = False
     try:
-        runtime = create_console_runtime(base_path)
+        runtime = create_console_runtime(
+            paths.data_root,
+            runtime_path=paths.runtime_root,
+            resource_path=paths.resource_root,
+        )
         WATCHDOG_API = runtime.api
         REMOTE_ADMIN_API = getattr(runtime, "remote_admin_api", None)
         REMOTE_HTTP_API = getattr(runtime, "remote_http_api", None)
@@ -1438,22 +1510,23 @@ def run_auxiliary_runtime(
 
 
 def run_console(
-    base_path: Path = ROOT,
+    base_path: Path | None = None,
     instance_lock: ConsoleInstanceLock | None = None,
     auxiliary_supervisor: object | None = None,
 ) -> None:
-    base_path = Path(base_path).resolve()
+    paths = _paths_for_base(base_path)
+    paths.ensure_writable_directories()
     lock = instance_lock or ConsoleInstanceLock(
-        base_path / ".runtime" / "system-startup" / "console.lock"
+        paths.system_runtime_root / "console.lock"
     )
     lock.acquire()
     server = None
     supervisor = auxiliary_supervisor
     try:
-        LOG_DIR.mkdir(exist_ok=True)
+        paths.log_root.mkdir(parents=True, exist_ok=True)
         server = ThreadingHTTPServer((HOST, PORT), Handler)
         if supervisor is None:
-            supervisor = AuxiliaryRuntimeSupervisor(base_path)
+            supervisor = AuxiliaryRuntimeSupervisor(paths)
         print(f"Local Project Console is available at http://{HOST}:{PORT}")
         supervisor.start()
         server.serve_forever()
@@ -1467,11 +1540,13 @@ def run_console(
             lock.release()
 
 
-def run_service(base_path: Path = ROOT) -> None:
-    runtime_directory = Path(base_path) / ".runtime" / "system-startup"
-    runtime_directory.mkdir(parents=True, exist_ok=True)
-    log_path = runtime_directory / "console-service.log"
-    previous_log_path = runtime_directory / "console-service.previous.log"
+def run_service(base_path: Path | None = None) -> None:
+    paths = _paths_for_base(base_path)
+    paths.ensure_writable_directories()
+    log_directory = paths.system_log_root
+    log_directory.mkdir(parents=True, exist_ok=True)
+    log_path = log_directory / "console-service.log"
+    previous_log_path = log_directory / "console-service.previous.log"
     if log_path.exists() and log_path.stat().st_size > 10 * 1024 * 1024:
         previous_log_path.unlink(missing_ok=True)
         log_path.replace(previous_log_path)
@@ -1483,7 +1558,7 @@ def run_service(base_path: Path = ROOT) -> None:
         sys.stderr = log
         print(f"[{now()}] Starting Local Project Console with {sys.executable}")
         try:
-            run_console(base_path)
+            run_console(paths.data_root)
         except BaseException:
             import traceback
 
@@ -1496,12 +1571,33 @@ def run_service(base_path: Path = ROOT) -> None:
 
 def main() -> None:
     arguments = sys.argv[1:]
-    if arguments and arguments[0] == "--runtime-worker":
-        base_path = Path(arguments[1]) if len(arguments) > 1 else ROOT
-        run_auxiliary_runtime(base_path)
+    if "--version" in arguments:
+        print(APP_VERSION)
         return
-    if arguments and arguments[0] == "--service":
-        run_service(ROOT)
+    if "--migrate-from" in arguments:
+        from runtime_migration import migrate_legacy_data
+
+        source_index = arguments.index("--migrate-from") + 1
+        if source_index >= len(arguments):
+            raise SystemExit("--migrate-from requires a source directory")
+        result = migrate_legacy_data(Path(arguments[source_index]), PATHS)
+        print(
+            json.dumps(
+                {
+                    "migrated": result.migrated,
+                    "source": str(result.source),
+                    "destination": str(result.destination),
+                    "copied": list(result.copied),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+    if "--runtime-worker" in arguments:
+        run_auxiliary_runtime(PATHS.data_root)
+        return
+    if "--service" in arguments:
+        run_service(PATHS.data_root)
         return
     run_console()
 

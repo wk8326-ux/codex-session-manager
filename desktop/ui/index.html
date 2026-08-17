@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#eef1ef" />
+    <title>本地项目控制台</title>
+    <link rel="stylesheet" href="./startup.css" />
+  </head>
+  <body>
+    <main class="startup-shell" aria-labelledby="startup-title">
+      <header class="brand-row">
+        <img src="./brand.png" alt="" class="brand-mark" />
+        <div>
+          <h1 id="startup-title">本地项目控制台</h1>
+          <p>Local Project Console <span class="version">0.1.0</span></p>
+        </div>
+      </header>
+
+      <section class="runtime-stage" aria-live="polite" aria-busy="true">
+        <div class="process-bus" aria-hidden="true">
+          <span class="bus-line"></span>
+          <span class="service-node active" id="core-node"></span>
+          <span class="service-node" id="auxiliary-node"></span>
+          <span class="service-node" id="workspace-node"></span>
+        </div>
+        <div class="stage-labels" aria-hidden="true">
+          <span>核心服务</span>
+          <span>辅助运行时</span>
+          <span>工作台</span>
+        </div>
+        <h2 id="status-title">正在连接项目控制台</h2>
+        <p id="status-detail">检查本机后台服务状态...</p>
+      </section>
+
+      <section class="recovery-actions" id="recovery-actions" hidden>
+        <button class="primary-action" id="retry-button" type="button">重新尝试</button>
+        <button class="secondary-action" id="logs-button" type="button">打开日志</button>
+        <button class="secondary-action" id="repair-button" type="button">重新注册后台</button>
+        <button class="secondary-action" id="import-button" type="button">导入源码版数据</button>
+      </section>
+
+      <footer>
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="footer-status">后台服务仅在当前电脑运行</span>
+      </footer>
+    </main>
+    <script src="./startup.js"></script>
+  </body>
+</html>

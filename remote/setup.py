@@ -119,16 +119,20 @@ class RelaySetupService:
         self,
         base_path: Path,
         *,
+        runtime_path: Path | None = None,
         tunnel_status_provider=None,
         tunnel_start_provider=None,
     ) -> None:
         self.base_path = Path(base_path)
+        self.runtime_path = (
+            Path(runtime_path) if runtime_path is not None else self.base_path / ".runtime"
+        )
         self.tunnel_status_provider = tunnel_status_provider
         self.tunnel_start_provider = tunnel_start_provider
 
     def status(self) -> dict:
         script_path = self.base_path / "scripts" / "setup-remote-client.ps1"
-        runtime_path = self.base_path / ".runtime" / "frp"
+        runtime_path = self.runtime_path / "frp"
         tunnel = self._tunnel_status()
         return {
             "clientScriptReady": script_path.is_file(),

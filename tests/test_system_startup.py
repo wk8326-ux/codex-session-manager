@@ -20,8 +20,22 @@ class SystemStartupContractTests(unittest.TestCase):
         self.assertIn("-RestartInterval (New-TimeSpan -Minutes 1)", script)
         self.assertIn("-StartWhenAvailable", script)
         self.assertIn("-MultipleInstances IgnoreNew", script)
-        for action in ("Install", "Status", "Start", "Restart", "Uninstall"):
+        for action in ("Install", "Status", "Start", "Restart", "Stop", "Uninstall"):
             self.assertIn(f"'{action}'", script)
+
+        for contract in (
+            "ServiceExecutable",
+            "DataDirectory",
+            "RuntimeDirectory",
+            "LogDirectory",
+            "Invoke-LegacyMigration",
+            "Restore-PreviousConsoleTask",
+            "--migrate-from",
+            "lpc-service\\.exe",
+            "$taskkillExitCode",
+            "$previousErrorPreference",
+        ):
+            self.assertIn(contract, script)
 
     def test_restart_replaces_stray_console_processes_without_expensive_tcp_cmdlets(self) -> None:
         script = (ROOT / "scripts" / "manage-system-startup.ps1").read_text(

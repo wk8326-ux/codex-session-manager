@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import app
+from runtime_paths import ApplicationPaths
 
 
 class ConsoleRuntimeTests(unittest.TestCase):
@@ -14,6 +15,35 @@ class ConsoleRuntimeTests(unittest.TestCase):
 
         def release(self) -> None:
             return
+
+    def test_frozen_runtime_worker_reuses_packaged_executable(self) -> None:
+        paths = ApplicationPaths(
+            Path("resources"),
+            Path("data"),
+            Path("runtime"),
+            Path("logs"),
+            "installed",
+        )
+        with patch.object(app.sys, "frozen", True, create=True):
+            command = app.auxiliary_worker_command(paths)
+
+        self.assertEqual(command[:2], [app.sys.executable, "--runtime-worker"])
+        self.assertNotIn("app.py", " ".join(command))
+        self.assertIn("--data-dir", command)
+
+    def test_source_runtime_worker_keeps_python_entrypoint(self) -> None:
+        paths = ApplicationPaths(
+            Path("resources"),
+            Path("data"),
+            Path("runtime"),
+            Path("logs"),
+            "source",
+        )
+        with patch.object(app.sys, "frozen", False, create=True):
+            command = app.auxiliary_worker_command(paths)
+
+        self.assertIn("app.py", " ".join(command))
+        self.assertIn("--runtime-worker", command)
 
     def test_console_instance_lock_rejects_a_second_process(self) -> None:
         with TemporaryDirectory() as directory:

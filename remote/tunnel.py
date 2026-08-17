@@ -31,7 +31,11 @@ class FrpTunnelManager:
 
     @classmethod
     def from_base_path(cls, base_path: Path) -> "FrpTunnelManager":
-        runtime_dir = Path(base_path) / ".runtime" / "frp"
+        return cls.from_runtime_path(Path(base_path) / ".runtime")
+
+    @classmethod
+    def from_runtime_path(cls, runtime_path: Path) -> "FrpTunnelManager":
+        runtime_dir = Path(runtime_path) / "frp"
         default_executable = runtime_dir / (
             "frpc-lpc.exe" if os.name == "nt" else "frpc-lpc"
         )
