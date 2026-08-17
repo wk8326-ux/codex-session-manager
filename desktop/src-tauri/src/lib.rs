@@ -83,6 +83,17 @@ fn show_main_window(app: &AppHandle) {
     show_route(app, &route);
 }
 
+fn is_bundled_app_url(url: &Url) -> bool {
+    url.scheme() == "tauri"
+        || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
+}
+
+fn is_console_url(url: &Url) -> bool {
+    url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port_or_known_default() == Some(8765)
+}
+
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let navigation_app = app.handle().clone();
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -92,13 +103,13 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .center()
         .initialization_script(EXTERNAL_NAVIGATION_SHIM)
         .on_navigation(move |url| {
-            if url.scheme() == "tauri" {
+            // Tauri 2 serves bundled assets from http://tauri.localhost.
+            // Keep this origin inside the WebView; opening it in the system
+            // browser produces a misleading ERR_CONNECTION_REFUSED page.
+            if is_bundled_app_url(url) {
                 return true;
             }
-            let local_console = url.scheme() == "http"
-                && url.host_str() == Some("127.0.0.1")
-                && url.port_or_known_default() == Some(8765);
-            if local_console {
+            if is_console_url(url) {
                 navigation_app
                     .state::<RuntimeManager>()
                     .remember_route(url.path());
@@ -262,4 +273,28 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("Local Project Console desktop runtime failed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_bundled_app_url, is_console_url};
+    use url::Url;
+
+    #[test]
+    fn keeps_tauri_two_bundled_origin_inside_webview() {
+        let bundled = Url::parse("http://tauri.localhost/index.html").unwrap();
+
+        assert!(is_bundled_app_url(&bundled));
+    }
+
+    #[test]
+    fn keeps_only_console_origin_inside_webview() {
+        let console = Url::parse("http://127.0.0.1:8765/watchdog").unwrap();
+        let wrong_port = Url::parse("http://127.0.0.1:8766/remote").unwrap();
+        let external = Url::parse("https://github.com/wk8326-ux").unwrap();
+
+        assert!(is_console_url(&console));
+        assert!(!is_console_url(&wrong_port));
+        assert!(!is_console_url(&external));
+    }
 }
