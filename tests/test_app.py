@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import threading
 import tempfile
 import unittest
@@ -23,6 +25,35 @@ from app import (
     state_for,
     states_for,
 )
+
+
+class StatelessCommandContractTests(unittest.TestCase):
+    def test_version_and_migration_commands_do_not_load_project_state(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            application_home = Path(directory) / "application-home"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "app.py"),
+                    "--version",
+                    "--data-dir",
+                    str(application_home / "data"),
+                    "--runtime-dir",
+                    str(application_home / "runtime"),
+                    "--log-dir",
+                    str(application_home / "logs"),
+                    "--mode",
+                    "installed",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "0.1.0")
+            self.assertFalse(application_home.exists())
 
 
 class HealthContractTests(unittest.TestCase):

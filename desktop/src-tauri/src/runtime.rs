@@ -255,6 +255,7 @@ pub struct RuntimeManager {
     paths: RuntimePaths,
     mode: RuntimeMode,
     adapter: Box<dyn RuntimeAdapter>,
+    operation: Mutex<()>,
     state: Mutex<DesktopState>,
 }
 
@@ -341,6 +342,7 @@ impl RuntimeManager {
             paths,
             mode,
             adapter,
+            operation: Mutex::new(()),
             state: Mutex::new(state),
         })
     }
@@ -365,6 +367,10 @@ impl RuntimeManager {
     }
 
     pub fn ensure_running(&self) -> Result<RuntimeHealth, String> {
+        let _operation = self
+            .operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if !self.paths.backend_executable.is_file() {
             let current = self.status();
             if current.ready {
@@ -382,17 +388,29 @@ impl RuntimeManager {
     }
 
     pub fn restart(&self) -> Result<RuntimeHealth, String> {
+        let _operation = self
+            .operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let current = self.status();
         self.adapter.restart(&current)?;
         self.wait_for_health(Duration::from_secs(8))
     }
 
     pub fn stop(&self) -> Result<(), String> {
+        let _operation = self
+            .operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let current = self.status();
         self.adapter.stop(&current)
     }
 
     pub fn repair(&self) -> Result<RuntimeHealth, String> {
+        let _operation = self
+            .operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let current = self.status();
         self.adapter.repair(&current)?;
         self.wait_for_health(Duration::from_secs(8))

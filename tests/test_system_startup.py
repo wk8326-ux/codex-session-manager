@@ -24,18 +24,24 @@ class SystemStartupContractTests(unittest.TestCase):
             self.assertIn(f"'{action}'", script)
 
         for contract in (
+            "ConvertFrom-LpcVerbatimPath",
+            "\\\\?\\UNC\\",
+            "\\\\?\\",
             "ServiceExecutable",
             "DataDirectory",
             "RuntimeDirectory",
             "LogDirectory",
             "Invoke-LegacyMigration",
             "Restore-PreviousConsoleTask",
+            "$isSourceRuntime",
+            "$isPackagedRuntime",
             "--migrate-from",
             "lpc-service\\.exe",
             "$taskkillExitCode",
             "$previousErrorPreference",
         ):
             self.assertIn(contract, script)
+        self.assertIn("-TimeoutSeconds 120", script)
 
     def test_restart_replaces_stray_console_processes_without_expensive_tcp_cmdlets(self) -> None:
         script = (ROOT / "scripts" / "manage-system-startup.ps1").read_text(

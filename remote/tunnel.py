@@ -68,7 +68,7 @@ class FrpTunnelManager:
                     stdin=subprocess.DEVNULL,
                     stdout=self._log_file,
                     stderr=subprocess.STDOUT,
-                    creationflags=0,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except OSError as error:
                 self._last_error = str(error)

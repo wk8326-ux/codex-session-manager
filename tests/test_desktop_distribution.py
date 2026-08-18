@@ -49,10 +49,14 @@ class DesktopDistributionContractTests(unittest.TestCase):
             self.assertIn(artifact, script)
 
     def test_desktop_shell_exposes_required_tray_actions(self) -> None:
+        entrypoint = (
+            ROOT / "desktop" / "src-tauri" / "src" / "main.rs"
+        ).read_text(encoding="utf-8")
         source = (
             ROOT / "desktop" / "src-tauri" / "src" / "lib.rs"
         ).read_text(encoding="utf-8")
 
+        self.assertIn('windows_subsystem = "windows"', entrypoint)
         for label in (
             "打开项目控制台",
             "会话监控",
@@ -62,6 +66,7 @@ class DesktopDistributionContractTests(unittest.TestCase):
             "退出桌面应用",
             "repair_runtime",
             "EXTERNAL_NAVIGATION_SHIM",
+            "start_runtime_bootstrap",
         ):
             self.assertIn(label, source)
 

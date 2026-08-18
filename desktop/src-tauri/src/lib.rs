@@ -84,8 +84,7 @@ fn show_main_window(app: &AppHandle) {
 }
 
 fn is_bundled_app_url(url: &Url) -> bool {
-    url.scheme() == "tauri"
-        || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
+    url.scheme() == "tauri" || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
 }
 
 fn is_console_url(url: &Url) -> bool {
@@ -241,6 +240,13 @@ fn start_update_check(app: &AppHandle) {
     });
 }
 
+fn start_runtime_bootstrap(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = app.state::<RuntimeManager>().ensure_running();
+    });
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
@@ -260,6 +266,7 @@ pub fn run() {
         .setup(|app| {
             let manager = RuntimeManager::new(app.handle())?;
             app.manage(manager);
+            start_runtime_bootstrap(app.handle());
             create_main_window(app)?;
             create_tray(app)?;
             start_update_check(app.handle());

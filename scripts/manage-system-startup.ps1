@@ -14,8 +14,33 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
+function ConvertFrom-LpcVerbatimPath {
+    param(
+        [AllowEmptyString()]
+        [string]$Path
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    if ($Path.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return '\\' + $Path.Substring(8)
+    }
+    if ($Path.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $Path.Substring(4)
+    }
+    return $Path
+}
+
+$scriptDirectory = ConvertFrom-LpcVerbatimPath -Path $PSScriptRoot
+$ProjectRoot = ConvertFrom-LpcVerbatimPath -Path $ProjectRoot
+$ServiceExecutable = ConvertFrom-LpcVerbatimPath -Path $ServiceExecutable
+$DataDirectory = ConvertFrom-LpcVerbatimPath -Path $DataDirectory
+$RuntimeDirectory = ConvertFrom-LpcVerbatimPath -Path $RuntimeDirectory
+$LogDirectory = ConvertFrom-LpcVerbatimPath -Path $LogDirectory
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
-    $ProjectRoot = Split-Path -Parent $PSScriptRoot
+    $ProjectRoot = Split-Path -Parent $scriptDirectory
 }
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $appPath = Join-Path $ProjectRoot 'app.py'
@@ -84,10 +109,9 @@ function Stop-StrayConsoleProcesses {
         $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
         if ($null -eq $processInfo) { continue }
         $commandLine = [string]$processInfo.CommandLine
-        if (
-            $commandLine -notmatch '(?i)(^|[\\/"\s])app\.py(["\s]|$)' -and
-            $commandLine -notmatch '(?i)(^|[\\/"\s])lpc-service\.exe(["\s]|$)'
-        ) {
+        $isSourceRuntime = $commandLine -match '(?i)app\.py(?:"|\s)+.*--service(?:\s|$)'
+        $isPackagedRuntime = $commandLine -match '(?i)lpc-service\.exe(?:"|\s|$)'
+        if (-not $isSourceRuntime -and -not $isPackagedRuntime) {
             throw "A Local Project Console port is held by another process (PID $processId); refusing to terminate it."
         }
         $previousErrorPreference = $ErrorActionPreference
@@ -282,8 +306,8 @@ switch ($Action) {
                     Write-Host '[LPC] A console process is already healthy. Close it and run Restart to transfer ownership to Task Scheduler.'
                 } else {
                     Start-ScheduledTask -TaskName $TaskName
-                    if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 30)) {
-                        throw 'The scheduled task started, but the console health endpoint did not become available within 30 seconds.'
+                    if (-not (Wait-ConsoleHealth -Expected $true -TimeoutSeconds 120)) {
+                        throw 'The scheduled task started, but the console health endpoint did not become available within 120 seconds.'
                     }
                     Write-Host '[LPC] Console is available at http://127.0.0.1:8765/'
                 }

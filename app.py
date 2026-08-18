@@ -302,7 +302,10 @@ def save_projects(projects: list[dict]) -> None:
     temporary_path.replace(CONFIG_PATH)
 
 
-PROJECTS = [] if "--migrate-from" in sys.argv else load_projects()
+STATELESS_COMMANDS = {"--migrate-from", "--version"}
+PROJECTS = (
+    [] if any(argument in STATELESS_COMMANDS for argument in sys.argv) else load_projects()
+)
 
 
 def reorder_projects(projects: list[dict], ordered_ids: object) -> bool:

@@ -37,6 +37,10 @@ class FrpTunnelManagerTests(unittest.TestCase):
                 self.assertTrue(manager.status()["running"])
                 self.assertEqual(manager.status()["pid"], 1234)
                 popen.assert_called_once()
+                self.assertEqual(
+                    popen.call_args.kwargs["creationflags"],
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
                 manager.stop()
 
             process.terminate.assert_called_once()
