@@ -15,6 +15,7 @@ from watchdog.codex_adapter import (
     UncertainSendFailure,
 )
 from watchdog.models import SessionSnapshot, TurnSnapshot
+from watchdog.secrets import SecretStoreError
 from watchdog.service import WatchdogService
 from watchdog.store import ResumeOutcomePersistenceError, WatchdogStore
 
@@ -49,6 +50,11 @@ class FakeProbe:
         if isinstance(self.result, list):
             return self.result.pop(0)
         return self.result
+
+
+class FailingSecretStore:
+    def unprotect(self, _value: bytes) -> str:
+        raise SecretStoreError("DPAPI data belongs to another user")
 
 
 class FakeAdapter:
@@ -154,6 +160,34 @@ class WatchdogServiceTests(unittest.TestCase):
         }
         data.update(changes)
         return self.store.create_session(data)
+
+    def test_known_codex_read_failure_is_recorded_with_a_safe_reason(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store,
+            healthy,
+            {THREAD_ID: CodexProtocolError("thread/read returned malformed data")},
+        )
+        session = self.create_session(secrets)
+
+        run = service.check_session(session["id"], NOW)
+
+        self.assertEqual(run["decision"], "silent_codex_unavailable")
+        self.assertEqual(run["sessionState"], "unavailable")
+        self.assertIn("CodexProtocolError", run["detailSanitized"])
+        self.assertIn("malformed data", run["detailSanitized"])
+
+    def test_unexpected_session_reader_failure_is_not_hidden(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store,
+            healthy,
+            {THREAD_ID: RuntimeError("programming error")},
+        )
+        session = self.create_session(secrets)
+
+        with self.assertRaisesRegex(RuntimeError, "programming error"):
+            service.check_session(session["id"], NOW)
 
     def test_unhealthy_channel_short_circuits_before_adapter_access(self) -> None:
         unavailable = ProbeResult(
@@ -275,6 +309,30 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertEqual(completed["resolvedAt"], "2026-07-31T06:06:00Z")
         self.assertEqual(run["decision"], "resume_completed")
         self.assertEqual(run["sessionState"], "completed")
+
+    def test_resumed_system_error_is_finalized_as_failure(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, _adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-new"]
+        )
+        session = self.create_session(secrets, unattendedApprovalsEnabled=True)
+        service.check_session(session["id"], NOW)
+
+        service.handle_app_server_event(
+            "turn/completed",
+            {"turn": {"id": "turn-new", "status": "systemError"}},
+            "2026-07-31T06:06:00Z",
+        )
+
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        incident = self.store.get_incident(fingerprint)
+        run = self.store.list_monitor_runs({})[0]
+        self.assertEqual(incident["status"], "resumed_failed")
+        self.assertEqual(run["decision"], "resume_failed")
+        self.assertEqual(run["sessionState"], "systemError")
 
     def test_declined_resume_approval_is_recorded_as_manual_attention(self) -> None:
         self.store.update_settings({"resumeActionsEnabled": True})
@@ -940,6 +998,48 @@ class WatchdogServiceTests(unittest.TestCase):
             "2026-07-31T06:15:00Z",
         )
         self.assertNotIn(API_KEY, repr(runs))
+
+    def test_secret_recovery_failure_is_not_reported_as_a_network_error(self) -> None:
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        secrets = MemorySecretStore()
+        session = self.create_session(secrets)
+        adapter = FakeAdapter()
+        service = WatchdogService(
+            self.store,
+            FailingSecretStore(),
+            FakeProbe(healthy),
+            adapter,
+        )
+
+        run = service.check_session(session["id"], NOW)
+
+        self.assertEqual(run["channelStatus"], "configuration_error")
+        self.assertEqual(run["decision"], "silent_channel_unavailable")
+        self.assertEqual(adapter.read_calls, [])
+        channel = self.store.get_channel(session["channelId"])
+        self.assertEqual(channel["lastProbeStatus"], "configuration_error")
+        self.assertNotEqual(channel["lastProbeStatus"], "network_error")
+
+    def test_unexpected_probe_failure_becomes_a_monitor_error(self) -> None:
+        class BrokenProbe:
+            def __call__(self, _config):
+                raise RuntimeError("programming failure")
+
+        secrets = MemorySecretStore()
+        session = self.create_session(secrets)
+        service = WatchdogService(
+            self.store,
+            secrets,
+            BrokenProbe(),
+            FakeAdapter(),
+        )
+
+        runs = service.run_due(NOW)
+
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["decision"], "silent_monitor_error")
+        self.assertIsNone(runs[0]["channelStatus"])
+        self.assertIsNone(self.store.get_channel(session["channelId"])["lastProbeStatus"])
 
     def test_run_and_schedule_update_roll_back_together(self) -> None:
         healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)

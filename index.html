@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#e9eeeb">
+  <meta name="theme-color" content="#ebebeb">
   <link rel="icon" href="/assets/project-console-icon.png">
   <script>
     (() => {
@@ -15,23 +15,23 @@
         : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.dataset.theme = theme;
       document.documentElement.style.colorScheme = theme;
-      document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#0f1513' : '#e9eeeb';
+      document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#181818' : '#ebebeb';
     })();
   </script>
   <title>本地项目控制台</title>
   <style>
     :root {
       color-scheme: light;
-      --n-0: #fbfcfb;
-      --n-25: #f7f9f8;
-      --n-50: #eef1ef;
-      --n-100: #e2e7e4;
-      --n-200: #cbd3cf;
-      --n-300: #abb6b1;
-      --n-500: #68736f;
-      --n-600: #505b57;
-      --n-700: #3c4743;
-      --n-900: #18221f;
+      --n-0: #ffffff;
+      --n-25: #fafafa;
+      --n-50: #f4f4f4;
+      --n-100: #ececec;
+      --n-200: #d7d7d7;
+      --n-300: #b4b4b4;
+      --n-500: #676767;
+      --n-600: #525252;
+      --n-700: #3a3a3a;
+      --n-900: #202020;
       --accent-50: #edf6f2;
       --accent-100: #dcece5;
       --accent-300: #89b7a5;
@@ -44,45 +44,48 @@
       --info: #486c7d;
       --surface-canvas: var(--n-50);
       --surface-raised: var(--n-0);
-      --surface-sidebar: #e9eeeb;
-      --surface-sunken: #e7ebe9;
+      --surface-sidebar: #ebebeb;
+      --surface-selected: #dedede;
+      --surface-sunken: #e9e9e9;
       --surface-input: var(--n-0);
-      --surface-active: #f5f9f7;
-      --surface-hover: rgba(251, 252, 251, 0.52);
+      --surface-active: #f8f8f8;
+      --surface-hover: rgba(255, 255, 255, 0.58);
       --surface-danger: #fff5f3;
       --surface-danger-strong: #fff0ed;
       --surface-inverse: var(--n-900);
       --text-primary: var(--n-900);
       --text-secondary: var(--n-500);
-      --text-tertiary: #7e8985;
+      --text-tertiary: #858585;
       --text-danger: #8e3026;
       --text-on-inverse: var(--n-0);
       --input-placeholder: #929c98;
-      --border-subtle: rgba(24, 34, 31, 0.08);
-      --border-default: rgba(24, 34, 31, 0.15);
+      --border-subtle: rgba(0, 0, 0, 0.09);
+      --border-default: rgba(0, 0, 0, 0.15);
       --backdrop: rgba(24, 34, 31, 0.42);
-      --shadow-raised: 0 10px 28px rgba(48, 64, 57, 0.07), 0 1px 3px rgba(48, 64, 57, 0.08);
-      --shadow-overlay: 0 24px 64px rgba(36, 48, 43, 0.18), 0 4px 12px rgba(36, 48, 43, 0.1);
+      --shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.045), 0 1px 3px rgba(0, 0, 0, 0.06);
+      --shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.1);
       --radius-input: 6px;
       --radius-button: 6px;
       --radius-surface: 8px;
       --radius-dialog: 8px;
-      --font-body: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-      --font-display: Bahnschrift, "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-body: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-display: "Segoe UI Variable Display", "Microsoft YaHei UI", "Segoe UI", sans-serif;
       --font-mono: "Cascadia Mono", Consolas, monospace;
-      --sidebar-width: 264px;
+      --sidebar-width: 224px;
+      --desktop-control-height: 34px;
+      --desktop-service-row-height: 82px;
     }
 
     :root[data-theme="dark"] {
       color-scheme: dark;
-      --n-25: #1b2421;
-      --n-50: #111815;
-      --n-100: #26312d;
-      --n-200: #35423d;
-      --n-300: #52615b;
-      --n-500: #9eaaa5;
-      --n-600: #b7c3be;
-      --n-700: #d0d9d5;
+      --n-25: #242424;
+      --n-50: #181818;
+      --n-100: #2f2f2f;
+      --n-200: #424242;
+      --n-300: #666666;
+      --n-500: #b4b4b4;
+      --n-600: #c6c6c6;
+      --n-700: #dedede;
       --accent-50: #183128;
       --accent-100: #204235;
       --accent-300: #4f9578;
@@ -93,24 +96,25 @@
       --warning: #e1a858;
       --danger: #ed8377;
       --info: #81b4c5;
-      --surface-canvas: #0f1513;
-      --surface-raised: #17201d;
-      --surface-sidebar: #121a17;
-      --surface-sunken: #0b110f;
-      --surface-input: #1b2521;
-      --surface-active: #1a2923;
-      --surface-hover: rgba(236, 245, 240, 0.06);
+      --surface-canvas: #181818;
+      --surface-raised: #212121;
+      --surface-sidebar: #141414;
+      --surface-selected: #2a2a2a;
+      --surface-sunken: #171717;
+      --surface-input: #2a2a2a;
+      --surface-active: #252525;
+      --surface-hover: rgba(255, 255, 255, 0.06);
       --surface-danger: rgba(237, 131, 119, 0.1);
       --surface-danger-strong: rgba(237, 131, 119, 0.15);
       --surface-inverse: #e8efeb;
-      --text-primary: #e8efeb;
-      --text-secondary: #a1ada7;
-      --text-tertiary: #7f8c86;
+      --text-primary: #ececec;
+      --text-secondary: #b4b4b4;
+      --text-tertiary: #8f8f8f;
       --text-danger: #f09a90;
       --text-on-inverse: #14201c;
       --input-placeholder: #6f7c76;
-      --border-subtle: rgba(232, 239, 235, 0.08);
-      --border-default: rgba(232, 239, 235, 0.15);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-default: rgba(255, 255, 255, 0.14);
       --backdrop: rgba(3, 8, 6, 0.72);
       --shadow-raised: 0 0 0 1px rgba(232, 239, 235, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.025);
       --shadow-overlay: 0 28px 68px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(232, 239, 235, 0.08);
@@ -118,13 +122,13 @@
 
     * { box-sizing: border-box; }
     html { background: var(--surface-canvas); -webkit-font-smoothing: antialiased; }
-    body { margin: 0; min-width: 280px; min-height: 100dvh; color: var(--text-primary); background: var(--surface-canvas); font-family: var(--font-body); letter-spacing: 0; }
+    body { margin: 0; min-width: 280px; min-height: 100dvh; color: var(--text-primary); background: var(--surface-canvas); font: 12px/1.45 var(--font-body); letter-spacing: 0; }
     button, input, textarea { font: inherit; letter-spacing: 0; }
     button, a { touch-action: manipulation; }
     button { cursor: pointer; }
     button:disabled { cursor: not-allowed; opacity: 0.46; }
     [hidden] { display: none !important; }
-    svg { width: 18px; height: 18px; stroke-width: 1.8; flex: none; }
+    svg { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
     code { font-family: var(--font-mono); }
 
     .skip-link { position: fixed; z-index: 60; left: 16px; top: 10px; transform: translateY(-160%); padding: 9px 14px; color: var(--n-0); background: var(--n-900); border-radius: var(--radius-button); }
@@ -174,62 +178,60 @@
     .refresh-state { display: flex; align-items: center; gap: 7px; margin: 10px 0 0; color: var(--text-tertiary); font-size: 11px; }
     .refresh-state svg { width: 13px; height: 13px; }
 
-    .workspace { min-width: 0; padding: 42px clamp(24px, 4vw, 64px) 64px; }
+    .workspace { min-width: 0; padding: 20px clamp(18px, 2vw, 32px) 32px; }
     .workspace-inner { width: min(1280px, 100%); margin: 0 auto; }
-    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
-    .page-kicker { margin: 0 0 8px; color: var(--accent-700); font-size: 12px; font-weight: 700; }
-    h1 { max-width: 560px; margin: 0; font: 600 32px/1.16 var(--font-display); letter-spacing: 0; text-wrap: balance; }
-    .page-description { max-width: 640px; margin: 12px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.65; }
+    .page-head { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    h1 { max-width: 560px; margin: 0; font: 600 20px/1.25 var(--font-display); letter-spacing: 0; text-wrap: balance; }
 
-    .button { min-height: 40px; display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-button); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; box-shadow: 0 1px 1px rgba(24, 34, 31, 0.03); transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, transform 100ms ease-out, box-shadow 140ms ease-out; }
+    .button { min-height: var(--desktop-control-height); display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-button); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; box-shadow: 0 1px 1px rgba(24, 34, 31, 0.03); transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, transform 100ms ease-out, box-shadow 140ms ease-out; }
     .button.primary { color: var(--n-0); background: var(--accent-700); border-color: var(--accent-700); box-shadow: 0 5px 12px rgba(36, 94, 76, 0.14), 0 1px 2px rgba(36, 94, 76, 0.18); }
     .button.danger { color: var(--danger); background: var(--surface-danger); border-color: rgba(180, 69, 56, 0.28); }
     .button.ghost { background: transparent; border-color: transparent; box-shadow: none; }
-    .button.icon-only { width: 40px; padding: 0; }
+    .button.icon-only { width: var(--desktop-control-height); padding: 0; }
     .button:active { transform: scale(0.98); }
     .button:focus-visible, .filter-button:focus-visible, .theme-toggle:focus-visible, .drag-handle:focus-visible, input:focus-visible, textarea:focus-visible, .segment input:focus-visible + span, .nav-link:focus-visible, .nav-section-trigger:focus-visible, .tool-link:focus-visible { outline: 3px solid rgba(58, 128, 105, 0.22); outline-offset: 2px; }
 
-    .board { margin-top: 38px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
-    .board-toolbar { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-subtle); }
+    .board { margin-top: 14px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
+    .board-toolbar { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 14px; border-bottom: 1px solid var(--border-subtle); }
     .board-title { display: flex; align-items: baseline; gap: 10px; }
-    .board-title h2 { margin: 0; font-size: 14px; font-weight: 700; }
-    .board-title span { color: var(--text-tertiary); font: 11px var(--font-mono); }
-    .last-updated { display: flex; align-items: center; gap: 7px; color: var(--text-tertiary); font-size: 11px; }
-    .last-updated svg { width: 13px; height: 13px; }
+    .board-title h2 { margin: 0; font-size: 13px; font-weight: 600; }
+    .board-title span { color: var(--text-tertiary); font: 10px var(--font-mono); }
+    .last-updated { display: flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 10px; }
+    .last-updated svg { width: 12px; height: 12px; }
 
-    .column-head, .service-row { display: grid; grid-template-columns: 42px 34px minmax(220px, 1.25fr) minmax(150px, 0.78fr) minmax(190px, 1fr) minmax(92px, 0.42fr) 240px; column-gap: 18px; align-items: center; }
-    .column-head { min-height: 38px; padding: 0 18px; color: var(--text-tertiary); background: var(--n-25); border-bottom: 1px solid var(--border-subtle); font-size: 11px; }
+    .column-head, .service-row { display: grid; grid-template-columns: 34px 28px minmax(180px, 1.2fr) minmax(130px, 0.75fr) minmax(150px, 0.9fr) minmax(76px, 0.42fr) 210px; column-gap: 12px; align-items: center; }
+    .column-head { min-height: 32px; padding: 0 14px; color: var(--text-tertiary); background: var(--n-25); border-bottom: 1px solid var(--border-subtle); font-size: 10px; }
     .service-list { margin: 0; padding: 0; list-style: none; }
     .service-item { position: relative; }
-    .service-row { position: relative; min-height: 126px; padding: 18px; border-bottom: 1px solid var(--border-subtle); }
+    .service-row { position: relative; min-height: var(--desktop-service-row-height); padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); }
     .service-list li:last-child .service-row { border-bottom: 0; }
     .service-row[data-state="running"], .service-row[data-state="online"] { background: var(--surface-active); }
 
     .bus-slot { position: relative; align-self: stretch; display: grid; place-items: center; }
     .bus-slot::before, .bus-slot::after { content: ""; position: absolute; left: 50%; width: 1px; height: 50%; background: var(--n-200); transform: translateX(-50%); }
-    .bus-slot::before { top: -18px; }
-    .bus-slot::after { bottom: -18px; }
+    .bus-slot::before { top: -10px; }
+    .bus-slot::after { bottom: -10px; }
     .service-list li:first-child .bus-slot::before, .service-list li:last-child .bus-slot::after { display: none; }
-    .node-light { position: relative; z-index: 1; width: 14px; height: 14px; background: var(--surface-raised); border: 2px solid var(--n-300); border-radius: 50%; box-shadow: 0 0 0 5px var(--surface-raised); }
-    .node-light.running, .node-light.online { background: var(--running); border-color: var(--running); box-shadow: 0 0 0 5px var(--surface-raised), 0 0 0 8px rgba(39, 132, 90, 0.09); }
+    .node-light { position: relative; z-index: 1; width: 12px; height: 12px; background: var(--surface-raised); border: 2px solid var(--n-300); border-radius: 50%; box-shadow: 0 0 0 4px var(--surface-raised); }
+    .node-light.running, .node-light.online { background: var(--running); border-color: var(--running); box-shadow: 0 0 0 4px var(--surface-raised), 0 0 0 6px rgba(39, 132, 90, 0.09); }
     .node-light.offline { border-color: var(--danger); }
     .node-light.needs-config { background: var(--warning); border-color: var(--warning); }
     .node-light.external { background: var(--info); border-color: var(--info); }
 
     .drag-cell { align-self: stretch; display: grid; place-items: center; }
-    .drag-handle { position: relative; width: 34px; min-height: 44px; display: grid; place-items: center; padding: 0; color: var(--n-300); background: transparent; border: 0; border-radius: var(--radius-button); cursor: grab; touch-action: none; }
+    .drag-handle { position: relative; width: 30px; min-height: 34px; display: grid; place-items: center; padding: 0; color: var(--n-300); background: transparent; border: 0; border-radius: var(--radius-button); cursor: grab; touch-action: none; }
     .drag-handle::before { content: ""; position: absolute; inset: 0 -5px; }
-    .drag-handle svg { width: 17px; height: 17px; }
+    .drag-handle svg { width: 15px; height: 15px; }
     .drag-handle:active, .service-item.is-dragging .drag-handle { color: var(--accent-700); cursor: grabbing; }
     .service-item.is-dragging { z-index: 2; }
     .service-item.is-dragging .service-row { background: var(--accent-50); box-shadow: 0 10px 24px rgba(48, 64, 57, 0.13), 0 1px 4px rgba(48, 64, 57, 0.12); }
     body.is-sorting { cursor: grabbing; user-select: none; }
 
     .service-identity { min-width: 0; }
-    .service-name-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .service-name { margin: 0; overflow: hidden; color: var(--text-primary); font-size: 16px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
-    .state-text { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
-    .state-text::before { content: ""; width: 6px; height: 6px; background: var(--n-300); border-radius: 50%; }
+    .service-name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .service-name { margin: 0; overflow: hidden; color: var(--text-primary); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+    .state-text { flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+    .state-text::before { content: ""; width: 5px; height: 5px; background: var(--n-300); border-radius: 50%; }
     .state-text.running, .state-text.online { color: var(--running); }
     .state-text.running::before, .state-text.online::before { background: var(--running); }
     .state-text.offline { color: var(--danger); }
@@ -238,26 +240,26 @@
     .state-text.needs-config::before { background: var(--warning); }
     .state-text.external { color: var(--info); }
     .state-text.external::before { background: var(--info); }
-    .service-note { margin: 9px 0 0; overflow: hidden; color: var(--text-secondary); font-size: 12px; line-height: 1.5; white-space: nowrap; text-overflow: ellipsis; }
-    .service-source { margin: 7px 0 0; overflow: hidden; color: var(--text-tertiary); font: 11px/1.45 var(--font-mono); white-space: nowrap; text-overflow: ellipsis; }
+    .service-note { margin: 4px 0 0; overflow: hidden; color: var(--text-secondary); font-size: 10px; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
+    .service-source { margin: 3px 0 0; overflow: hidden; color: var(--text-tertiary); font: 9px/1.35 var(--font-mono); white-space: nowrap; text-overflow: ellipsis; }
 
     .route-block, .command-block, .runtime-block { min-width: 0; }
-    .route-primary, .command-primary, .runtime-primary { overflow: hidden; color: var(--text-primary); font: 12px/1.5 var(--font-mono); white-space: nowrap; text-overflow: ellipsis; }
-    .route-secondary, .command-secondary, .runtime-secondary { margin-top: 6px; overflow: hidden; color: var(--text-tertiary); font-size: 11px; line-height: 1.45; white-space: nowrap; text-overflow: ellipsis; }
+    .route-primary, .command-primary, .runtime-primary { overflow: hidden; color: var(--text-primary); font: 11px/1.4 var(--font-mono); white-space: nowrap; text-overflow: ellipsis; }
+    .route-secondary, .command-secondary, .runtime-secondary { margin-top: 4px; overflow: hidden; color: var(--text-tertiary); font-size: 10px; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
     .route-primary a { color: var(--accent-700); text-decoration: underline; text-decoration-color: rgba(36, 94, 76, 0.28); text-underline-offset: 3px; }
-    .command-primary code { font-size: 11px; }
+    .command-primary code { font-size: 10px; }
 
     .row-actions { display: flex; justify-content: flex-start; align-items: center; gap: 6px; }
-    .row-actions > .button { min-height: 38px; height: 38px; gap: 6px; padding-right: 10px; padding-left: 10px; }
-    .more-actions { display: flex; margin-left: auto; padding-left: 10px; border-left: 1px solid var(--border-subtle); }
-    .more-actions .button { width: 36px; min-width: 36px; padding: 0; color: var(--text-secondary); }
+    .row-actions > .button { min-height: var(--desktop-control-height); height: var(--desktop-control-height); gap: 5px; padding-right: 9px; padding-left: 9px; }
+    .more-actions { display: flex; margin-left: auto; padding-left: 8px; border-left: 1px solid var(--border-subtle); }
+    .more-actions .button { width: 32px; min-width: 32px; padding: 0; color: var(--text-secondary); }
     .empty-state { padding: 64px 24px; text-align: center; }
     .empty-state svg { width: 28px; height: 28px; color: var(--n-300); }
     .empty-state h3 { margin: 16px 0 0; font-size: 15px; }
     .empty-state p { margin: 8px 0 0; color: var(--text-secondary); font-size: 13px; }
 
-    .skeleton { position: relative; overflow: hidden; height: 126px; border-bottom: 1px solid var(--border-subtle); }
-    .skeleton::after { content: ""; position: absolute; left: 74px; top: 28px; width: min(260px, 36%); height: 13px; background: var(--n-100); border-radius: 3px; box-shadow: 0 28px 0 var(--n-100), 350px 0 0 var(--n-100), 350px 28px 0 var(--n-100); opacity: 0.72; }
+    .skeleton { position: relative; overflow: hidden; height: var(--desktop-service-row-height); border-bottom: 1px solid var(--border-subtle); }
+    .skeleton::after { content: ""; position: absolute; left: 64px; top: 18px; width: min(240px, 34%); height: 10px; background: var(--n-100); border-radius: 3px; box-shadow: 0 20px 0 var(--n-100), 320px 0 0 var(--n-100), 320px 20px 0 var(--n-100); opacity: 0.72; }
 
     dialog { max-height: calc(100dvh - 28px); padding: 0; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-dialog); box-shadow: var(--shadow-overlay); }
     dialog::backdrop { background: var(--backdrop); }
@@ -319,7 +321,7 @@
     :root[data-theme="dark"] .segment input:checked + span { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
 
     @media (max-width: 1440px) {
-      .column-head, .service-row { grid-template-columns: 42px 34px minmax(210px, 1.2fr) minmax(150px, 0.8fr) minmax(90px, 0.45fr) 240px; }
+      .column-head, .service-row { grid-template-columns: 34px 28px minmax(180px, 1.2fr) minmax(130px, 0.8fr) minmax(76px, 0.45fr) 210px; }
       .column-head > :nth-child(5), .command-block { display: none; }
     }
 
@@ -342,13 +344,13 @@
       .tool-nav h2 { margin-bottom: 4px; }
       .tool-link { width: fit-content; min-height: 44px; background: var(--surface-hover); border-color: var(--border-subtle); }
       .theme-controls { grid-column: 1 / -1; margin-top: 0; padding-top: 12px; }
+      .button, .row-actions > .button { min-height: 44px; height: 44px; }
 
       .host-status { display: none; }
-      .workspace { padding: 30px 20px 52px; }
+      .workspace { padding: 24px 20px 44px; }
       .page-head { align-items: center; }
-      h1 { font-size: 27px; }
-      .page-description { display: none; }
-      .board { margin-top: 26px; }
+      h1 { font-size: 20px; }
+      .board { margin-top: 18px; }
       .column-head { display: none; }
       .service-row { grid-template-columns: 28px 34px minmax(0, 1fr) auto; gap: 10px; min-height: 0; padding: 19px 14px; }
       .bus-slot { grid-row: 1 / span 4; }
@@ -369,8 +371,7 @@
       .summary-number strong { font-size: 27px; }
       .workspace { padding: 24px 12px 44px; }
       .page-head { gap: 14px; padding: 0 4px; }
-      .page-kicker { margin-bottom: 5px; }
-      h1 { font-size: 23px; }
+      h1 { font-size: 19px; }
       .page-head > .button { width: 42px; min-width: 42px; padding: 0; }
       .page-head > .button > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
       .board-toolbar { padding: 0 13px 0 16px; }
@@ -392,7 +393,7 @@
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
     }
   </style>
-  <link rel="stylesheet" href="/assets/console-sidebar.css?v=8">
+  <link rel="stylesheet" href="/assets/console-sidebar.css?v=11">
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到项目列表</a>
@@ -403,11 +404,7 @@
     <main class="workspace" id="main-content">
       <div class="workspace-inner">
         <header class="page-head">
-          <div>
-            <p class="page-kicker">项目总览</p>
-            <h1>服务运行台</h1>
-            <p class="page-description">启动本地项目、检查端口，并从同一个位置进入所有工作界面。</p>
-          </div>
+          <h1>项目控制台</h1>
           <button class="button primary" id="add-project" type="button"><span id="add-icon"></span><span>添加项目</span></button>
         </header>
 
@@ -434,7 +431,7 @@
         <fieldset class="local-fields" id="local-fields">
           <label class="field port-field"><span>本地端口</span><input name="port" inputmode="numeric" autocomplete="off" placeholder="例如：5173"></label>
           <label class="field"><span>工作目录</span><input name="path" autocomplete="off" placeholder="D:\path\to\project"><small class="field-hint">启动命令会在这个目录中执行。</small></label>
-          <label class="field"><span>启动命令</span><input name="startCommand" autocomplete="off" placeholder="npm run dev 或 start-server.bat"></label>
+          <label class="field"><span>启动命令或文件名</span><input name="startCommand" autocomplete="off" placeholder="npm run dev 或 start-server.bat"><small class="field-hint">可直接填写命令，也可只填写项目目录内的 .exe、.bat、.cmd、.ps1 或 .py 文件名，控制台会自动补齐启动方式。</small></label>
           <label class="field"><span>关闭命令（可选）</span><input name="stopCommand" autocomplete="off" placeholder="docker compose down"><small class="field-hint">留空时，控制台会结束它启动的进程及子进程。</small></label>
         </fieldset>
         <label class="field"><span>访问链接</span><input name="url" inputmode="url" autocomplete="url" placeholder="http://127.0.0.1:5173"></label>
@@ -513,6 +510,12 @@
     }
 
     function runtimeText(project) {
+      if (project.kind === 'session-manager') {
+        if (project.state === 'starting') return ['启动中', '正在连接 8766 / 8767'];
+        return project.state === 'running'
+          ? ['8766 / 8767', '会话管理运行时已就绪']
+          : ['已关闭', '按需启动 Codex 会话管理'];
+      }
       if (project.mode === 'external') {
         if (project.state === 'needs-config') return ['待配置', '补充网页地址'];
         return [project.websiteActive ? '网页在线' : '网页离线', project.websiteDetail || (project.websiteActive ? '连接正常' : '连接失败')];
@@ -524,6 +527,12 @@
     }
 
     function primaryAction(project) {
+      if (project.kind === 'session-manager') {
+        if (project.state === 'running' || project.state === 'starting') {
+          return `<button class="button danger" type="button" data-action="stop" data-id="${project.id}"${project.state === 'starting' ? ' disabled' : ''}>${icon('square')}<span>关闭</span></button>`;
+        }
+        return `<button class="button primary" type="button" data-action="start" data-id="${project.id}">${icon('play')}<span>启动</span></button>`;
+      }
       const href = safeHref(project.url);
       if (project.mode === 'external') {
         return href ? `<a class="button primary" href="${escapeHtml(href)}" target="_blank" rel="noreferrer"><span>打开</span>${icon('external')}</a>` : `<button class="button" type="button" data-action="edit" data-id="${project.id}">${icon('edit')}<span>完成配置</span></button>`;
@@ -534,27 +543,30 @@
     }
 
     function projectRow(project) {
-      const href = safeHref(project.url);
+      const systemProject = project.kind === 'session-manager';
+      const href = systemProject ? '' : safeHref(project.url);
       const [runtimePrimary, runtimeSecondary] = runtimeText(project);
-      const routePrimary = href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(project.mode === 'external' ? new URL(href).host : project.url)}</a>` : '未设置访问地址';
-      const routeSecondary = project.mode === 'external' ? `${href ? new URL(href).protocol.slice(0, -1).toUpperCase() : 'HTTP'} 远程网页` : project.port ? `localhost:${escapeHtml(project.port)} · ${project.portActive ? '正在监听' : '未监听'}` : '未设置监控端口';
-      const source = project.mode === 'external' ? '远程网页服务' : project.path || '未设置工作目录';
-      const command = project.mode === 'external' ? '不由本机控制' : project.startCommand || '未设置启动命令';
-      const commandSecondary = project.mode === 'external' ? '控制台定时检测可达性' : project.stopCommand ? '已设置独立关闭命令' : '关闭时结束进程树';
-      return `<li class="service-item" data-project-id="${escapeHtml(project.id)}"><article class="service-row" data-state="${project.state}">
+      const routePrimary = systemProject ? `<a href="/session-manager">/session-manager</a>` : href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(project.mode === 'external' ? new URL(href).host : project.url)}</a>` : '未设置访问地址';
+      const routeSecondary = systemProject ? '独立入口 · 8766 / 8767' : project.mode === 'external' ? `${href ? new URL(href).protocol.slice(0, -1).toUpperCase() : 'HTTP'} 远程网页` : project.port ? `localhost:${escapeHtml(project.port)} · ${project.portActive ? '正在监听' : '未监听'}` : '未设置监控端口';
+      const source = systemProject ? '随项目控制台按需启动' : project.mode === 'external' ? '远程网页服务' : project.path || '未设置工作目录';
+      const command = systemProject ? '受控运行时，不执行自定义脚本' : project.mode === 'external' ? '不由本机控制' : project.startCommand || '未设置启动命令';
+      const commandSecondary = systemProject ? '配置与项目控制台完全隔离' : project.mode === 'external' ? '控制台定时检测可达性' : project.stopCommand ? '已设置独立关闭命令' : '关闭时结束进程树';
+      const dragCell = systemProject ? '<div class="drag-cell" aria-hidden="true"></div>' : `<div class="drag-cell"><button class="drag-handle" type="button" aria-label="调整 ${escapeHtml(project.name)} 的顺序，使用上下方向键移动" aria-keyshortcuts="ArrowUp ArrowDown Home End" title="拖动调整顺序">${icon('grip')}</button></div>`;
+      const more = systemProject ? '' : `<div class="more-actions"><button class="button ghost" type="button" data-action="edit" data-id="${project.id}" aria-label="编辑 ${escapeHtml(project.name)}" title="编辑项目">${icon('edit')}</button><button class="button ghost" type="button" data-action="delete" data-id="${project.id}" aria-label="删除 ${escapeHtml(project.name)}" title="删除项目">${icon('trash')}</button></div>`;
+      return `<li class="service-item${systemProject ? ' system-project' : ''}" data-project-id="${escapeHtml(project.id)}"${systemProject ? ' data-system="true"' : ''}><article class="service-row" data-state="${project.state}">
         <div class="bus-slot" aria-hidden="true"><span class="node-light ${project.state}"></span></div>
-        <div class="drag-cell"><button class="drag-handle" type="button" aria-label="调整 ${escapeHtml(project.name)} 的顺序，使用上下方向键移动" aria-keyshortcuts="ArrowUp ArrowDown Home End" title="拖动调整顺序">${icon('grip')}</button></div>
+        ${dragCell}
         <div class="service-identity"><div class="service-name-line"><h3 class="service-name">${escapeHtml(project.name)}</h3><span class="state-text ${project.state}">${escapeHtml(project.stateLabel)}</span></div><p class="service-note">${escapeHtml(project.note || '没有项目备注。')}</p><p class="service-source" title="${escapeHtml(source)}">${escapeHtml(source)}</p></div>
         <div class="route-block"><div class="route-primary">${routePrimary}</div><div class="route-secondary">${routeSecondary}</div></div>
         <div class="command-block"><div class="command-primary" title="${escapeHtml(command)}"><code>${escapeHtml(command)}</code></div><div class="command-secondary">${commandSecondary}</div></div>
         <div class="runtime-block"><div class="runtime-primary">${escapeHtml(runtimePrimary)}</div><div class="runtime-secondary">${escapeHtml(runtimeSecondary)}</div></div>
-        <div class="row-actions">${primaryAction(project)}${project.mode === 'local' ? `<button class="button" type="button" data-action="log" data-id="${project.id}">${icon('file')}<span>日志</span></button>` : ''}<div class="more-actions"><button class="button ghost" type="button" data-action="edit" data-id="${project.id}" aria-label="编辑 ${escapeHtml(project.name)}" title="编辑项目">${icon('edit')}</button><button class="button ghost" type="button" data-action="delete" data-id="${project.id}" aria-label="删除 ${escapeHtml(project.name)}" title="删除项目">${icon('trash')}</button></div></div>
+        <div class="row-actions">${primaryAction(project)}${!systemProject && project.mode === 'local' ? `<button class="button" type="button" data-action="log" data-id="${project.id}">${icon('file')}<span>日志</span></button>` : ''}${more}</div>
       </article></li>`;
     }
 
     function render() {
       const projects = currentProjects();
-      const local = state.projects.filter(project => project.mode !== 'external');
+      const local = state.projects.filter(project => project.mode !== 'external' && project.kind !== 'session-manager');
       const running = local.filter(project => project.state === 'running').length;
       window.consoleSidebar?.setProjectSummary({
         runningCount: running,
@@ -579,7 +591,7 @@
     }
 
     function applyVisibleOrder(visibleIds) {
-      const visibleSet = new Set(currentProjects().map(project => project.id));
+      const visibleSet = new Set(currentProjects().filter(project => project.kind !== 'session-manager').map(project => project.id));
       const projectsById = new Map(state.projects.map(project => [project.id, project]));
       let index = 0;
       state.projects = state.projects.map(project => visibleSet.has(project.id) ? projectsById.get(visibleIds[index++]) : project);
@@ -592,7 +604,7 @@
         await api('/api/projects/reorder', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: state.projects.map(project => project.id) })
+          body: JSON.stringify({ ids: state.projects.filter(project => project.kind !== 'session-manager').map(project => project.id) })
         });
         toast(message);
       } catch (error) {
@@ -612,7 +624,7 @@
       item.classList.remove('is-dragging');
       document.body.classList.remove('is-sorting');
       state.dragging = false;
-      const visibleIds = $$('.service-item').map(row => row.dataset.projectId);
+      const visibleIds = $$('.service-item:not([data-system])').map(row => row.dataset.projectId);
       const changed = dragState.moved && visibleIds.join('|') !== dragState.originalIds.join('|');
       Object.assign(dragState, { item: null, pointerId: null, moved: false, originalIds: [] });
       if (cancelled) {
@@ -716,7 +728,7 @@
       const handle = event.target.closest('.drag-handle');
       if (!handle || state.reordering || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
       const item = handle.closest('.service-item');
-      const visibleIds = $$('.service-item').map(row => row.dataset.projectId);
+      const visibleIds = $$('.service-item:not([data-system])').map(row => row.dataset.projectId);
       const currentIndex = visibleIds.indexOf(item?.dataset.projectId);
       if (currentIndex < 0) return;
       const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? visibleIds.length - 1 : currentIndex + (event.key === 'ArrowUp' ? -1 : 1);

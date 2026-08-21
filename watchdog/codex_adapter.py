@@ -103,6 +103,23 @@ def _latest_status_turn(turns: list[object]) -> object | None:
     return turns[-1]
 
 
+def _turn_diagnostic_text(turn: dict) -> str:
+    items = turn.get("items")
+    if not isinstance(items, list):
+        return ""
+    messages: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type not in {"agentMessage", "plan", "systemMessage", "error"}:
+            continue
+        value = item.get("text") or item.get("message")
+        if isinstance(value, str) and value.strip():
+            messages.append(value.strip())
+    return _limited_text("\n".join(messages))
+
+
 def _turn_snapshot(turn: object) -> TurnSnapshot:
     if not isinstance(turn, dict):
         raise CodexProtocolError("thread/read returned a malformed turn")
@@ -125,6 +142,7 @@ def _turn_snapshot(turn: object) -> TurnSnapshot:
         error_message=message if isinstance(message, str) else "",
         error_kind=error_kind,
         http_status=http_status,
+        diagnostic_text=_turn_diagnostic_text(turn),
     )
 
 

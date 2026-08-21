@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Python = 'py',
+    [string]$Python = 'python',
     [string]$Destination = ''
 )
 

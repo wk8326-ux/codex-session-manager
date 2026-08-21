@@ -1,5 +1,21 @@
+!define LPC_INSTALLER_PREFLIGHT_SOURCE "${__FILEDIR__}\installer-preflight.ps1"
+
+!macro NSIS_HOOK_PREINSTALL
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=lpc-installer-preflight.ps1 "${LPC_INSTALLER_PREFLIGHT_SOURCE}"
+  SetOutPath "$INSTDIR"
+  nsExec::ExecToStack '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\lpc-installer-preflight.ps1" -InstallDirectory "$INSTDIR"'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" lpc_preinstall_done
+  MessageBox MB_OK|MB_ICONSTOP "无法安全停止旧版 Local Project Console 后台，安装已中止。请从托盘停止后台后重试。$\r$\n$\r$\n$1"
+  Abort
+  lpc_preinstall_done:
+!macroend
+
 !macro NSIS_HOOK_PREUNINSTALL
-  nsExec::ExecToLog 'powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\manage-system-startup.ps1" -Action Uninstall'
+  nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\manage-system-startup.ps1" -Action Uninstall'
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

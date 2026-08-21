@@ -15,12 +15,21 @@ class SystemStartupContractTests(unittest.TestCase):
         self.assertIn("-LogonType Interactive", script)
         self.assertIn("function Get-PythonServiceExecutable", script)
         self.assertIn("New-ScheduledTaskAction", script)
-        self.assertIn("--service", script)
+        self.assertIn("--core", script)
         self.assertIn("-RestartCount 999", script)
         self.assertIn("-RestartInterval (New-TimeSpan -Minutes 1)", script)
         self.assertIn("-StartWhenAvailable", script)
+        self.assertIn("-Priority 4", script)
         self.assertIn("-MultipleInstances IgnoreNew", script)
-        for action in ("Install", "Status", "Start", "Restart", "Stop", "Uninstall"):
+        for action in (
+            "Install",
+            "Validate",
+            "Status",
+            "Start",
+            "Restart",
+            "Stop",
+            "Uninstall",
+        ):
             self.assertIn(f"'{action}'", script)
 
         for contract in (
@@ -33,15 +42,24 @@ class SystemStartupContractTests(unittest.TestCase):
             "LogDirectory",
             "Invoke-LegacyMigration",
             "Restore-PreviousConsoleTask",
-            "$isSourceRuntime",
-            "$isPackagedRuntime",
+            "Assert-InstalledTaskMatches",
+            "Test-InstalledTaskMatches",
+            "Get-ConsolePidFileProcessIds",
+            "Test-ConsoleProcessOwnership",
+            "console.pid",
+            "$isConsoleRuntime",
             "--migrate-from",
-            "lpc-service\\.exe",
             "$taskkillExitCode",
             "$previousErrorPreference",
         ):
             self.assertIn(contract, script)
         self.assertIn("-TimeoutSeconds 120", script)
+        self.assertIn("$task.Settings.Priority -ne 4", script)
+
+        install = script.split("'Install' {", 1)[1].split("'Validate' {", 1)[0]
+        self.assertIn(
+            "$switchingRuntime = -not (Test-InstalledTaskMatches)", install
+        )
 
     def test_restart_replaces_stray_console_processes_without_expensive_tcp_cmdlets(self) -> None:
         script = (ROOT / "scripts" / "manage-system-startup.ps1").read_text(
@@ -49,24 +67,49 @@ class SystemStartupContractTests(unittest.TestCase):
         )
 
         for contract in (
-            "$consolePorts = @(8765, 8766, 8767)",
+            "$consolePorts = @(8765)",
             "function Get-ConsoleListenerProcessIds",
             "netstat.exe",
             "function Stop-StrayConsoleProcesses",
+            "function Wait-ConsoleProcessExit",
             "taskkill.exe",
         ):
             self.assertIn(contract, script)
         self.assertNotIn("Get-NetTCPConnection", script)
+        stop_helper = script.split("function Stop-StrayConsoleProcesses", 1)[1].split(
+            "function Invoke-ScheduledTaskCommand", 1
+        )[0]
+        self.assertIn("if ($null -eq $isConsoleRuntime) { continue }", stop_helper)
+        self.assertIn("Wait-ConsoleProcessExit -ProcessId $processId", stop_helper)
+        self.assertNotIn(
+            "$taskkillExitCode -ne 0 -and (Get-Process", stop_helper
+        )
         restart = script.split("'Restart' {", 1)[1].split("'Uninstall' {", 1)[0]
         self.assertLess(
             restart.index("Stop-StrayConsoleProcesses"),
             restart.index("Start-ConsoleTaskFast"),
         )
 
+    def test_missing_scheduled_task_is_handled_by_exit_code(self) -> None:
+        script = (ROOT / "scripts" / "manage-system-startup.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        helper = script.split("function Invoke-ScheduledTaskCommand", 1)[1].split(
+            "function Test-ConsoleTaskExists", 1
+        )[0]
+        self.assertIn("$ErrorActionPreference = 'SilentlyContinue'", helper)
+        self.assertIn("$LASTEXITCODE", helper)
+        exists = script.split("function Test-ConsoleTaskExists", 1)[1].split(
+            "function Stop-ConsoleTaskFast", 1
+        )[0]
+        self.assertIn("Invoke-ScheduledTaskCommand -Verb 'Query'", exists)
+
     def test_service_mode_uses_project_local_runtime_logs(self) -> None:
         application = (ROOT / "app.py").read_text(encoding="utf-8")
 
         self.assertIn("--service", application)
+        self.assertIn("--core", application)
         self.assertIn("console-service.log", application)
         self.assertIn("console-service.previous.log", application)
 
@@ -105,6 +148,38 @@ class SystemStartupContractTests(unittest.TestCase):
         self.assertIn("/api/health", script)
         self.assertLess(start.index("Test-ConsoleHealth"), start.index("Test-ConsoleTaskExists"))
         self.assertNotIn("Get-ConsoleTask", start)
+
+    def test_packaged_runtime_takeover_uses_one_strict_health_contract(self) -> None:
+        script = (ROOT / "scripts" / "manage-system-startup.ps1").read_text(
+            encoding="utf-8"
+        )
+        runtime = (ROOT / "desktop" / "src-tauri" / "src" / "runtime.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[string]$ExpectedVersion = ''", script)
+        health = script.split("function Test-ConsoleHealth", 1)[1].split(
+            "function Get-ConsolePidFileProcessIds", 1
+        )[0]
+        for contract in (
+            "$health.version",
+            "$health.mode",
+            "$health.ports.admin",
+        ):
+            self.assertIn(contract, health)
+
+        pid_sources = script.split("function Get-ConsolePidFileProcessIds", 1)[1].split(
+            "function Test-ConsoleProcessOwnership", 1
+        )[0]
+        self.assertIn("Get-ConsoleHealthMetadata", pid_sources)
+        self.assertIn("$health.pid", pid_sources)
+
+        ownership = script.split("function Test-ConsoleProcessOwnership", 1)[1].split(
+            "function Stop-StrayConsoleProcesses", 1
+        )[0]
+        self.assertIn("if ($pathMatches) { return $true }", ownership)
+        self.assertIn('"-ExpectedVersion"', runtime)
+        self.assertIn("CURRENT_VERSION", runtime)
 
     def test_screenshot_installer_uses_a_pinned_flameshot_package(self) -> None:
         script = (ROOT / "scripts" / "install-screenshot-tool.ps1").read_text(

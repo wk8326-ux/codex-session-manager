@@ -8,6 +8,7 @@ from PyInstaller.utils.hooks import collect_submodules
 project_root = Path(SPECPATH).resolve().parent
 resources = [
     (str(project_root / "index.html"), "."),
+    (str(project_root / "session-manager.html"), "."),
     (str(project_root / "watchdog.html"), "."),
     (str(project_root / "remote.html"), "."),
     (str(project_root / "remote.css"), "."),

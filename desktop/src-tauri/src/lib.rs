@@ -5,7 +5,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Manager, State, Theme, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
@@ -97,6 +97,7 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let navigation_app = app.handle().clone();
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("本地项目控制台")
+        .theme(Some(Theme::Dark))
         .inner_size(1280.0, 820.0)
         .min_inner_size(1024.0, 680.0)
         .center()
@@ -124,8 +125,7 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 
 fn create_tray(app: &tauri::App) -> tauri::Result<()> {
     let project = MenuItem::with_id(app, "project", "打开项目控制台", true, None::<&str>)?;
-    let watchdog = MenuItem::with_id(app, "watchdog", "会话监控", true, None::<&str>)?;
-    let remote = MenuItem::with_id(app, "remote", "远程会话", true, None::<&str>)?;
+    let session_manager = MenuItem::with_id(app, "session-manager", "Codex 会话管理", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "后台状态：检测中", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, "restart", "重启后台服务", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "停止后台服务", true, None::<&str>)?;
@@ -138,8 +138,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
         app,
         &[
             &project,
-            &watchdog,
-            &remote,
+            &session_manager,
             &separator_a,
             &status,
             &restart,
@@ -162,8 +161,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "project" => show_route(app, "/"),
-            "watchdog" => show_route(app, "/watchdog"),
-            "remote" => show_route(app, "/remote"),
+            "session-manager" => show_route(app, "/session-manager"),
             "restart" => {
                 let app = app.clone();
                 std::thread::spawn(move || {
@@ -174,7 +172,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
             "stop" => {
                 let confirmed = rfd::MessageDialog::new()
                     .set_title("停止后台服务")
-                    .set_description("这会停止项目控制台、会话监控和手机远程访问。确定继续吗？")
+                    .set_description("这会停止项目控制台核心，但不会自动关闭独立的 Codex 会话管理。确定继续吗？")
                     .set_buttons(rfd::MessageButtons::YesNo)
                     .set_level(rfd::MessageLevel::Warning)
                     .show();

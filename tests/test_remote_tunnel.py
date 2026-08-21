@@ -66,6 +66,64 @@ class FrpTunnelManagerTests(unittest.TestCase):
             process.kill.assert_called_once()
             self.assertEqual(process.wait.call_count, 2)
 
+    def test_new_manager_recovers_an_existing_owned_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "frpc.exe"
+            config = root / "frpc.toml"
+            log = root / "frpc.log"
+            executable.write_bytes(b"binary")
+            config.write_text("serverAddr = 'example'", encoding="utf-8")
+            log.with_suffix(".pid").write_text("1234", encoding="ascii")
+
+            manager = FrpTunnelManager(executable, config, log)
+            with patch(
+                "remote.tunnel._process_matches_executable", return_value=True
+            ):
+                self.assertTrue(manager.running())
+                self.assertEqual(manager.status()["pid"], 1234)
+
+    def test_new_manager_removes_a_stale_pid_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "frpc.exe"
+            config = root / "frpc.toml"
+            log = root / "frpc.log"
+            executable.write_bytes(b"binary")
+            config.write_text("serverAddr = 'example'", encoding="utf-8")
+            pid_path = log.with_suffix(".pid")
+            pid_path.write_text("1234", encoding="ascii")
+
+            manager = FrpTunnelManager(executable, config, log)
+            with patch(
+                "remote.tunnel._process_matches_executable", return_value=False
+            ):
+                self.assertFalse(manager.running())
+
+            self.assertFalse(pid_path.exists())
+
+    def test_pid_persistence_failure_stops_the_new_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "frpc.exe"
+            config = root / "frpc.toml"
+            executable.write_bytes(b"binary")
+            config.write_text("serverAddr = 'example'", encoding="utf-8")
+            process = MagicMock()
+            process.pid = 1234
+            process.poll.return_value = None
+            manager = FrpTunnelManager(executable, config, root / "frpc.log")
+
+            with (
+                patch("remote.tunnel.subprocess.Popen", return_value=process),
+                patch.object(manager, "_persist_pid", side_effect=OSError("disk full")),
+            ):
+                self.assertFalse(manager.start())
+
+            process.terminate.assert_called_once()
+            process.wait.assert_called_once_with(timeout=5)
+            self.assertFalse(manager.running())
+
 
 if __name__ == "__main__":
     unittest.main()

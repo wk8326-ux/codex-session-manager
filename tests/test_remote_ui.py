@@ -27,10 +27,10 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn(".runtime-strip.running .runtime-progress", stylesheet)
         self.assertIn(".composer-tools", stylesheet)
         self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
-        self.assertIn("remote.css?v=25", html)
-        self.assertIn("remote.js?v=25", html)
-        self.assertIn("remote.css?v=25", worker)
-        self.assertIn("remote.js?v=25", worker)
+        self.assertIn("remote.css?v=27", html)
+        self.assertIn("remote.js?v=28", html)
+        self.assertIn("remote.css?v=27", worker)
+        self.assertIn("remote.js?v=28", worker)
 
     def test_mobile_session_navigation_does_not_open_the_keyboard(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -128,6 +128,39 @@ if (!context.rejected({ status: 400 })) process.exit(4);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_confirmation_retries_end_in_a_stable_unconfirmed_state(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        start = script.index("  function scheduleOutgoingConfirmation")
+        end = script.index("\n  function updateOutgoingMessage", start)
+        function_source = script[start:end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const outgoing = { id: 'message-1', sessionId: 'session-1', message: 'hello', status: 'confirming', image: null };
+const state = { outgoingMessages: [outgoing], selectedSessionId: '' };
+const context = {
+  state,
+  api: async () => ({ confirmationPending: true }),
+  updateOutgoingMessage: (_id, updates) => Object.assign(outgoing, updates),
+  setTimeout: callback => { Promise.resolve().then(callback); return 1; },
+  encodeURIComponent,
+};
+vm.createContext(context);
+vm.runInContext(`${source}; this.schedule = scheduleOutgoingConfirmation;`, context);
+context.schedule('message-1');
+setTimeout(() => {
+  if (outgoing.status !== 'unconfirmed') process.exit(1);
+}, 30);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_overlapping_conversation_refresh_is_requeued(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         refresh_source = script[
@@ -162,13 +195,50 @@ if (!context.rejected({ status: 400 })) process.exit(4);
         self.assertIn("scheduleConversationRefresh(60)", event_source)
         self.assertNotIn("clearTimeout(state.conversationRefreshTimer)", event_source)
         self.assertNotIn("cancelConversationRefresh()", event_source)
-        self.assertIn("remote-worker-reloaded-v29", script)
+        self.assertIn("remote-worker-reloaded-v33", script)
+
+    def test_conversation_refresh_timer_can_be_cancelled_and_rescheduled(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        timer_source = script[
+            script.index("  function cancelConversationRefresh"):
+            script.index("\n  function startConversationHeartbeat", script.index("  function cancelConversationRefresh"))
+        ]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const cleared = [];
+const state = {
+  selectedSessionId: 'session-1',
+  conversationRefreshTimer: 17,
+  conversationRefreshDueAt: Date.now() + 5000,
+};
+const context = {
+  state,
+  Date,
+  clearTimeout: value => cleared.push(value),
+  setTimeout: () => 29,
+};
+vm.createContext(context);
+vm.runInContext(`${source}; this.schedule = scheduleConversationRefresh;`, context);
+context.schedule(25);
+if (cleared.length !== 1 || cleared[0] !== 17) process.exit(1);
+if (state.conversationRefreshTimer !== 29) process.exit(2);
+if (state.conversationRefreshDueAt <= Date.now()) process.exit(3);
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, timer_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_remote_page_has_stable_workspaces_and_mobile_controls(self) -> None:
         html = (ROOT / "remote.html").read_text(encoding="utf-8")
         sidebar = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
 
-        for label in ("项目控制台", "会话监控", "远程会话"):
+        for label in ("项目控制台", "Codex 会话管理"):
             self.assertIn(label, sidebar)
         self.assertNotIn('data-console-sidebar', html)
         self.assertNotIn('/assets/console-sidebar.css', html)
@@ -303,10 +373,56 @@ if (context.stateLabel('unknown') !== '状态未知') process.exit(2);
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_late_status_hydration_cannot_erase_a_newer_live_event(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        helper_start = script.index("  function setSessionStatusOverride")
+        helper_end = script.index("\n  function updateSessionStatusesFromEvents", helper_start)
+        hydrate_start = script.index("  async function hydrateSessionStatuses")
+        hydrate_end = script.index("\n  async function loadWorkspaceData", hydrate_start)
+        function_source = script[helper_start:helper_end] + "\n" + script[hydrate_start:hydrate_end]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+let resolveRequest;
+const state = {
+  sessions: [],
+  sessionStatusLoading: false,
+  sessionStatusRevision: 0,
+  sessionStatusOverrides: new Map([['thread-1', 'completed']]),
+};
+let nextRequest = new Promise(resolve => { resolveRequest = resolve; });
+const context = {
+  state,
+  api: async () => nextRequest,
+  renderSessions: () => {},
+};
+vm.createContext(context);
+vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.setOverride = setSessionStatusOverride;`, context);
+(async () => {
+  const pending = context.hydrate();
+  context.setOverride('thread-1', 'inProgress');
+  resolveRequest([{ id: 'session-1', threadId: 'thread-1' }]);
+  await pending;
+  if (state.sessionStatusOverrides.get('thread-1') !== 'inProgress') process.exit(1);
+
+  nextRequest = Promise.resolve([{ id: 'session-1', threadId: 'thread-1' }]);
+  await context.hydrate();
+  if (state.sessionStatusOverrides.size !== 0) process.exit(2);
+})().catch(error => { console.error(error); process.exit(3); });
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, function_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_chat_surface_uses_a_central_reading_column_and_integrated_composer(self) -> None:
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
 
-        self.assertIn("--chat-column: 760px", stylesheet)
+        self.assertIn("--chat-column: 720px", stylesheet)
         self.assertIn("width: min(var(--chat-column), 100%)", stylesheet)
         self.assertIn(".conversation { width: 100%; height: 100%;", stylesheet)
         self.assertIn(".composer-row { width: min(var(--chat-column), 100%);", stylesheet)
@@ -843,6 +959,89 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         self.assertIn("state.conversationCache.set(sessionId", script)
         self.assertNotIn("conversationRefreshInFlight: false", script)
 
+    def test_session_statuses_periodically_resync_and_recover_event_gaps(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("SESSION_STATUS_REFRESH_MS", script)
+        self.assertIn("function startSessionStatusHeartbeat()", script)
+        hydrate_start = script.index("  async function hydrateSessionStatuses")
+        hydrate_source = script[
+            hydrate_start:script.index("\n  async function loadWorkspaceData", hydrate_start)
+        ]
+        poll_start = script.index("  async function pollEvents")
+        poll_source = script[
+            poll_start:script.index("\n  async function createPairing", poll_start)
+        ]
+        node_script = r"""
+const vm = require('vm');
+const source = process.argv[1];
+const fresh = [{ id: 'session-1', threadId: 'thread-1', threadStatus: 'active' }];
+const calls = [];
+const state = {
+  admin: true,
+  token: '',
+  polling: false,
+  cursor: 900,
+  eventStreamId: 'old-stream',
+  sessions: [{ id: 'stale', threadId: 'stale-thread' }],
+  sessionStatusLoading: false,
+  sessionStatusOverrides: new Map([['stale-thread', 'failed']]),
+};
+let eventRequests = 0;
+let scheduledEvents = 0;
+const context = {
+  state,
+  api: async path => {
+    calls.push(path);
+    if (path === '/api/remote/sessions') return fresh;
+    if (path.startsWith('/api/remote/events')) {
+      eventRequests += 1;
+      state.polling = false;
+      return {
+        cursor: 1,
+        streamId: 'new-stream',
+        events: [{ sequence: 1, threadId: 'thread-1', status: 'failed' }],
+        resyncRequired: false,
+      };
+    }
+    throw new Error(`unexpected request: ${path}`);
+  },
+  renderSessions: () => {},
+  scheduleEventRefresh: () => { scheduledEvents += 1; },
+  setConnected: () => {},
+  showPairScreen: () => {},
+  setTimeout,
+};
+vm.createContext(context);
+vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.poll = pollEvents;`, context);
+(async () => {
+  await context.hydrate();
+  if (state.sessions[0].id !== 'session-1') process.exit(1);
+  if (state.sessionStatusOverrides.size !== 0) process.exit(2);
+
+  state.sessions = [{ id: 'stale-again', threadId: 'stale-thread' }];
+  state.sessionStatusOverrides.set('stale-thread', 'interrupted');
+  await context.poll();
+  if (eventRequests !== 1) process.exit(3);
+  if (state.sessions[0].id !== 'session-1') process.exit(4);
+  if (state.sessionStatusOverrides.size !== 0) process.exit(5);
+  if (!calls.some(path => path.startsWith('/api/remote/events?after=900'))) process.exit(6);
+  if (state.eventStreamId !== 'new-stream') process.exit(7);
+  if (scheduledEvents !== 0) process.exit(8);
+})().catch(error => {
+  console.error(error);
+  process.exit(9);
+});
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script, hydrate_source + poll_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_conversation_text_uses_safe_readable_markdown_structure(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
@@ -861,9 +1060,9 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=25', script)
-        self.assertIn('href="/remote.css?v=25"', html)
-        self.assertIn('/remote.js?v=25', script)
+        self.assertIn('/remote.css?v=27', script)
+        self.assertIn('href="/remote.css?v=27"', html)
+        self.assertIn('/remote.js?v=28', script)
         self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)

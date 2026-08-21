@@ -5,6 +5,7 @@
 !.ui-craft/brief.md
 !.ui-craft/tokens.md
 .runtime/
+.build-venv/
 __pycache__/
 *.py[cod]
 logs/

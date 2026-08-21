@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#181818">
+  <link rel="icon" href="/assets/project-console-icon.png">
+  <link rel="stylesheet" href="/assets/console-sidebar.css?v=12">
+  <script>
+    (() => {
+      const key = 'localhost-project-console.theme';
+      let saved = null;
+      try { saved = localStorage.getItem(key); } catch {}
+      const theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme;
+    })();
+  </script>
+  <title>Codex 会话管理 · 本地项目控制台</title>
+  <style>
+    :root { --canvas: #f4f4f4; --surface: #fff; --ink: #202020; --muted: #676767; --border: rgba(0,0,0,.12); --accent: #2d715b; }
+    :root[data-theme="dark"] { --canvas: #181818; --surface: #212121; --ink: #f0f0f0; --muted: #a6a6a6; --border: rgba(255,255,255,.12); --accent: #75c4a4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100dvh; color: var(--ink); background: var(--canvas); font: 13px/1.5 "Microsoft YaHei UI", "Segoe UI", sans-serif; }
+    .app-shell { display: grid; grid-template-columns: 224px minmax(0,1fr); min-height: 100dvh; }
+    .sidebar { position: sticky; top: 0; height: 100dvh; }
+    .workspace { min-width: 0; padding: 42px clamp(24px, 5vw, 72px) 72px; }
+    .workspace-inner { width: min(960px, 100%); margin: 0 auto; }
+    .eyebrow { margin: 0 0 10px; color: var(--accent); font: 11px/1.2 "Cascadia Mono", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(24px, 3vw, 34px); line-height: 1.16; letter-spacing: 0; }
+    .lede { max-width: 640px; margin: 12px 0 0; color: var(--muted); font-size: 14px; }
+    .manager-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; margin-top: 34px; }
+    .manager-card { display: flex; min-height: 190px; flex-direction: column; padding: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.04); }
+    .card-icon { display: grid; width: 34px; height: 34px; place-items: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); border-radius: 8px; }
+    .card-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    h2 { margin: 20px 0 6px; font-size: 17px; }
+    .manager-card p { margin: 0; color: var(--muted); }
+    .card-link { display: inline-flex; align-items: center; gap: 7px; width: max-content; margin-top: auto; padding-top: 18px; color: var(--accent); font-weight: 700; text-decoration: none; }
+    .card-link:hover { text-decoration: underline; }
+    .card-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .boundary { display: flex; align-items: center; gap: 10px; margin-top: 22px; padding: 12px 14px; color: var(--muted); background: color-mix(in srgb, var(--surface) 72%, transparent); border: 1px solid var(--border); border-radius: 6px; }
+    .boundary strong { color: var(--ink); }
+    @media (max-width: 820px) { .app-shell { display: block; } .sidebar { position: static; height: auto; } .workspace { padding: 30px 18px 48px; } .manager-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" data-console-sidebar data-active="session-manager" aria-label="控制台主导航"></aside>
+    <script src="/assets/console-sidebar.js?v=11"></script>
+    <main class="workspace" id="main-content">
+      <div class="workspace-inner">
+        <p class="eyebrow">CODEX SESSION MANAGEMENT</p>
+        <h1>Codex 会话管理</h1>
+        <p class="lede">把会话可用性和远程人工控制作为独立运行时管理。它不会拖慢项目控制台，也不会改变本地项目的启动配置。</p>
+        <section class="manager-grid" aria-label="会话管理功能">
+          <article class="manager-card">
+            <span class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12h4l2.5-7 5 14L17 12h4"/></svg></span>
+            <h2>API 监控与自动续跑</h2>
+            <p>监测兼容渠道和指定 Codex 会话，在异常中断且渠道恢复后执行续跑。</p>
+            <a class="card-link" href="/watchdog">打开监控会话 <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          </article>
+          <article class="manager-card">
+            <span class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>
+            <h2>PWA 远程会话</h2>
+            <p>配对手机设备，查看最新消息、发送人工指令并处理 Codex 审批请求。</p>
+            <a class="card-link" href="/remote">打开远程会话 <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          </article>
+        </section>
+        <div class="boundary"><span aria-hidden="true">●</span><span><strong>独立运行时</strong>　启动与关闭只影响 8766 / 8767，不影响项目控制台 8765。</span></div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

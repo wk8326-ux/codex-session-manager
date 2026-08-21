@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,51 @@ class ConsoleRuntimeTests(unittest.TestCase):
 
         def release(self) -> None:
             return
+
+    def test_auxiliary_health_requires_the_expected_http_payload(self) -> None:
+        class Response:
+            status = 200
+
+            def __init__(self, payload: dict) -> None:
+                self.payload = payload
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode()
+
+        class Connection:
+            def __init__(self, payload: dict) -> None:
+                self.payload = payload
+
+            def request(self, method: str, path: str) -> None:
+                self.requested = (method, path)
+
+            def getresponse(self) -> Response:
+                return Response(self.payload)
+
+            def close(self) -> None:
+                return
+
+        expected = {"service": "local-project-console-auxiliary", "ready": True}
+        with patch.object(app, "HTTPConnection", return_value=Connection(expected)):
+            self.assertTrue(app.auxiliary_runtime_ready())
+        with patch.object(
+            app,
+            "HTTPConnection",
+            return_value=Connection({"service": "unrelated", "ready": True}),
+        ):
+            self.assertFalse(app.auxiliary_runtime_ready())
+
+    def test_auxiliary_restart_backoff_is_bounded_and_resets_after_stability(self) -> None:
+        delay = 0.0
+        observed = []
+        for _ in range(6):
+            delay = app.next_auxiliary_restart_delay(delay, runtime_seconds=0)
+            observed.append(delay)
+
+        self.assertEqual(observed, [3.0, 6.0, 12.0, 24.0, 48.0, 60.0])
+        self.assertEqual(
+            app.next_auxiliary_restart_delay(delay, runtime_seconds=30), 3.0
+        )
 
     def test_frozen_runtime_worker_reuses_packaged_executable(self) -> None:
         paths = ApplicationPaths(
@@ -52,10 +98,16 @@ class ConsoleRuntimeTests(unittest.TestCase):
             second = app.ConsoleInstanceLock(lock_path)
             first.acquire()
             try:
+                self.assertEqual(
+                    lock_path.with_suffix(".pid").read_text(encoding="ascii"),
+                    str(app.os.getpid()),
+                )
                 with self.assertRaisesRegex(RuntimeError, "already running"):
                     second.acquire()
             finally:
                 first.release()
+
+            self.assertFalse(lock_path.with_suffix(".pid").exists())
 
             second.acquire()
             second.release()
@@ -95,19 +147,11 @@ class ConsoleRuntimeTests(unittest.TestCase):
                 "create_console_runtime",
                 side_effect=AssertionError("core must not initialize auxiliary runtime"),
             ),
-            patch.object(
-                app,
-                "AuxiliaryRuntimeSupervisor",
-                return_value=Supervisor(),
-            ),
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
         ):
             app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
 
-        self.assertEqual(
-            events,
-            ["auxiliary-start", "http-serve", "auxiliary-stop", "server-close"],
-        )
+        self.assertEqual(events, ["http-serve", "server-close"])
 
     def test_early_server_failure_does_not_start_background_resources(self) -> None:
         events: list[str] = []
@@ -128,20 +172,30 @@ class ConsoleRuntimeTests(unittest.TestCase):
                 events.append("server-close")
 
         with (
-            patch.object(
-                app,
-                "AuxiliaryRuntimeSupervisor",
-                return_value=Supervisor(),
-            ),
             patch.object(app, "ThreadingHTTPServer", return_value=Server()),
             self.assertRaises(RuntimeError),
         ):
             app.run_console(Path("."), instance_lock=self.NoopInstanceLock())
 
-        self.assertEqual(
-            events,
-            ["auxiliary-start", "serve", "auxiliary-stop", "server-close"],
+        self.assertEqual(events, ["serve", "server-close"])
+
+    def test_session_manager_command_is_explicit_and_separate_from_core(self) -> None:
+        paths = ApplicationPaths(
+            Path("resources"), Path("data"), Path("runtime"), Path("logs"), "source"
         )
+        with patch.object(app.sys, "frozen", False, create=True):
+            command = app.session_manager_command(paths)
+
+        self.assertIn("--session-manager", command)
+        self.assertNotIn("--core", command)
+        self.assertNotIn("--service", command)
+
+    def test_session_manager_is_a_virtual_project_and_does_not_change_catalog(self) -> None:
+        with patch.object(app, "session_manager_runtime_ready", return_value=False):
+            rows = app.projects_for_api()
+        self.assertEqual(rows[-1]["id"], app.SESSION_MANAGER_PROJECT_ID)
+        self.assertEqual(rows[-1]["kind"], "session-manager")
+        self.assertNotIn(app.SESSION_MANAGER_PROJECT_ID, [item["id"] for item in app.PROJECTS])
 
     def test_auxiliary_runtime_owns_optional_tunnel_lifecycle(self) -> None:
         events: list[str] = []

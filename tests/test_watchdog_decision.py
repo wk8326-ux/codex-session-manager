@@ -4,8 +4,22 @@ from watchdog.decision import DecisionInput, decide, validate_rules
 from watchdog.models import SessionSnapshot, TurnSnapshot
 
 
-def snapshot(status: str, *, kind: str = "", http: int | None = None, message: str = "", flags=()) -> SessionSnapshot:
-    return SessionSnapshot("thread", "name", "idle", tuple(flags), TurnSnapshot("turn", status, message, kind, http))
+def snapshot(
+    status: str,
+    *,
+    kind: str = "",
+    http: int | None = None,
+    message: str = "",
+    diagnostic: str = "",
+    flags=(),
+) -> SessionSnapshot:
+    return SessionSnapshot(
+        "thread",
+        "name",
+        "idle",
+        tuple(flags),
+        TurnSnapshot("turn", status, message, kind, http, diagnostic),
+    )
 
 
 class DecisionTests(unittest.TestCase):
@@ -41,6 +55,51 @@ class DecisionTests(unittest.TestCase):
                         "SELECTED MODEL IS AT CAPACITY.\n"
                         "Please try a different model."
                     ),
+                ),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "resume_candidate")
+        self.assertTrue(result.error_signature.startswith("message:"))
+
+    def test_configured_text_can_match_failed_turn_diagnostic_output(self) -> None:
+        rules = [
+            {
+                "matchType": "message_contains",
+                "pattern": "model is at capacity",
+                "enabled": True,
+            }
+        ]
+
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot(
+                    "failed",
+                    diagnostic="Selected model is at capacity. Try another model.",
+                ),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "resume_candidate")
+
+    def test_configured_text_can_override_a_completed_lifecycle_status(self) -> None:
+        rules = [
+            {
+                "matchType": "message_contains",
+                "pattern": "model is at capacity",
+                "enabled": True,
+            }
+        ]
+
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot(
+                    "completed",
+                    diagnostic="Selected model is at capacity. Try another model.",
                 ),
                 rules,
             )
@@ -109,8 +168,41 @@ class DecisionTests(unittest.TestCase):
         empty = SessionSnapshot("thread", "name", "notLoaded", (), None)
         self.assertEqual(decide(DecisionInput("healthy", empty, [])).code, "silent_no_turn")
 
-    def test_system_error_and_unknown_turn_statuses_are_silent(self) -> None:
-        for status in ("systemError", "cancelled", "futureStatus"):
+    def test_system_error_can_resume_when_a_recovery_rule_matches(self) -> None:
+        rules = [
+            {
+                "matchType": "message_contains",
+                "pattern": "model is at capacity",
+                "enabled": True,
+            }
+        ]
+
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot(
+                    "systemError",
+                    message="Selected model is at capacity. Please try again.",
+                ),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "resume_candidate")
+
+    def test_unmatched_system_error_is_not_resumed(self) -> None:
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot("systemError", message="internal failure"),
+                [],
+            )
+        )
+
+        self.assertEqual(result.code, "silent_unrecoverable_error")
+
+    def test_cancelled_and_unknown_turn_statuses_are_silent(self) -> None:
+        for status in ("cancelled", "futureStatus"):
             with self.subTest(status=status):
                 self.assertEqual(
                     decide(DecisionInput("healthy", snapshot(status), [])).code,

@@ -6,6 +6,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WatchdogUiTests(unittest.TestCase):
+    def test_project_console_uses_compact_codex_desktop_density(self) -> None:
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        sidebar = (ROOT / "assets" / "console-sidebar.css").read_text(
+            encoding="utf-8"
+        )
+
+        for contract in (
+            "--sidebar-width: 224px",
+            "--desktop-control-height: 34px",
+            "--desktop-service-row-height: 82px",
+            "font: 600 20px/1.25 var(--font-display)",
+            "min-height: var(--desktop-control-height)",
+            "min-height: var(--desktop-service-row-height)",
+        ):
+            self.assertIn(contract, html)
+        self.assertIn("font-size: 13px", sidebar)
+        self.assertIn("font-size: 28px", sidebar)
+        self.assertIn("min-height: 34px", sidebar)
+
     def test_all_workspaces_reuse_one_persistent_system_aware_theme_control(self) -> None:
         sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
         for filename in ("index.html", "watchdog.html"):
@@ -33,23 +52,21 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn('aria-label="切换至深色模式"', sidebar_script)
         self.assertIn('aria-pressed="false"', sidebar_script)
 
-    def test_project_page_adds_only_one_watchdog_navigation_link(self) -> None:
+    def test_project_page_adds_only_one_session_manager_navigation_link(self) -> None:
         html = (ROOT / "index.html").read_text(encoding="utf-8")
         sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
 
         self.assertEqual(html.count('href="/watchdog"'), 0)
-        self.assertEqual(
-            sidebar_script.count("navLink('watchdog', '/watchdog'"), 1
-        )
+        self.assertEqual(sidebar_script.count("navLink('session-manager', '/session-manager'"), 1)
         self.assertNotIn("执行记录", html)
         self.assertNotIn("添加监控渠道", html)
 
-    def test_sidebar_navigation_has_only_three_primary_entries(self) -> None:
+    def test_sidebar_navigation_has_only_two_primary_entries(self) -> None:
         removed_labels = ["查看范围", "全部项目", "工作区", "自动化工具"]
         sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
         expected_active = {
             "index.html": "projects",
-            "watchdog.html": "watchdog",
+            "watchdog.html": "session-manager",
         }
 
         for filename, active in expected_active.items():
@@ -65,8 +82,7 @@ class WatchdogUiTests(unittest.TestCase):
 
         for route in (
             "navLink('projects', '/', 'layout', '项目控制台')",
-            "navLink('watchdog', '/watchdog', 'activity', '会话监控')",
-            "navLink('remote', '/remote', 'globe', '远程会话')",
+            "navLink('session-manager', '/session-manager', 'layers', 'Codex 会话管理')",
         ):
             self.assertEqual(sidebar_script.count(route), 1)
 
@@ -101,7 +117,8 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn("translateX(22px)", sidebar_css)
         self.assertNotIn(".theme-switch span", remote_stylesheet)
         self.assertIn("grid-template-rows: auto auto auto 1fr auto auto", sidebar_css)
-        self.assertIn("font-size: 13px", sidebar_css)
+        self.assertIn("min-height: 34px", sidebar_css)
+        self.assertIn("font-size: 12px", sidebar_css)
         self.assertEqual(server.count('"/assets/console-sidebar.css"'), 2)
         self.assertEqual(server.count('"/assets/console-sidebar.js"'), 2)
 

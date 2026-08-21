@@ -9,7 +9,7 @@ from remote.application import RemoteApplication, RemoteNotFound, RemoteValidati
 from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
 from remote.store import RemoteStore
-from watchdog.codex_adapter import CodexAdapterError
+from watchdog.codex_adapter import CodexAdapterError, DefiniteSendFailure
 
 
 THREAD_ID = "00000000-0000-4000-8000-000000000001"
@@ -42,6 +42,7 @@ class Adapter:
         self.last_turn_limit: int | None = None
         self.read_thread_ids: list[str] = []
         self.read_thread_error: CodexAdapterError | None = None
+        self.send_error: CodexAdapterError | None = None
         self.thread_snapshot = SimpleNamespace(
             thread_id=THREAD_ID,
             name="Local Woxsheet",
@@ -60,6 +61,8 @@ class Adapter:
 
     def send_message(self, thread_id: str, prompt: str, image_url: str | None = None) -> dict:
         self.sent.append((thread_id, prompt, image_url))
+        if self.send_error is not None:
+            raise self.send_error
         return {"turnId": "turn-2", "delivery": "started"}
 
     def read_thread(self, thread_id: str) -> object:
@@ -150,6 +153,21 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(replay["turnId"], "turn-2")
         self.assertTrue(replay["idempotentReplay"])
         self.assertEqual(self.adapter.sent, [(THREAD_ID, "只发送一次", None)])
+
+    def test_definite_send_rejection_releases_the_delivery_claim_for_retry(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        payload = {"message": "重新发送", "clientMessageId": "phone-message-rejected"}
+        self.adapter.send_error = DefiniteSendFailure("explicitly rejected")
+
+        with self.assertRaises(RemoteValidationError):
+            self.application.send_message(synced["id"], payload)
+
+        self.adapter.send_error = None
+        response = self.application.send_message(synced["id"], payload)
+        self.assertEqual(response["turnId"], "turn-2")
+        self.assertEqual(len(self.adapter.sent), 2)
 
     def test_client_message_id_cannot_be_reused_for_different_content(self) -> None:
         synced = self.application.create_synced_session(
@@ -427,6 +445,49 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(event["status"], "inProgress")
         self.assertNotIn("command", event)
         self.assertNotIn("secret", str(event))
+
+    def test_event_hub_requests_status_resync_when_cursor_falls_behind(self) -> None:
+        for index in range(514):
+            self.hub.publish(
+                "item/started",
+                {
+                    "threadId": THREAD_ID,
+                    "turnId": f"turn-{index}",
+                    "status": "inProgress",
+                },
+            )
+
+        batch = self.hub.wait(1, 0)
+
+        self.assertTrue(batch["resyncRequired"])
+        self.assertEqual(batch["events"][0]["sequence"], 3)
+
+    def test_event_hub_does_not_report_gap_for_contiguous_cursor(self) -> None:
+        self.hub.publish(
+            "turn/completed",
+            {"threadId": THREAD_ID, "turn": {"id": "turn-1", "status": "completed"}},
+        )
+
+        self.assertFalse(self.hub.wait(0, 0)["resyncRequired"])
+
+    def test_event_hub_resets_a_cursor_from_a_previous_runtime(self) -> None:
+        self.hub.publish(
+            "item/started",
+            {"threadId": THREAD_ID, "turnId": "turn-1", "status": "inProgress"},
+        )
+
+        batch = self.hub.wait(999, 0)
+
+        self.assertTrue(batch["resyncRequired"])
+        self.assertEqual(batch["cursor"], 1)
+        self.assertEqual(batch["events"], [])
+
+    def test_event_hub_identifies_its_runtime_generation(self) -> None:
+        first = self.hub.wait(0, 0)
+        second = RemoteEventHub(lambda: {THREAD_ID}).wait(0, 0)
+
+        self.assertTrue(first["streamId"])
+        self.assertNotEqual(first["streamId"], second["streamId"])
 
 
 if __name__ == "__main__":

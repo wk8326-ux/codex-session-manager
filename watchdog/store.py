@@ -1307,6 +1307,11 @@ class WatchdogStore:
         outcomes = {
             "completed": ("completed", "resume_completed", "resumed turn completed"),
             "failed": ("resumed_failed", "resume_failed", "resumed turn failed"),
+            "systemError": (
+                "resumed_failed",
+                "resume_failed",
+                "resumed turn ended with a system error",
+            ),
             "interrupted": (
                 "resumed_interrupted",
                 "resume_interrupted",

@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 from watchdog.channels import ChannelConfig, classify_http_status, probe_channel
 
@@ -133,6 +134,23 @@ class ChannelProbeTests(unittest.TestCase):
         self.assertEqual(result.category, "network_error")
         self.assertFalse(result.healthy)
         self.assertNotIn("sk-secret", result.detail)
+
+    def test_loopback_probe_bypasses_the_windows_system_proxy(self) -> None:
+        response = FakeResponse(
+            b'{"id":"chatcmpl-local","choices":[{"message":{"content":"ok"}}]}'
+        )
+        with patch(
+            "watchdog.channels.build_opener", return_value=FakeOpener(response)
+        ) as build:
+            result = probe_channel(
+                ChannelConfig(
+                    "http://127.0.0.1:4173/v1", "", "model", "sk-secret", 1.0
+                )
+            )
+
+        self.assertTrue(result.healthy)
+        self.assertEqual(len(build.call_args.args), 1)
+        self.assertEqual(build.call_args.args[0].proxies, {})
 
 
 if __name__ == "__main__":

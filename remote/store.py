@@ -367,6 +367,16 @@ class RemoteStore:
                 (error_message[:500], utc_now(), session_id, client_message_id),
             )
 
+    def release_message_delivery(
+        self, *, session_id: str, client_message_id: str
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """DELETE FROM remote_message_deliveries
+                   WHERE session_id = ? AND client_message_id = ?""",
+                (session_id, client_message_id),
+            )
+
     def record_approval_audit(self, record: dict) -> None:
         with self._connect() as connection:
             connection.execute(

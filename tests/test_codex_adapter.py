@@ -247,6 +247,36 @@ class CodexAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_failed_turn_exposes_assistant_diagnostic_text_for_recovery_rules(self) -> None:
+        message = "Selected model is at capacity. Please try a different model."
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "status": {"type": "idle"},
+                        "turns": [
+                            {
+                                "id": "turn-failed",
+                                "status": "failed",
+                                "items": [
+                                    {"id": "user", "type": "userMessage", "content": []},
+                                    {"id": "agent", "type": "agentMessage", "text": message},
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+        turn = CodexAppServerAdapter(transport).read_thread(THREAD_ID).latest_turn
+
+        self.assertIsNotNone(turn)
+        self.assertEqual(turn.error_message, "")
+        self.assertEqual(turn.diagnostic_text, message)
+        self.assertEqual(turn.recovery_text, message)
+
     def test_trailing_compatibility_rollouts_do_not_hide_a_real_turn_failure(self) -> None:
         capacity_message = (
             "Selected model is at capacity. Please try a different model."

@@ -23,6 +23,8 @@ class MigrationResult:
     source: Path
     destination: Path
     copied: tuple[str, ...]
+    reason: str
+    backup: Path | None = None
 
 
 def _validate_projects(path: Path) -> None:
@@ -68,18 +70,50 @@ def _remove_empty_directory(path: Path) -> bool:
         return False
 
 
-def migrate_legacy_data(source_root: Path, paths: ApplicationPaths) -> MigrationResult:
+def _backup_path(data_root: Path) -> Path:
+    candidate = data_root.with_name(f"{data_root.name}.pre-import")
+    index = 1
+    while candidate.exists():
+        candidate = data_root.with_name(f"{data_root.name}.pre-import-{index}")
+        index += 1
+    return candidate
+
+
+def _rollback(
+    committed: list[Path], data_root: Path, backup: Path | None
+) -> None:
+    for destination in reversed(committed):
+        if destination.is_dir():
+            shutil.rmtree(destination, ignore_errors=True)
+        else:
+            destination.unlink(missing_ok=True)
+    if backup is not None and backup.exists():
+        backup.replace(data_root)
+    else:
+        data_root.mkdir(parents=True, exist_ok=True)
+
+
+def migrate_legacy_data(
+    source_root: Path,
+    paths: ApplicationPaths,
+    *,
+    replace_existing: bool = False,
+) -> MigrationResult:
     """Copy legacy data once, leaving the source untouched on success or failure."""
 
     source_root = Path(source_root).resolve()
     paths.ensure_writable_directories()
-    if paths.projects_path.exists() or paths.database_path.exists():
-        return MigrationResult(False, source_root, paths.data_root, ())
+    if not replace_existing and (
+        paths.projects_path.exists() or paths.database_path.exists()
+    ):
+        return MigrationResult(
+            False, source_root, paths.data_root, (), "destination_has_data"
+        )
 
     projects_source = source_root / "projects.json"
     database_source = source_root / "watchdog.db"
     if not projects_source.exists() and not database_source.exists():
-        return MigrationResult(False, source_root, paths.data_root, ())
+        return MigrationResult(False, source_root, paths.data_root, (), "source_has_no_data")
 
     copied: list[str] = []
     staging_parent = paths.data_root.parent
@@ -88,7 +122,7 @@ def migrate_legacy_data(source_root: Path, paths: ApplicationPaths) -> Migration
     staged_runtime = staging / "runtime"
     staged_data.mkdir()
     committed: list[Path] = []
-    removed_empty_data_root = False
+    backup: Path | None = None
     try:
         if projects_source.is_file():
             staged_projects = staged_data / "projects.json"
@@ -101,8 +135,12 @@ def migrate_legacy_data(source_root: Path, paths: ApplicationPaths) -> Migration
 
         staged_frp = _stage_frp_runtime(source_root, staged_runtime)
         if paths.data_root.exists():
-            removed_empty_data_root = _remove_empty_directory(paths.data_root)
-            if not removed_empty_data_root:
+            if replace_existing and any(paths.data_root.iterdir()):
+                backup = _backup_path(paths.data_root)
+                paths.data_root.replace(backup)
+            else:
+                _remove_empty_directory(paths.data_root)
+            if paths.data_root.exists():
                 raise MigrationError(
                     f"destination data directory is not empty: {paths.data_root}"
                 )
@@ -116,23 +154,14 @@ def migrate_legacy_data(source_root: Path, paths: ApplicationPaths) -> Migration
             committed.append(frp_destination)
             copied.append("runtime/frp")
     except MigrationError:
-        for destination in reversed(committed):
-            if destination.is_dir():
-                shutil.rmtree(destination, ignore_errors=True)
-            else:
-                destination.unlink(missing_ok=True)
-        paths.data_root.mkdir(parents=True, exist_ok=True)
+        _rollback(committed, paths.data_root, backup)
         raise
     except (OSError, sqlite3.DatabaseError, json.JSONDecodeError) as error:
-        for destination in reversed(committed):
-            if destination.is_dir():
-                shutil.rmtree(destination, ignore_errors=True)
-            else:
-                destination.unlink(missing_ok=True)
-        if removed_empty_data_root or not paths.data_root.exists():
-            paths.data_root.mkdir(parents=True, exist_ok=True)
+        _rollback(committed, paths.data_root, backup)
         raise MigrationError(str(error)) from error
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    return MigrationResult(True, source_root, paths.data_root, tuple(copied))
+    return MigrationResult(
+        True, source_root, paths.data_root, tuple(copied), "migrated", backup
+    )

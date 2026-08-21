@@ -1,8 +1,8 @@
-const CACHE_NAME = 'local-project-console-remote-v29';
+const CACHE_NAME = 'local-project-console-remote-v33';
 const STATIC_ASSETS = [
   '/remote',
-  '/remote.css?v=25',
-  '/remote.js?v=25',
+  '/remote.css?v=27',
+  '/remote.js?v=28',
   '/manifest.webmanifest',
   '/assets/project-console-icon.png',
   '/assets/vendor/qrcode.min.js',

@@ -8,7 +8,7 @@
   const icons = {
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
     layout: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 9h8M8 15h5"/>',
-    globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/>',
+    layers: '<rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="15" width="18" height="5" rx="1"/><path d="M7 9v6M17 9v6"/>',
     refresh: '<path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/>',
     moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/>',
@@ -31,8 +31,7 @@
     </section>
     <nav class="workspace-nav" aria-label="主导航">
       ${navLink('projects', '/', 'layout', '项目控制台')}
-      ${navLink('watchdog', '/watchdog', 'activity', '会话监控')}
-      ${navLink('remote', '/remote', 'globe', '远程会话')}
+      ${navLink('session-manager', '/session-manager', 'layers', 'Codex 会话管理')}
     </nav>
     <div class="sidebar-spacer" aria-hidden="true"></div>
     <div class="theme-controls">

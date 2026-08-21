@@ -9,6 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DesktopDistributionContractTests(unittest.TestCase):
+    def test_desktop_shell_uses_a_dark_native_title_bar(self) -> None:
+        source = (ROOT / "desktop" / "src-tauri" / "src" / "lib.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Theme", source)
+        self.assertIn(".theme(Some(Theme::Dark))", source)
+
     def test_tauri_shell_keeps_remote_ipc_disabled(self) -> None:
         config = json.loads(
             (ROOT / "desktop" / "src-tauri" / "tauri.conf.json").read_text(
@@ -48,6 +56,42 @@ class DesktopDistributionContractTests(unittest.TestCase):
         ):
             self.assertIn(artifact, script)
 
+    def test_nsis_stops_the_existing_runtime_before_overwriting_it(self) -> None:
+        hooks = (
+            ROOT / "desktop" / "src-tauri" / "windows" / "installer-hooks.nsh"
+        ).read_text(encoding="utf-8")
+
+        preinstall = hooks.split("!macro NSIS_HOOK_PREINSTALL", 1)[1].split(
+            "!macroend", 1
+        )[0]
+        self.assertIn("InitPluginsDir", preinstall)
+        self.assertIn("installer-preflight.ps1", preinstall)
+        self.assertIn("LPC_INSTALLER_PREFLIGHT_SOURCE", hooks)
+        self.assertIn('${__FILEDIR__}\\installer-preflight.ps1', hooks)
+        self.assertIn("$WINDIR\\Sysnative\\WindowsPowerShell", preinstall)
+        self.assertIn('-InstallDirectory "$INSTDIR"', preinstall)
+        self.assertIn("ExecToStack", preinstall)
+        self.assertIn("Abort", preinstall)
+        self.assertNotIn("manage-system-startup.ps1", preinstall)
+
+        preflight = (
+            ROOT
+            / "desktop"
+            / "src-tauri"
+            / "windows"
+            / "installer-preflight.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('schtasks.exe', preflight)
+        self.assertIn("Get-Process lpc-service", preflight)
+        self.assertIn("backend\\lpc-service.exe", preflight)
+        self.assertIn("$process.Kill()", preflight)
+        self.assertIn("try { $process.Kill() } catch {}", preflight)
+        self.assertNotIn("taskkill.exe", preflight)
+        self.assertIn("netstat.exe", preflight)
+        self.assertIn("8765", preflight)
+        self.assertNotIn("8766, 8767", preflight)
+        self.assertIn("AddSeconds(20)", preflight)
+
     def test_desktop_shell_exposes_required_tray_actions(self) -> None:
         entrypoint = (
             ROOT / "desktop" / "src-tauri" / "src" / "main.rs"
@@ -59,8 +103,7 @@ class DesktopDistributionContractTests(unittest.TestCase):
         self.assertIn('windows_subsystem = "windows"', entrypoint)
         for label in (
             "打开项目控制台",
-            "会话监控",
-            "远程会话",
+            "Codex 会话管理",
             "重启后台服务",
             "停止后台服务",
             "退出桌面应用",

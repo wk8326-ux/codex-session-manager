@@ -16,6 +16,7 @@
   const IDLE_REFRESH_MS = 5000;
   const HIDDEN_REFRESH_MS = 12000;
   const CONVERSATION_HEARTBEAT_MS = 10000;
+  const SESSION_STATUS_REFRESH_MS = 30000;
   const LIVE_ACTIVITY_GRACE_MS = 180000;
   const INITIAL_LIVE_TURN_MAX_AGE_MS = 7200000;
   const CONNECTION_FAILURE_THRESHOLD = 3;
@@ -45,6 +46,7 @@
     approvalExpiryTimer: 0,
     selectedSessionId: '',
     cursor: 0,
+    eventStreamId: '',
     polling: false,
     pairingSecret: '',
     pairingId: '',
@@ -63,6 +65,8 @@
     conversationCache: new Map(),
     conversationRequests: new Set(),
     sessionStatusLoading: false,
+    sessionStatusTimer: 0,
+    sessionStatusRevision: 0,
     sessionStatusOverrides: new Map(),
     messageSending: false,
     outgoingMessages: [],
@@ -588,25 +592,30 @@
     return 'stopped';
   }
 
+  function setSessionStatusOverride(threadId, status) {
+    state.sessionStatusRevision += 1;
+    state.sessionStatusOverrides.set(threadId, status);
+  }
+
   function updateSessionStatusesFromEvents(events = []) {
     const activeStates = ['active', 'inProgress', 'running', 'started'];
     const failedStates = ['failed', 'interrupted', 'systemError', 'cancelled'];
     for (const event of events) {
       if (!event?.threadId) continue;
       if (event.method === 'remote/approvalRequested') {
-        state.sessionStatusOverrides.set(event.threadId, 'waitingOnApproval');
+        setSessionStatusOverride(event.threadId, 'waitingOnApproval');
         continue;
       }
       if (event.method === 'remote/approvalResolved') {
-        state.sessionStatusOverrides.set(event.threadId, 'inProgress');
+        setSessionStatusOverride(event.threadId, 'inProgress');
         continue;
       }
       if (failedStates.includes(event.status)) {
-        state.sessionStatusOverrides.set(event.threadId, event.status);
+        setSessionStatusOverride(event.threadId, event.status);
         continue;
       }
       if (event.method === 'turn/completed') {
-        state.sessionStatusOverrides.set(
+        setSessionStatusOverride(
           event.threadId,
           event.status === 'completed' || !event.status ? 'completed' : event.status,
         );
@@ -615,7 +624,7 @@
       if (activeStates.includes(event.status)
           || event.method?.startsWith('turn/')
           || event.method?.startsWith('item/')) {
-        state.sessionStatusOverrides.set(event.threadId, 'inProgress');
+        setSessionStatusOverride(event.threadId, 'inProgress');
       }
     }
     if (events.length) renderSessionDrawer();
@@ -1205,7 +1214,7 @@
   }
 
   function outgoingMessageMatchesConversation(outgoing, detail, signature) {
-    if (!['sending', 'confirming', 'delivered'].includes(outgoing.status)
+    if (!['sending', 'confirming', 'unconfirmed', 'delivered'].includes(outgoing.status)
       || signature === outgoing.signatureAtSend) return false;
     const turns = detail?.turns || [];
     const candidates = outgoing.turnId
@@ -1256,6 +1265,7 @@
       delivery.textContent = {
         sending: '正在送达',
         confirming: '正在确认发送结果，请勿重复发送',
+        unconfirmed: '送达状态未知，正在从会话记录核对',
         delivered: '已送达，Codex 正在响应',
         failed: '发送失败，请重试',
       }[outgoing.status] || '正在送达';
@@ -1294,7 +1304,7 @@
   function hasUnconfirmedDuplicate(sessionId, message, image) {
     return state.outgoingMessages.some(outgoing => (
       outgoing.sessionId === sessionId
-      && ['sending', 'confirming'].includes(outgoing.status)
+      && ['sending', 'confirming', 'unconfirmed'].includes(outgoing.status)
       && sameOutgoingContent(outgoing, message, image)
     ));
   }
@@ -1309,7 +1319,16 @@
   function scheduleOutgoingConfirmation(outgoingId, attempt = 0) {
     const delays = [700, 1600, 3200, 6000];
     const outgoing = state.outgoingMessages.find(item => item.id === outgoingId);
-    if (!outgoing || outgoing.status !== 'confirming' || attempt >= delays.length) return;
+    if (!outgoing || outgoing.status !== 'confirming') return;
+    if (attempt >= delays.length) {
+      updateOutgoingMessage(outgoingId, { status: 'unconfirmed' });
+      if (outgoing.sessionId === state.selectedSessionId) {
+        $('#runtime-detail').textContent = '送达状态未知，仍在从会话记录自动核对';
+        showToast('暂时无法确认送达，请勿重复发送。');
+        scheduleConversationRefresh(80);
+      }
+      return;
+    }
     setTimeout(async () => {
       const current = state.outgoingMessages.find(item => item.id === outgoingId);
       if (!current || current.status !== 'confirming') return;
@@ -1647,7 +1666,7 @@
   }
 
   function cancelConversationRefresh() {
-    cancelConversationRefresh();
+    clearTimeout(state.conversationRefreshTimer);
     state.conversationRefreshTimer = 0;
     state.conversationRefreshDueAt = 0;
   }
@@ -1676,6 +1695,13 @@
       if (document.visibilityState === 'hidden' || !state.selectedSessionId) return;
       refreshSelectedSession();
     }, CONVERSATION_HEARTBEAT_MS);
+  }
+
+  function startSessionStatusHeartbeat() {
+    if (state.sessionStatusTimer) return;
+    state.sessionStatusTimer = setInterval(() => {
+      if (document.visibilityState !== 'hidden') hydrateSessionStatuses();
+    }, SESSION_STATUS_REFRESH_MS);
   }
 
   function restoreCachedConversation(session) {
@@ -1720,7 +1746,7 @@
         signature,
       );
       const session = state.sessions.find(item => item.id === sessionId) || result;
-      state.sessionStatusOverrides.set(
+      setSessionStatusOverride(
         session.threadId,
         conversationStatusWithActivity(result.conversation, {
           lastConversationActivityAt,
@@ -1874,8 +1900,12 @@
   async function hydrateSessionStatuses() {
     if (state.sessionStatusLoading) return;
     state.sessionStatusLoading = true;
+    const revisionAtStart = state.sessionStatusRevision;
     try {
       state.sessions = await api('/api/remote/sessions');
+      if (state.sessionStatusRevision === revisionAtStart) {
+        state.sessionStatusOverrides.clear();
+      }
       renderSessions();
     } catch {
       // The selected conversation remains usable when background status enrichment fails.
@@ -2210,7 +2240,7 @@
     state.followTail = true;
     state.lastConversationActivityAt = Date.now();
     const selectedSession = state.sessions.find(item => item.id === state.selectedSessionId);
-    if (selectedSession) state.sessionStatusOverrides.set(selectedSession.threadId, 'inProgress');
+    if (selectedSession) setSessionStatusOverride(selectedSession.threadId, 'inProgress');
     renderSessionDrawer();
     $('#runtime-strip').className = 'runtime-strip running';
     $('#runtime-signal').className = 'runtime-signal runtime-rotor running';
@@ -2289,8 +2319,15 @@
     while (state.polling && (state.admin || state.token)) {
       try {
         const batch = await api(`/api/remote/events?after=${state.cursor}&timeout=25`);
+        const streamChanged = Boolean(
+          state.eventStreamId
+          && batch.streamId
+          && state.eventStreamId !== batch.streamId
+        );
+        state.eventStreamId = batch.streamId || state.eventStreamId;
         state.cursor = batch.cursor;
-        if (batch.events?.length) scheduleEventRefresh(batch.events);
+        if (!streamChanged && batch.events?.length) scheduleEventRefresh(batch.events);
+        if (streamChanged || batch.resyncRequired) await hydrateSessionStatuses();
         setConnected(true);
       } catch (error) {
         setConnected(false);
@@ -2575,6 +2612,7 @@
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') releaseMessageFocus();
       if (document.visibilityState === 'hidden') stopQrScanner();
+      if (document.visibilityState !== 'hidden') hydrateSessionStatuses();
       if (!state.selectedSessionId) return;
       cancelConversationRefresh();
       scheduleConversationRefresh(document.visibilityState === 'hidden' ? HIDDEN_REFRESH_MS : 80);
@@ -2598,6 +2636,7 @@
       await loadWorkspaceData();
       pollEvents();
       startConversationHeartbeat();
+      startSessionStatusHeartbeat();
     } catch (error) {
       if (!state.admin && error.authorizationFailed) showPairScreen(error.message);
       else {
@@ -2661,7 +2700,7 @@
     if ('serviceWorker' in navigator && window.isSecureContext) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (state.qrStream || state.pairingSecret || state.pendingToken) return;
-        const reloadKey = 'localhost-project-console.remote-worker-reloaded-v29';
+        const reloadKey = 'localhost-project-console.remote-worker-reloaded-v33';
         if (sessionStorage.getItem(reloadKey)) return;
         sessionStorage.setItem(reloadKey, '1');
         location.reload();

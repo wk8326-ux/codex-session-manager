@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .channels import ChannelConfig, ProbeResult
-from .secrets import SecretStore
+from .secrets import SecretStore, SecretStoreError
 from .service import CHANNEL_CATEGORIES, PROBE_DETAILS
 from .store import ChannelInUseError, WatchdogStore
 from .validation import (
@@ -292,6 +292,15 @@ class WatchdogApplication:
         api_key = ""
         try:
             api_key = self._secret_store.unprotect(channel["encryptedKey"])
+        except SecretStoreError:
+            raw = ProbeResult(
+                "configuration_error",
+                None,
+                PROBE_DETAILS["configuration_error"],
+                0,
+                now,
+            )
+        else:
             raw = self._probe(
                 ChannelConfig(
                     base_url=channel["baseUrl"],
@@ -300,14 +309,6 @@ class WatchdogApplication:
                     api_key=api_key,
                     timeout_seconds=float(channel["timeoutSeconds"]),
                 )
-            )
-        except Exception:
-            raw = ProbeResult(
-                "network_error",
-                None,
-                PROBE_DETAILS["network_error"],
-                0,
-                now,
             )
         result = _safe_probe(raw, now, api_key)
         self._store.record_channel_probe(channel_id, result)

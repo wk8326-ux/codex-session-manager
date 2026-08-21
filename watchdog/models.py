@@ -10,6 +10,12 @@ class TurnSnapshot:
     error_message: str = ""
     error_kind: str = ""
     http_status: int | None = None
+    diagnostic_text: str = ""
+
+    @property
+    def recovery_text(self) -> str:
+        parts = (self.error_message.strip(), self.diagnostic_text.strip())
+        return "\n".join(part for part in parts if part)
 
 
 @dataclass(frozen=True)

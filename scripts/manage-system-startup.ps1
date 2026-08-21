@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Status', 'Start', 'Restart', 'Stop', 'Uninstall')]
+    [ValidateSet('Install', 'Validate', 'Status', 'Start', 'Restart', 'Stop', 'Uninstall')]
     [string]$Action = 'Install',
     [string]$TaskName = 'Local Project Console',
     [string]$ProjectRoot = '',
@@ -10,6 +10,7 @@ param(
     [string]$LogDirectory = '',
     [ValidateSet('source', 'installed', 'portable')]
     [string]$RuntimeMode = 'installed',
+    [string]$ExpectedVersion = '',
     [switch]$StartNow
 )
 
@@ -45,7 +46,7 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $appPath = Join-Path $ProjectRoot 'app.py'
 $healthUrl = 'http://127.0.0.1:8765/api/health'
-$consolePorts = @(8765, 8766, 8767)
+$consolePorts = @(8765)
 
 function Get-PythonServiceExecutable {
     $pythonPath = ''
@@ -92,26 +93,135 @@ function Get-ConsoleListenerProcessIds {
     return @($processIds | Select-Object -Unique)
 }
 
-function Test-ConsoleHealth {
+function Get-ConsoleHealthMetadata {
     try {
         $curlPath = Join-Path $env:SystemRoot 'System32\curl.exe'
         $response = & $curlPath --fail --silent --max-time 1 $healthUrl 2>$null
-        return $LASTEXITCODE -eq 0 -and [string]::Join('', @($response)).Contains('local-project-console')
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $health = [string]::Join('', @($response)) | ConvertFrom-Json
+        if ([string]$health.service -ne 'local-project-console') { return $null }
+        return $health
+    } catch {
+        return $null
+    }
+}
+
+function Test-ConsoleHealth {
+    param([switch]$AnyVersion)
+    $health = Get-ConsoleHealthMetadata
+    if ($null -eq $health -or -not [bool]$health.ready) { return $false }
+    if ($AnyVersion -or [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+        return $true
+    }
+    try {
+        return (
+            [string]$health.version -eq $ExpectedVersion -and
+            [string]$health.mode -eq $RuntimeMode -and
+            [string]$health.role -in @('', 'core') -and
+            [int]$health.ports.admin -eq 8765
+        )
     } catch {
         return $false
     }
 }
 
+function Get-ConsolePidFileProcessIds {
+    $processIds = @()
+    $health = Get-ConsoleHealthMetadata
+    $healthPid = 0
+    if (
+        $null -ne $health -and
+        [int]::TryParse([string]$health.pid, [ref]$healthPid) -and
+        $healthPid -gt 0
+    ) {
+        $processIds += $healthPid
+    }
+    if ([string]::IsNullOrWhiteSpace($RuntimeDirectory)) {
+        return @($processIds | Select-Object -Unique)
+    }
+    $lockDirectory = Join-Path $RuntimeDirectory 'system-startup'
+    foreach ($name in @('console.pid')) {
+        $path = Join-Path $lockDirectory $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $value = 0
+        if ([int]::TryParse(([string](Get-Content -Raw -LiteralPath $path)).Trim(), [ref]$value) -and $value -gt 0) {
+            $processIds += $value
+        }
+    }
+    return @($processIds | Select-Object -Unique)
+}
+
+function Test-ConsoleProcessOwnership {
+    param(
+        [int]$ProcessId,
+        [int[]]$KnownProcessIds
+    )
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $process) { return $null }
+    $processName = [string]$process.ProcessName
+    if (
+        $ProcessId -in $KnownProcessIds -and
+        $processName -in @('lpc-service', 'python', 'pythonw')
+    ) {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ServiceExecutable)) {
+        $expectedExecutable = [System.IO.Path]::GetFullPath($ServiceExecutable)
+        $actualExecutable = ''
+        try { $actualExecutable = [string]$process.Path } catch {}
+        $pathMatches = (
+            -not [string]::IsNullOrWhiteSpace($actualExecutable) -and
+            ([System.IO.Path]::GetFullPath($actualExecutable)).Equals(
+                $expectedExecutable,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        )
+        if ($pathMatches) { return $true }
+    }
+
+    $commandLine = ''
+    try {
+        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction Stop
+        $commandLine = [string]$processInfo.CommandLine
+    } catch {}
+    $runtimeSwitch = $commandLine -match '(?i)--(?:core|service|session-manager|runtime-worker)(?:\s|$)'
+    if (-not [string]::IsNullOrWhiteSpace($ServiceExecutable)) {
+        $expectedExecutable = [System.IO.Path]::GetFullPath($ServiceExecutable)
+        $commandMatches = (
+            $commandLine.IndexOf($expectedExecutable, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        )
+        return $processName -eq 'lpc-service' -and $runtimeSwitch -and $commandMatches
+    }
+    $sourceMatches = (
+        $commandLine.IndexOf($appPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    )
+    return $processName -in @('python', 'pythonw') -and $runtimeSwitch -and $sourceMatches
+}
+
+function Wait-ConsoleProcessExit {
+    param(
+        [int]$ProcessId,
+        [int]$TimeoutMilliseconds = 10000
+    )
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)
+    do {
+        if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 100
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 function Stop-StrayConsoleProcesses {
     $processIds = @(Get-ConsoleListenerProcessIds)
+    $knownProcessIds = @(Get-ConsolePidFileProcessIds)
     foreach ($processId in $processIds) {
         if ($processId -eq $PID) { continue }
-        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
-        if ($null -eq $processInfo) { continue }
-        $commandLine = [string]$processInfo.CommandLine
-        $isSourceRuntime = $commandLine -match '(?i)app\.py(?:"|\s)+.*--service(?:\s|$)'
-        $isPackagedRuntime = $commandLine -match '(?i)lpc-service\.exe(?:"|\s|$)'
-        if (-not $isSourceRuntime -and -not $isPackagedRuntime) {
+        $isConsoleRuntime = Test-ConsoleProcessOwnership -ProcessId $processId -KnownProcessIds $knownProcessIds
+        if ($null -eq $isConsoleRuntime) { continue }
+        if (-not $isConsoleRuntime) {
             throw "A Local Project Console port is held by another process (PID $processId); refusing to terminate it."
         }
         $previousErrorPreference = $ErrorActionPreference
@@ -122,24 +232,34 @@ function Stop-StrayConsoleProcesses {
         } finally {
             $ErrorActionPreference = $previousErrorPreference
         }
-        if ($taskkillExitCode -ne 0 -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
-            throw "Could not stop stale Local Project Console process $processId."
+        if (-not (Wait-ConsoleProcessExit -ProcessId $processId)) {
+            throw "Could not stop stale Local Project Console process $processId (taskkill exit code $taskkillExitCode)."
         }
     }
 }
 
+function Invoke-ScheduledTaskCommand {
+    param([ValidateSet('Query', 'End', 'Run')][string]$Verb)
+    $previousErrorPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        & schtasks.exe "/$Verb" /TN $TaskName 2>$null | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorPreference
+    }
+}
+
 function Test-ConsoleTaskExists {
-    & schtasks.exe /Query /TN $TaskName 2>$null | Out-Null
-    return $LASTEXITCODE -eq 0
+    return (Invoke-ScheduledTaskCommand -Verb 'Query') -eq 0
 }
 
 function Stop-ConsoleTaskFast {
-    & schtasks.exe /End /TN $TaskName 2>$null | Out-Null
+    Invoke-ScheduledTaskCommand -Verb 'End' | Out-Null
 }
 
 function Start-ConsoleTaskFast {
-    & schtasks.exe /Run /TN $TaskName 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    if ((Invoke-ScheduledTaskCommand -Verb 'Run') -ne 0) {
         throw "Scheduled task could not be started: $TaskName"
     }
 }
@@ -147,11 +267,12 @@ function Start-ConsoleTaskFast {
 function Wait-ConsoleHealth {
     param(
         [bool]$Expected,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [switch]$AnyVersion
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        if ((Test-ConsoleHealth) -eq $Expected) { return $true }
+        if ((Test-ConsoleHealth -AnyVersion:$AnyVersion) -eq $Expected) { return $true }
         Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $deadline)
     return $false
@@ -165,6 +286,40 @@ function Get-InstalledTaskAction {
     $task = Get-ConsoleTask
     if ($null -eq $task -or $task.Actions.Count -eq 0) { return $null }
     return $task.Actions[0]
+}
+
+function Assert-InstalledTaskMatches {
+    $task = Get-ConsoleTask
+    if ($null -eq $task -or $task.Actions.Count -eq 0) {
+        throw "Scheduled task is not installed: $TaskName"
+    }
+    $taskAction = $task.Actions[0]
+    if ([string]::IsNullOrWhiteSpace($ServiceExecutable)) {
+        throw 'Task validation requires ServiceExecutable.'
+    }
+    $expectedExecutable = [System.IO.Path]::GetFullPath($ServiceExecutable)
+    $actualExecutable = [System.IO.Path]::GetFullPath([string]$taskAction.Execute)
+    if (-not $actualExecutable.Equals($expectedExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Scheduled task executable is stale: $actualExecutable"
+    }
+    $arguments = [string]$taskAction.Arguments
+    foreach ($required in @('--core', $DataDirectory, $RuntimeDirectory, $LogDirectory, "--mode $RuntimeMode")) {
+        if ($arguments.IndexOf($required, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            throw "Scheduled task arguments are stale: missing $required"
+        }
+    }
+    if ([int]$task.Settings.Priority -ne 4) {
+        throw "Scheduled task priority is stale: $($task.Settings.Priority)"
+    }
+}
+
+function Test-InstalledTaskMatches {
+    try {
+        Assert-InstalledTaskMatches
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 function Invoke-LegacyMigration {
@@ -222,7 +377,7 @@ function Restore-PreviousConsoleTask {
     }
     if ($WasHealthy -and (Test-ConsoleTaskExists)) {
         Start-ConsoleTaskFast
-        Wait-ConsoleHealth -Expected $true -TimeoutSeconds 15 | Out-Null
+        Wait-ConsoleHealth -Expected $true -TimeoutSeconds 15 -AnyVersion | Out-Null
     }
 }
 
@@ -248,13 +403,13 @@ switch ($Action) {
 
         $oldTask = Get-ConsoleTask
         $oldTaskXml = if ($null -ne $oldTask) { Export-ScheduledTask -TaskName $TaskName } else { '' }
-        $oldWasHealthy = Test-ConsoleHealth
+        $oldWasHealthy = Test-ConsoleHealth -AnyVersion
+        $oldWasCompatible = Test-ConsoleHealth
         $oldAction = Get-InstalledTaskAction
         $legacyRoot = ''
         $switchingRuntime = $false
         if ($packaged -and $null -ne $oldAction) {
-            $oldExecute = [string]$oldAction.Execute
-            $switchingRuntime = [System.IO.Path]::GetFullPath($oldExecute) -ne $ServiceExecutable
+            $switchingRuntime = -not (Test-InstalledTaskMatches)
             $candidate = [string]$oldAction.WorkingDirectory
             if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath (Join-Path $candidate 'app.py'))) {
                 $legacyRoot = [System.IO.Path]::GetFullPath($candidate)
@@ -262,7 +417,7 @@ switch ($Action) {
         }
 
         try {
-            if ($switchingRuntime) {
+            if ($switchingRuntime -or ($StartNow -and $oldWasHealthy -and -not $oldWasCompatible)) {
                 Stop-ConsoleTaskFast
                 Start-Sleep -Milliseconds 300
                 Stop-StrayConsoleProcesses
@@ -272,14 +427,14 @@ switch ($Action) {
             $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
             if ($packaged) {
                 Invoke-LegacyMigration -LegacyRoot $legacyRoot
-                $taskArguments = "--service --data-dir `"$DataDirectory`" --runtime-dir `"$RuntimeDirectory`" --log-dir `"$LogDirectory`" --mode $RuntimeMode"
+                $taskArguments = "--core --data-dir `"$DataDirectory`" --runtime-dir `"$RuntimeDirectory`" --log-dir `"$LogDirectory`" --mode $RuntimeMode"
                 $taskAction = New-ScheduledTaskAction `
                     -Execute $ServiceExecutable `
                     -Argument $taskArguments `
                     -WorkingDirectory (Split-Path -Parent $ServiceExecutable)
             } else {
                 $pythonServiceExecutable = Get-PythonServiceExecutable
-                $taskArguments = "-u `"$appPath`" --service"
+                $taskArguments = "-u `"$appPath`" --core"
                 $taskAction = New-ScheduledTaskAction -Execute $pythonServiceExecutable -Argument $taskArguments -WorkingDirectory $ProjectRoot
             }
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
@@ -288,6 +443,7 @@ switch ($Action) {
                 -AllowStartIfOnBatteries `
                 -DontStopIfGoingOnBatteries `
                 -StartWhenAvailable `
+                -Priority 4 `
                 -RestartCount 999 `
                 -RestartInterval (New-TimeSpan -Minutes 1) `
                 -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
@@ -316,6 +472,10 @@ switch ($Action) {
             Restore-PreviousConsoleTask -TaskXml $oldTaskXml -WasHealthy $oldWasHealthy
             throw
         }
+    }
+    'Validate' {
+        Assert-InstalledTaskMatches
+        Write-Host '[LPC] Scheduled task registration matches the packaged runtime.'
     }
     'Status' {
         $task = Get-ConsoleTask

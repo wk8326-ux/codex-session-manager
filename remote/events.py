@@ -4,6 +4,7 @@ import threading
 from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
+from uuid import uuid4
 
 
 def _timestamp() -> str:
@@ -22,6 +23,7 @@ class RemoteEventHub:
         self._condition = threading.Condition()
         self._events: deque[dict] = deque(maxlen=512)
         self._sequence = 0
+        self._stream_id = str(uuid4())
 
     def publish(self, method: str, params: dict) -> None:
         thread_id = _string(params.get("threadId"))
@@ -61,8 +63,22 @@ class RemoteEventHub:
 
     def wait(self, after: int, timeout: float = 25.0) -> dict:
         with self._condition:
+            if after > self._sequence:
+                return {
+                    "events": [],
+                    "cursor": self._sequence,
+                    "streamId": self._stream_id,
+                    "resyncRequired": True,
+                }
             if not any(event["sequence"] > after for event in self._events):
                 self._condition.wait(max(0.0, min(timeout, 30.0)))
+            oldest = self._events[0]["sequence"] if self._events else self._sequence + 1
+            resync_required = after > 0 and oldest > after + 1
             events = [event for event in self._events if event["sequence"] > after]
             cursor = events[-1]["sequence"] if events else max(after, self._sequence)
-            return {"events": events, "cursor": cursor}
+            return {
+                "events": events,
+                "cursor": cursor,
+                "streamId": self._stream_id,
+                "resyncRequired": resync_required,
+            }

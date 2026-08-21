@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 import tempfile
+import time
 import unittest
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,17 +14,20 @@ from unittest.mock import MagicMock, patch
 from app import (
     DEFAULT_PROJECTS,
     Handler,
+    LaunchResolutionError,
     WEBSITE_CACHE,
     cached_website_health,
     load_projects,
     probe_website,
     project_summary,
     project_url_is_valid,
+    resolve_project_launch,
     reorder_projects,
     running_pids,
     save_projects,
     state_for,
     states_for,
+    start_project,
 )
 
 
@@ -122,6 +126,163 @@ class ProjectUrlValidationTests(unittest.TestCase):
         self.assertTrue(project_url_is_valid("http://127.0.0.1:8765", external=False))
         self.assertTrue(project_url_is_valid("https://localhost", external=False))
         self.assertFalse(project_url_is_valid("javascript:alert(1)", external=False))
+
+
+class ProjectLaunchResolutionTests(unittest.TestCase):
+    def test_batch_file_name_is_resolved_from_project_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            script = root / "launch_gui.cmd"
+            script.write_text("@echo off\n", encoding="utf-8")
+
+            spec = resolve_project_launch(
+                {"path": str(root), "startCommand": script.name}
+            )
+
+            self.assertTrue(spec.shell)
+            self.assertEqual(spec.command, f'call "{script}"')
+            self.assertEqual(spec.cwd, root)
+
+    def test_explicit_shell_command_remains_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            spec = resolve_project_launch(
+                {"path": str(root), "startCommand": "npm run dev -- --port 4173"}
+            )
+
+            self.assertTrue(spec.shell)
+            self.assertEqual(spec.command, "npm run dev -- --port 4173")
+
+    def test_python_script_uses_a_python_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            script = root / "run.py"
+            script.write_text("print('ok')\n", encoding="utf-8")
+            with patch("app.shutil.which", side_effect=lambda name: "C:/Python/python.exe" if name == "python.exe" else None):
+                spec = resolve_project_launch(
+                    {"path": str(root), "startCommand": "run.py"}
+                )
+
+            self.assertFalse(spec.shell)
+            self.assertEqual(spec.argv[0], "C:/Python/python.exe")
+            self.assertEqual(spec.argv[1], str(script))
+
+    def test_missing_script_filename_has_a_specific_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaisesRegex(LaunchResolutionError, "找不到启动文件"):
+                resolve_project_launch(
+                    {
+                        "path": temporary_directory,
+                        "startCommand": "missing-helper.cmd",
+                    }
+                )
+
+    def test_file_name_alias_is_accepted_when_start_command_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            executable = root / "helper.exe"
+            executable.write_bytes(b"MZ")
+
+            spec = resolve_project_launch(
+                {"path": str(root), "startCommand": "", "fileName": executable.name}
+            )
+
+            self.assertFalse(spec.shell)
+            self.assertEqual(spec.argv, (str(executable),))
+
+    def test_start_project_invokes_batch_through_generated_absolute_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            script = root / "start-helper.cmd"
+            script.write_text("@echo off\n", encoding="utf-8")
+            process = MagicMock(pid=4321)
+            process.wait.side_effect = subprocess.TimeoutExpired("start-helper.cmd", 0.2)
+            project = {
+                "id": "batch-project",
+                "mode": "local",
+                "path": str(root),
+                "startCommand": script.name,
+                "pid": None,
+                "port": "",
+            }
+            with patch("app.LOG_DIR", root / "logs"), patch(
+                "app.subprocess.Popen", return_value=process
+            ) as popen:
+                ok, message = start_project(project)
+
+            self.assertTrue(ok)
+            self.assertIn("启动", message)
+            command = popen.call_args.args[0]
+            self.assertEqual(command, f'call "{script}"')
+            self.assertTrue(popen.call_args.kwargs["shell"])
+            self.assertEqual(project["pid"], 4321)
+
+    def test_immediate_nonzero_exit_is_reported_as_a_launch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            executable = root / "broken.exe"
+            executable.write_bytes(b"MZ")
+            process = MagicMock(pid=9876)
+            process.wait.return_value = 7
+            project = {
+                "id": "broken-project",
+                "mode": "local",
+                "path": str(root),
+                "startCommand": executable.name,
+                "pid": None,
+                "port": "",
+            }
+
+            with patch("app.LOG_DIR", root / "logs"), patch(
+                "app.subprocess.Popen", return_value=process
+            ):
+                ok, message = start_project(project)
+
+            self.assertFalse(ok)
+            self.assertIn("退出码 7", message)
+            self.assertIsNone(project["pid"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows batch integration")
+    def test_batch_file_in_a_spaced_directory_really_executes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lpc launch ") as temporary_directory:
+            root = Path(temporary_directory)
+            script = root / "start helper.cmd"
+            marker = root / "started.marker"
+            script.write_text(
+                f'@echo off\r\n>"{marker}" echo started\r\n',
+                encoding="utf-8",
+            )
+            project = {
+                "id": "real-batch-project",
+                "mode": "local",
+                "path": str(root),
+                "startCommand": script.name,
+                "pid": None,
+                "port": "",
+            }
+            launched = []
+            real_popen = subprocess.Popen
+
+            def capture_popen(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                launched.append(process)
+                return process
+
+            spec = resolve_project_launch(project)
+            self.assertEqual(spec.command, f'call "{script}"')
+
+            with patch("app.LOG_DIR", root / "logs"), patch(
+                "app.subprocess.Popen", side_effect=capture_popen
+            ):
+                ok, message = start_project(project)
+                deadline = time.monotonic() + 2
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                for process in launched:
+                    process.wait(timeout=2)
+
+            self.assertTrue(ok, message)
+            self.assertTrue(marker.exists())
 
 
 class ProjectReorderTests(unittest.TestCase):

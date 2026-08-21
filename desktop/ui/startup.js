@@ -89,7 +89,22 @@ document.querySelector("#import-button").addEventListener("click", async () => {
   try {
     const result = await invoke("import_legacy_data");
     if (result.cancelled) return;
-    setStatus("旧数据已导入", "正在重新启动本机后台服务...");
+    if (!result.migrated) {
+      const details = {
+        destination_has_data: "安装目录中已经存在数据，为避免覆盖，本次没有导入。",
+        source_has_no_data: "所选目录中没有找到 projects.json 或 watchdog.db。",
+      };
+      setStatus("没有导入旧数据", details[result.reason] || "迁移程序没有复制任何数据。");
+      footerStatus.textContent = "现有数据保持不变";
+      actions.hidden = false;
+      return;
+    }
+    setStatus(
+      "旧数据已导入",
+      result.backup
+        ? "原数据已安全备份，正在重新启动本机后台服务..."
+        : "正在重新启动本机后台服务...",
+    );
     await bootstrap();
   } catch (error) {
     setFailed(String(error));

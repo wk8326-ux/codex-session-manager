@@ -37,8 +37,8 @@ def _error_signature(turn: TurnSnapshot) -> str:
         return f"{kind}:http:{turn.http_status}"
     if turn.error_kind:
         return f"{kind}:kind"
-    if turn.error_message:
-        return "message:" + turn.error_message.strip().lower()[:200]
+    if turn.recovery_text:
+        return "message:" + turn.recovery_text.strip().lower()[:200]
     return ""
 
 
@@ -53,11 +53,11 @@ def _matches(turn: TurnSnapshot, rule: dict) -> bool:
         return bool(turn.error_kind) and pattern == turn.error_kind
     if match_type == "message_contains":
         needle = " ".join(pattern.split()).casefold()
-        message = " ".join(turn.error_message.split()).casefold()
+        message = " ".join(turn.recovery_text.split()).casefold()
         return bool(needle) and needle in message
     if match_type == "regex":
         try:
-            return re.search(pattern, turn.error_message, flags=re.IGNORECASE) is not None
+            return re.search(pattern, turn.recovery_text, flags=re.IGNORECASE) is not None
         except re.error:
             return False
     return False
@@ -76,16 +76,19 @@ def decide(value: DecisionInput) -> Decision:
         return Decision("silent_no_turn", detail=current.thread_status)
     if turn.status == "inProgress":
         return Decision("silent_session_running")
-    if turn.status == "completed":
-        return Decision("silent_session_completed")
-    if turn.status not in {"failed", "interrupted"}:
+    if turn.status not in {"completed", "failed", "interrupted", "systemError"}:
         return Decision("silent_unknown", detail=turn.status)
     signature = _error_signature(turn)
+    matched = bool(signature) and any(
+        _matches(turn, rule) for rule in value.recovery_rules
+    )
+    if matched:
+        return Decision("resume_candidate", signature, "enabled recovery rule matched")
+    if turn.status == "completed":
+        return Decision("silent_session_completed")
     if not signature:
         return Decision(
             "silent_interrupted_without_error",
             detail="latest turn was interrupted without a recoverable API error",
         )
-    if any(_matches(turn, rule) for rule in value.recovery_rules):
-        return Decision("resume_candidate", signature, "enabled recovery rule matched")
     return Decision("silent_unrecoverable_error", signature, "no enabled recovery rule matched")

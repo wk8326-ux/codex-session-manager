@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import socket
 import ssl
 import subprocess
@@ -52,7 +54,24 @@ WATCHDOG_API: object | None = None
 REMOTE_ADMIN_API: object | None = None
 REMOTE_HTTP_API: object | None = None
 RELAY_SETUP_API: object | None = None
+SESSION_MANAGER_CONTROLLER: object | None = None
 STARTED_AT = datetime.now().astimezone().isoformat(timespec="seconds")
+
+SESSION_MANAGER_PROJECT_ID = "codex-session-manager"
+SESSION_MANAGER_PROJECT = {
+    "id": SESSION_MANAGER_PROJECT_ID,
+    "kind": "session-manager",
+    "mode": "local",
+    "name": "Codex 会话管理",
+    "path": "",
+    "startCommand": "受控运行时 · 8766 / 8767",
+    "stopCommand": "",
+    "port": f"{REMOTE_PORT} / {AUXILIARY_PORT}",
+    "url": f"http://127.0.0.1:{REMOTE_PORT}/",
+    "note": "API 监控、异常续跑、PWA 远程会话和设备配对",
+    "pid": None,
+    "startedAt": "",
+}
 
 # Kept patchable for startup-failure tests; the real class is imported lazily.
 StdioJsonRpcClient = None
@@ -63,14 +82,21 @@ class AuxiliaryRuntimeUnavailable(RuntimeError):
 
 
 def auxiliary_worker_command(paths: ApplicationPaths) -> list[str]:
+    """Build the legacy session-manager command used by old scripts/tests."""
+    return session_manager_command(paths, switch="--runtime-worker")
+
+
+def session_manager_command(
+    paths: ApplicationPaths, *, switch: str = "--session-manager"
+) -> list[str]:
     if getattr(sys, "frozen", False):
-        command = [sys.executable, "--runtime-worker"]
+        command = [sys.executable, switch]
     else:
         command = [
             sys.executable,
             "-u",
             str(SOURCE_ROOT / "app.py"),
-            "--runtime-worker",
+            switch,
         ]
     command.extend(
         [
@@ -92,6 +118,7 @@ class ConsoleInstanceLock:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self.pid_path = self.path.with_suffix(".pid")
         self._handle = None
 
     def acquire(self) -> None:
@@ -116,11 +143,19 @@ class ConsoleInstanceLock:
             handle.close()
             raise RuntimeError("Local Project Console is already running.") from error
 
-        handle.seek(0)
-        handle.truncate()
-        handle.write(str(os.getpid()).encode("ascii"))
-        handle.flush()
         self._handle = handle
+        try:
+            pid = str(os.getpid())
+            handle.seek(0)
+            handle.truncate()
+            handle.write(pid.encode("ascii"))
+            handle.flush()
+            temporary_pid_path = self.pid_path.with_suffix(".pid.tmp")
+            temporary_pid_path.write_text(pid, encoding="ascii")
+            temporary_pid_path.replace(self.pid_path)
+        except BaseException:
+            self.release()
+            raise
 
     def release(self) -> None:
         handle = self._handle
@@ -139,12 +174,77 @@ class ConsoleInstanceLock:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
+            self.pid_path.unlink(missing_ok=True)
 
 
 def auxiliary_runtime_ready() -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
-        connection.settimeout(0.05)
-        return connection.connect_ex((HOST, AUXILIARY_PORT)) == 0
+    connection = HTTPConnection(HOST, AUXILIARY_PORT, timeout=0.2)
+    try:
+        connection.request("GET", "/api/auxiliary-health")
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        return (
+            response.status == HTTPStatus.OK
+            and isinstance(payload, dict)
+            and payload.get("service")
+            in {"local-project-console-auxiliary", "local-project-console-session-manager"}
+            and payload.get("ready") is True
+        )
+    except (ConnectionError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    finally:
+        connection.close()
+
+
+def session_manager_runtime_ready() -> bool:
+    """Check only the lightweight session-manager health endpoint."""
+    connection = HTTPConnection(HOST, AUXILIARY_PORT, timeout=0.2)
+    try:
+        connection.request("GET", "/api/auxiliary-health")
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        return (
+            response.status == HTTPStatus.OK
+            and isinstance(payload, dict)
+            and payload.get("service") == "local-project-console-session-manager"
+            and payload.get("ready") is True
+        )
+    except (ConnectionError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    finally:
+        connection.close()
+
+
+def start_session_manager() -> tuple[bool, str]:
+    supervisor = SESSION_MANAGER_CONTROLLER
+    if supervisor is None:
+        return False, "Codex 会话管理只能由项目控制台核心运行时启动。"
+    try:
+        supervisor.start()
+    except OSError as error:
+        return False, f"会话管理启动失败：{error}"
+    return True, "已发出 Codex 会话管理启动命令。"
+
+
+def stop_session_manager() -> tuple[bool, str]:
+    supervisor = SESSION_MANAGER_CONTROLLER
+    if supervisor is None:
+        return False, "Codex 会话管理控制器不可用。"
+    supervisor.stop()
+    return True, "已关闭 Codex 会话管理。"
+
+
+def next_auxiliary_restart_delay(
+    previous_delay: float,
+    runtime_seconds: float,
+    *,
+    base_delay: float = 3.0,
+    maximum_delay: float = 60.0,
+    stable_runtime: float = 30.0,
+) -> float:
+    if runtime_seconds >= stable_runtime or previous_delay <= 0:
+        return base_delay
+    return min(maximum_delay, previous_delay * 2)
 
 
 def proxy_auxiliary_request(
@@ -178,8 +278,8 @@ def proxy_auxiliary_request(
         ) from error
 
 
-class AuxiliaryRuntimeSupervisor:
-    """Keep heavyweight Codex, monitoring, remote, and FRP work off the core."""
+class SessionManagerSupervisor:
+    """Start and supervise the optional Codex session-manager process."""
 
     def __init__(
         self,
@@ -187,16 +287,22 @@ class AuxiliaryRuntimeSupervisor:
         *,
         startup_delay: float = 0.6,
         restart_delay: float = 3.0,
+        maximum_restart_delay: float = 60.0,
+        stable_runtime: float = 30.0,
     ) -> None:
         self.paths = paths
         self.startup_delay = startup_delay
         self.restart_delay = restart_delay
+        self.maximum_restart_delay = maximum_restart_delay
+        self.stable_runtime = stable_runtime
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
         self._process_lock = threading.Lock()
 
     def start(self) -> None:
+        if session_manager_runtime_ready():
+            return
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
@@ -206,6 +312,13 @@ class AuxiliaryRuntimeSupervisor:
             daemon=True,
         )
         self._thread.start()
+
+    @property
+    def process_id(self) -> int | None:
+        with self._process_lock:
+            if self._process is None or self._process.poll() is not None:
+                return None
+            return self._process.pid
 
     def _run(self) -> None:
         if self._stop_event.wait(self.startup_delay):
@@ -217,38 +330,58 @@ class AuxiliaryRuntimeSupervisor:
         if log_path.exists() and log_path.stat().st_size > 10 * 1024 * 1024:
             previous_log_path.unlink(missing_ok=True)
             log_path.replace(previous_log_path)
-        command = auxiliary_worker_command(self.paths)
+        command = session_manager_command(self.paths)
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        retry_delay = 0.0
         while not self._stop_event.is_set():
             with log_path.open("a", encoding="utf-8", buffering=1) as log:
-                log.write(f"[{now()}] Starting auxiliary runtime.\n")
-                process = subprocess.Popen(
-                    command,
-                    cwd=str(self.paths.resource_root),
-                    stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    creationflags=creationflags,
-                )
-                with self._process_lock:
-                    self._process = process
-                while process.poll() is None and not self._stop_event.wait(0.25):
-                    pass
-                if self._stop_event.is_set() and process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=3)
-                log.write(
-                    f"[{now()}] Auxiliary runtime exited with code "
-                    f"{process.returncode}.\n"
-                )
+                log.write(f"[{now()}] Starting Codex session manager.\n")
+                started_at = time.monotonic()
+                process = None
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=str(self.paths.resource_root),
+                        stdin=subprocess.DEVNULL,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        creationflags=creationflags,
+                    )
+                    with self._process_lock:
+                        self._process = process
+                    while process.poll() is None and not self._stop_event.wait(0.25):
+                        pass
+                    if self._stop_event.is_set() and process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=3)
+                    log.write(
+                        f"[{now()}] Codex session manager exited with code "
+                        f"{process.returncode}.\n"
+                    )
+                except OSError as error:
+                    log.write(f"[{now()}] Codex session manager failed to start: {error}.\n")
             with self._process_lock:
                 self._process = None
-            if self._stop_event.wait(self.restart_delay):
+            runtime_seconds = time.monotonic() - started_at
+            retry_delay = next_auxiliary_restart_delay(
+                retry_delay,
+                runtime_seconds,
+                base_delay=self.restart_delay,
+                maximum_delay=self.maximum_restart_delay,
+                stable_runtime=self.stable_runtime,
+            )
+            if self._stop_event.is_set():
                 return
+            with log_path.open("a", encoding="utf-8", buffering=1) as log:
+                log.write(f"[{now()}] Restarting Codex session manager in {retry_delay:g}s.\n")
+            if self._stop_event.wait(retry_delay):
+                return
+            if runtime_seconds >= self.stable_runtime:
+                retry_delay = 0.0
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -260,6 +393,10 @@ class AuxiliaryRuntimeSupervisor:
         if thread is not None:
             thread.join(timeout=5)
         self._thread = None
+
+
+# Compatibility for older imports and tests. New code should use the explicit name.
+AuxiliaryRuntimeSupervisor = SessionManagerSupervisor
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -549,7 +686,7 @@ def state_for(
     external_ready = project_url_is_valid(project.get("url"), external=True)
     pid_active = pid_is_running(project.get("pid")) if pid_active is None else pid_active
     port_active = port_is_open(project.get("port")) if port_active is None else port_active
-    configured = bool(project.get("startCommand", "").strip())
+    configured = project_has_launch_configuration(project)
     health = website_health or {}
     if external and not external_ready:
         state = "needs-config"
@@ -622,8 +759,44 @@ def states_for(projects: list[dict]) -> list[dict]:
     ]
 
 
+def session_manager_state() -> dict:
+    """Return a virtual project row without persisting runtime-owned data."""
+    ready = session_manager_runtime_ready()
+    supervisor = SESSION_MANAGER_CONTROLLER
+    process_id = getattr(supervisor, "process_id", None) if supervisor else None
+    state = "running" if ready else ("starting" if process_id else "stopped")
+    label = {
+        "running": "运行中",
+        "starting": "启动中",
+        "stopped": "已关闭",
+    }[state]
+    project = dict(SESSION_MANAGER_PROJECT)
+    project.update(
+        {
+            "pid": process_id,
+            "pidActive": bool(process_id),
+            "portActive": ready,
+            "remoteActive": ready,
+            "auxiliaryActive": ready,
+            "pathExists": True,
+            "state": state,
+            "stateLabel": label,
+        }
+    )
+    return project
+
+
+def projects_for_api() -> list[dict]:
+    return [*states_for([dict(project) for project in PROJECTS]), session_manager_state()]
+
+
 def project_summary(projects: list[dict]) -> dict:
-    local = [project for project in projects if project.get("mode") != "external"]
+    local = [
+        project
+        for project in projects
+        if project.get("mode") != "external"
+        and project.get("kind") != "session-manager"
+    ]
     counts = {
         "all": len(projects),
         "running": 0,
@@ -655,35 +828,212 @@ def write_log(project: dict, message: str) -> None:
         log_file.write(f"[{now()}] {message}\n")
 
 
+class LaunchResolutionError(ValueError):
+    """A project has no safe, usable launch entry point."""
+
+
+@dataclass(frozen=True)
+class LaunchSpec:
+    """Normalized process invocation for a local project."""
+
+    cwd: Path
+    shell: bool
+    command: str | None = None
+    argv: tuple[str, ...] = ()
+
+    @property
+    def display(self) -> str:
+        if self.command is not None:
+            return self.command
+        return subprocess.list2cmdline(list(self.argv))
+
+
+_LAUNCH_FILE_EXTENSIONS = {
+    ".bat",
+    ".cmd",
+    ".com",
+    ".exe",
+    ".js",
+    ".lnk",
+    ".msi",
+    ".ps1",
+    ".py",
+    ".vbs",
+}
+_LAUNCH_FIELDS = ("startCommand", "fileName", "startFile", "script", "executable")
+
+
+def _project_launch_value(project: dict) -> tuple[str, str]:
+    for field in _LAUNCH_FIELDS:
+        value = str(project.get(field, "") or "").strip()
+        if value:
+            return value, field
+    return "", ""
+
+
+def project_has_launch_configuration(project: dict) -> bool:
+    return bool(_project_launch_value(project)[0])
+
+
+def _split_launch_value(value: str) -> list[str]:
+    try:
+        tokens = shlex.split(value, posix=False)
+    except ValueError as error:
+        raise LaunchResolutionError(f"启动命令格式无法解析：{error}") from error
+    cleaned: list[str] = []
+    for token in tokens:
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}:
+            token = token[1:-1]
+        cleaned.append(token)
+    return cleaned
+
+
+def _resolve_launch_file(root: Path, token: str) -> Path:
+    candidate = Path(token).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        candidate = candidate.resolve()
+    except OSError:
+        candidate = candidate.absolute()
+    return candidate
+
+
+def _looks_like_launch_file(token: str, field: str, *, single_token: bool) -> bool:
+    suffix = Path(token).suffix.lower()
+    return (
+        field != "startCommand"
+        or single_token
+        or suffix in _LAUNCH_FILE_EXTENSIONS
+        or "/" in token
+        or "\\" in token
+    )
+
+
+def _interpreter_or_error(names: tuple[str, ...], label: str) -> str:
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    raise LaunchResolutionError(
+        f"未找到 {label}，请安装对应运行时，或填写可直接执行的启动命令。"
+    )
+
+
+def resolve_project_launch(project: dict) -> LaunchSpec:
+    """Resolve a project's command or a filename relative to its work directory.
+
+    Explicit shell commands remain supported. A single filename is treated as a
+    launch file only when it exists, which keeps commands such as ``npm run dev``
+    from being mistaken for files.
+    """
+
+    root = Path(str(project.get("path", "") or "").strip()).expanduser()
+    if not root.is_dir():
+        raise LaunchResolutionError("项目目录不存在，请检查工作目录。")
+
+    value, field = _project_launch_value(project)
+    if not value:
+        raise LaunchResolutionError("请填写启动命令或启动文件名。")
+    exact_candidate = _resolve_launch_file(root, value)
+    tokens = [value] if exact_candidate.is_file() else _split_launch_value(value)
+    if not tokens:
+        raise LaunchResolutionError("请填写启动命令或启动文件名。")
+
+    first = tokens[0]
+    candidate = exact_candidate if len(tokens) == 1 else _resolve_launch_file(root, first)
+    if candidate.is_file():
+        args = tuple(tokens[1:])
+        suffix = candidate.suffix.lower()
+        if suffix in {".bat", ".cmd"}:
+            command_line = f'call "{candidate}"'
+            if args:
+                command_line += " " + subprocess.list2cmdline(list(args))
+            return LaunchSpec(root, True, command=command_line)
+        if suffix == ".ps1":
+            powershell = _interpreter_or_error(
+                ("pwsh.exe", "powershell.exe"), "PowerShell"
+            )
+            return LaunchSpec(
+                root,
+                False,
+                argv=(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(candidate), *args),
+            )
+        if suffix == ".py":
+            python = shutil.which("py.exe") or shutil.which("python.exe")
+            if not python:
+                raise LaunchResolutionError(
+                    "未找到 Python 启动器，请安装 Python，或填写 python/py 启动命令。"
+                )
+            prefix = (python, "-3") if Path(python).name.lower() == "py.exe" else (python,)
+            return LaunchSpec(root, False, argv=(*prefix, str(candidate), *args))
+        if suffix == ".vbs":
+            wscript = _interpreter_or_error(("wscript.exe",), "Windows Script Host")
+            return LaunchSpec(root, False, argv=(wscript, "//B", "//Nologo", str(candidate), *args))
+        if suffix == ".js":
+            node = _interpreter_or_error(("node.exe", "node"), "Node.js")
+            return LaunchSpec(root, False, argv=(node, str(candidate), *args))
+        if suffix == ".msi":
+            msiexec = shutil.which("msiexec.exe") or "msiexec.exe"
+            return LaunchSpec(root, False, argv=(msiexec, "/i", str(candidate), *args))
+        if suffix == ".lnk":
+            explorer = shutil.which("explorer.exe") or "explorer.exe"
+            return LaunchSpec(root, False, argv=(explorer, str(candidate), *args))
+        return LaunchSpec(root, False, argv=(str(candidate), *args))
+
+    if _looks_like_launch_file(first, field, single_token=len(tokens) == 1):
+        raise LaunchResolutionError(f"找不到启动文件：{candidate}")
+    return LaunchSpec(root, True, command=value)
+
+
 def start_project(project: dict) -> tuple[bool, str]:
     if project.get("mode") == "external":
         return False, "外部网页不由本机控制台启动。"
-    command = project.get("startCommand", "").strip()
-    path = Path(project.get("path", ""))
-    if not command:
-        return False, "请先填写启动命令。"
-    if not path.is_dir():
-        return False, "项目目录不存在，请检查工作目录。"
+    try:
+        launch = resolve_project_launch(project)
+    except LaunchResolutionError as error:
+        return False, str(error)
     if state_for(project)["state"] == "running":
         return False, "项目已经在运行。"
 
     LOG_DIR.mkdir(exist_ok=True)
     log_path = LOG_DIR / f"{project['id']}.log"
     with log_path.open("a", encoding="utf-8") as output:
-        output.write(f"\n[{now()}] START: {command}\n")
-        process = subprocess.Popen(
-            command,
-            cwd=str(path),
-            shell=True,
-            stdin=subprocess.DEVNULL,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
-        )
-    project["pid"] = process.pid
+        output.write(f"\n[{now()}] START: {launch.display}\n")
+        process_kwargs = {
+            "cwd": str(launch.cwd),
+            "shell": launch.shell,
+            "stdin": subprocess.DEVNULL,
+            "stdout": output,
+            "stderr": subprocess.STDOUT,
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        }
+        try:
+            if launch.shell:
+                process = subprocess.Popen(launch.command or "", **process_kwargs)
+            else:
+                process = subprocess.Popen(list(launch.argv), **process_kwargs)
+        except OSError as error:
+            output.write(f"[{now()}] START FAILED: {error}\n")
+            return False, f"启动失败：{error}"
+
+    try:
+        exit_code = process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        exit_code = None
+    if exit_code not in {None, 0}:
+        project["pid"] = None
+        project["startedAt"] = ""
+        write_log(project, f"Launcher exited with code {exit_code}")
+        return False, f"启动文件执行失败（退出码 {exit_code}），请查看运行日志。"
+
+    project["pid"] = process.pid if exit_code is None else None
     project["startedAt"] = now()
-    write_log(project, f"Launcher PID {process.pid}")
-    return True, "已发出启动命令。"
+    if exit_code is None:
+        write_log(project, f"Launcher PID {process.pid}")
+        return True, "已发出启动命令。"
+    write_log(project, "Launch file completed successfully")
+    return True, "启动文件已执行。"
 
 
 def stop_project(project: dict) -> tuple[bool, str]:
@@ -1025,13 +1375,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
+            session_ready = session_manager_runtime_ready()
             self.respond_json(
                 HTTPStatus.OK,
                 {
                     "service": "local-project-console",
                     "version": APP_VERSION,
                     "ready": True,
-                    "auxiliaryReady": auxiliary_runtime_ready(),
+                    "role": "core",
+                    "auxiliaryReady": session_ready,
+                    "sessionManager": {
+                        "enabled": SESSION_MANAGER_CONTROLLER is not None,
+                        "ready": session_ready,
+                    },
                     "mode": PATHS.mode,
                     "pid": os.getpid(),
                     "startedAt": STARTED_AT,
@@ -1051,8 +1407,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/projects":
             with LOCK:
-                projects = [dict(project) for project in PROJECTS]
-            self.respond_json(HTTPStatus.OK, states_for(projects))
+                projects = projects_for_api()
+            self.respond_json(HTTPStatus.OK, projects)
             return
         if parsed.path == "/api/shell/project-summary":
             with LOCK:
@@ -1070,6 +1426,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/watchdog", "/watchdog/"}:
             self.respond_file(ROOT / "watchdog.html", "text/html; charset=utf-8")
+            return
+        if parsed.path in {"/session-manager", "/session-manager/"}:
+            self.respond_file(
+                ROOT / "session-manager.html", "text/html; charset=utf-8", cache="no-cache"
+            )
             return
         if parsed.path in {"/remote", "/remote/"}:
             self.respond_file(
@@ -1103,12 +1464,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/assets/console-sidebar.css":
             self.respond_file(
-                ROOT / "assets" / "console-sidebar.css", "text/css; charset=utf-8"
+                ROOT / "assets" / "console-sidebar.css",
+                "text/css; charset=utf-8",
+                cache="no-cache",
             )
             return
         if parsed.path == "/assets/console-sidebar.js":
             self.respond_file(
-                ROOT / "assets" / "console-sidebar.js", "text/javascript; charset=utf-8"
+                ROOT / "assets" / "console-sidebar.js",
+                "text/javascript; charset=utf-8",
+                cache="no-cache",
             )
             return
         if parsed.path == "/assets/vendor/qrcode.min.js":
@@ -1127,12 +1492,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_file(ROOT / "assets" / "project-console-icon.png", "image/png")
             return
         if parsed.path == "/":
-            body = (ROOT / "index.html").read_bytes()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.respond_file(
+                ROOT / "index.html", "text/html; charset=utf-8", cache="no-cache"
+            )
             return
         self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
 
@@ -1188,6 +1550,22 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond_json(HTTPStatus.CREATED, state_for(project))
                 return
             project_id = parsed.path.split("/")[3] if len(parsed.path.split("/")) > 3 else ""
+            if project_id == SESSION_MANAGER_PROJECT_ID:
+                if parsed.path.endswith("/start"):
+                    ok, message = start_session_manager()
+                elif parsed.path.endswith("/stop"):
+                    ok, message = stop_session_manager()
+                else:
+                    self.respond_json(
+                        HTTPStatus.CONFLICT,
+                        {"message": "Codex 会话管理是系统项目，不能编辑。"},
+                    )
+                    return
+                self.respond_json(
+                    HTTPStatus.OK if ok else HTTPStatus.CONFLICT,
+                    {"message": message, "project": session_manager_state()},
+                )
+                return
             project = find_project(project_id)
             if not project:
                 self.respond_json(HTTPStatus.NOT_FOUND, {"message": "项目不存在。"})
@@ -1217,6 +1595,12 @@ class Handler(BaseHTTPRequestHandler):
             self.dispatch_watchdog("PUT", parsed, payload)
             return
         project_id = urlparse(self.path).path.split("/")[-1]
+        if project_id == SESSION_MANAGER_PROJECT_ID:
+            self.respond_json(
+                HTTPStatus.CONFLICT,
+                {"message": "Codex 会话管理的配置由独立模块管理。"},
+            )
+            return
         with LOCK:
             project = find_project(project_id)
             if not project:
@@ -1261,6 +1645,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.dispatch_remote_admin("DELETE", parsed.path, None):
             return
         project_id = urlparse(self.path).path.split("/")[-1]
+        if project_id == SESSION_MANAGER_PROJECT_ID:
+            self.respond_json(
+                HTTPStatus.CONFLICT,
+                {"message": "Codex 会话管理不能从项目列表删除，只能关闭运行。"},
+            )
+            return
         with LOCK:
             project = find_project(project_id)
             if not project:
@@ -1280,7 +1670,17 @@ class AuxiliaryHandler(Handler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/auxiliary-health":
-            self.respond_json(HTTPStatus.OK, {"ready": True})
+            self.respond_json(
+                HTTPStatus.OK,
+                {
+                    "service": "local-project-console-session-manager",
+                    "version": APP_VERSION,
+                    "ready": True,
+                    "role": "session-manager",
+                    "pid": os.getpid(),
+                    "ports": {"remote": REMOTE_PORT, "auxiliary": AUXILIARY_PORT},
+                },
+            )
             return
         if self.dispatch_watchdog("GET", parsed, None):
             return
@@ -1438,7 +1838,7 @@ def _paths_for_base(base_path: Path | None) -> ApplicationPaths:
     )
 
 
-def run_auxiliary_runtime(
+def run_session_manager(
     base_path: Path | None = None,
     instance_lock: ConsoleInstanceLock | None = None,
 ) -> None:
@@ -1484,7 +1884,7 @@ def run_auxiliary_runtime(
         runtime.scheduler.start()
         scheduler_started = True
         print(
-            f"Session monitoring runtime is ready at "
+            f"Codex session manager is ready at "
             f"http://{HOST}:{AUXILIARY_PORT}"
         )
         if remote_server is not None:
@@ -1512,10 +1912,17 @@ def run_auxiliary_runtime(
         lock.release()
 
 
+# Compatibility entry point for existing scripts and installed runtimes.
+run_auxiliary_runtime = run_session_manager
+
+
 def run_console(
     base_path: Path | None = None,
     instance_lock: ConsoleInstanceLock | None = None,
     auxiliary_supervisor: object | None = None,
+    *,
+    start_auxiliary: bool | None = None,
+    stop_auxiliary: bool = True,
 ) -> None:
     paths = _paths_for_base(base_path)
     paths.ensure_writable_directories()
@@ -1525,22 +1932,42 @@ def run_console(
     lock.acquire()
     server = None
     supervisor = auxiliary_supervisor
+    if start_auxiliary is None:
+        # Explicit callers from the legacy API still get the old supervised
+        # behaviour; the core runtime passes False deliberately.
+        start_auxiliary = supervisor is not None
     try:
         paths.log_root.mkdir(parents=True, exist_ok=True)
         server = ThreadingHTTPServer((HOST, PORT), Handler)
-        if supervisor is None:
-            supervisor = AuxiliaryRuntimeSupervisor(paths)
         print(f"Local Project Console is available at http://{HOST}:{PORT}")
-        supervisor.start()
+        if supervisor is not None and (start_auxiliary is True):
+            supervisor.start()
         server.serve_forever()
     finally:
         try:
-            if supervisor is not None:
+            if supervisor is not None and stop_auxiliary:
                 supervisor.stop()
         finally:
             if server is not None:
                 server.server_close()
             lock.release()
+
+
+def run_core(base_path: Path | None = None) -> None:
+    """Run the lightweight project-console core without Codex dependencies."""
+    global SESSION_MANAGER_CONTROLLER
+    paths = _paths_for_base(base_path)
+    supervisor = SessionManagerSupervisor(paths)
+    SESSION_MANAGER_CONTROLLER = supervisor
+    try:
+        run_console(
+            paths.data_root,
+            auxiliary_supervisor=supervisor,
+            start_auxiliary=False,
+            stop_auxiliary=False,
+        )
+    finally:
+        SESSION_MANAGER_CONTROLLER = None
 
 
 def run_service(base_path: Path | None = None) -> None:
@@ -1559,9 +1986,9 @@ def run_service(base_path: Path | None = None) -> None:
     with log_path.open("a", encoding="utf-8", buffering=1) as log:
         sys.stdout = log
         sys.stderr = log
-        print(f"[{now()}] Starting Local Project Console with {sys.executable}")
+        print(f"[{now()}] Starting Local Project Console core with {sys.executable}")
         try:
-            run_console(paths.data_root)
+            run_core(paths.data_root)
         except BaseException:
             import traceback
 
@@ -1583,7 +2010,11 @@ def main() -> None:
         source_index = arguments.index("--migrate-from") + 1
         if source_index >= len(arguments):
             raise SystemExit("--migrate-from requires a source directory")
-        result = migrate_legacy_data(Path(arguments[source_index]), PATHS)
+        result = migrate_legacy_data(
+            Path(arguments[source_index]),
+            PATHS,
+            replace_existing="--replace-existing" in arguments,
+        )
         print(
             json.dumps(
                 {
@@ -1591,18 +2022,20 @@ def main() -> None:
                     "source": str(result.source),
                     "destination": str(result.destination),
                     "copied": list(result.copied),
+                    "reason": result.reason,
+                    "backup": str(result.backup) if result.backup else "",
                 },
                 ensure_ascii=False,
             )
         )
         return
-    if "--runtime-worker" in arguments:
-        run_auxiliary_runtime(PATHS.data_root)
+    if "--session-manager" in arguments or "--runtime-worker" in arguments:
+        run_session_manager(PATHS.data_root)
         return
-    if "--service" in arguments:
+    if "--core" in arguments or "--service" in arguments:
         run_service(PATHS.data_root)
         return
-    run_console()
+    run_core()
 
 
 if __name__ == "__main__":

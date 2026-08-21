@@ -91,6 +91,7 @@ class RuntimeMigrationTests(unittest.TestCase):
             result = migrate_legacy_data(legacy, paths)
 
             self.assertTrue(result.migrated)
+            self.assertEqual(result.reason, "migrated")
             self.assertEqual(
                 json.loads(paths.projects_path.read_text(encoding="utf-8")),
                 [{"id": "project-a"}],
@@ -117,7 +118,62 @@ class RuntimeMigrationTests(unittest.TestCase):
             result = migrate_legacy_data(legacy, paths)
 
             self.assertFalse(result.migrated)
+            self.assertEqual(result.reason, "destination_has_data")
             self.assertIn("existing", paths.projects_path.read_text(encoding="utf-8"))
+
+    def test_source_without_legacy_data_reports_why_it_was_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "legacy"
+            legacy.mkdir()
+            paths = self._paths(root)
+
+            result = migrate_legacy_data(legacy, paths)
+
+            self.assertFalse(result.migrated)
+            self.assertEqual(result.reason, "source_has_no_data")
+
+    def test_explicit_replacement_backs_up_existing_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "legacy"
+            legacy.mkdir()
+            (legacy / "projects.json").write_text(
+                '[{"id":"legacy"}]', encoding="utf-8"
+            )
+            paths = self._paths(root)
+            paths.ensure_writable_directories()
+            paths.projects_path.write_text('[{"id":"current"}]', encoding="utf-8")
+
+            result = migrate_legacy_data(legacy, paths, replace_existing=True)
+
+            self.assertTrue(result.migrated)
+            self.assertIsNotNone(result.backup)
+            self.assertIn("legacy", paths.projects_path.read_text(encoding="utf-8"))
+            backup_projects = result.backup / "projects.json"  # type: ignore[operator]
+            self.assertIn("current", backup_projects.read_text(encoding="utf-8"))
+
+    def test_replacement_failure_restores_existing_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "legacy"
+            legacy.mkdir()
+            (legacy / "projects.json").write_text(
+                '[{"id":"legacy"}]', encoding="utf-8"
+            )
+            paths = self._paths(root)
+            paths.ensure_writable_directories()
+            paths.projects_path.write_text('[{"id":"current"}]', encoding="utf-8")
+
+            with patch(
+                "runtime_migration._commit_directory",
+                side_effect=OSError("simulated replacement failure"),
+            ):
+                with self.assertRaises(MigrationError):
+                    migrate_legacy_data(legacy, paths, replace_existing=True)
+
+            self.assertIn("current", paths.projects_path.read_text(encoding="utf-8"))
+            self.assertFalse(any(root.glob("installed/data.pre-import*")))
 
     def test_invalid_projects_file_rolls_back_without_partial_destination(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

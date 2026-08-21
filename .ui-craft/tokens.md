@@ -8,10 +8,11 @@
 
 ## Color
 
-- Canvas: `#eef1ef`
-- Raised surface: `#f8faf8`
-- Primary ink: `#18221f`
-- Secondary ink: `#68736f`
+- Canvas: `#f4f4f4`
+- Raised surface: `#ffffff`
+- Sidebar: `#ebebeb`
+- Primary ink: `#202020`
+- Secondary ink: `#676767`
 - Accent forest: `#2d715b`
 - Running: `#27845a`
 - Warning: `#ad6b1d`
@@ -19,12 +20,17 @@
 
 Color is reserved for actions, focus, and semantic state. The base interface stays neutral.
 
+Dark mode uses `#181818` canvas, `#212121` raised surfaces, and `#141414` navigation. Green never tints the full canvas or ordinary selected rows.
+
 ## Typography
 
 - Display: `Bahnschrift`, `Microsoft YaHei UI`, system sans-serif
 - Body: `Microsoft YaHei UI`, `Segoe UI`, system sans-serif
 - Utility/data: `Cascadia Mono`, `Consolas`, monospace
 - Letter spacing remains `0` throughout.
+- Desktop body copy is `11-13px`; navigation and metadata use `9-12px`; page titles use `18-20px`.
+- Desktop controls use a compact `34px` visual height; touch layouts restore a `44px` hit target.
+- Project rows target `82px` on desktop so six services fit comfortably in the minimum window.
 
 ## Shape and depth
 

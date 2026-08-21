@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import time
+from ipaddress import ip_address
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, build_opener
+from urllib.parse import urlsplit
+from urllib.request import ProxyHandler, Request, build_opener
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,22 @@ def _probe_url(config: ChannelConfig) -> str:
     return base if base.endswith("/chat/completions") else base + "/chat/completions"
 
 
+def _is_loopback_url(url: str) -> bool:
+    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _default_opener(url: str):
+    if _is_loopback_url(url):
+        return build_opener(ProxyHandler({}))
+    return build_opener()
+
+
 def _checked_at() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -65,8 +83,9 @@ def probe_channel(config: ChannelConfig, *, opener=None, clock=time.perf_counter
         "max_tokens": 1,
         "stream": False,
     }).encode("utf-8")
+    probe_url = _probe_url(config)
     request = Request(
-        _probe_url(config),
+        probe_url,
         data=payload,
         headers={
             "Authorization": f"Bearer {config.api_key}",
@@ -75,7 +94,7 @@ def probe_channel(config: ChannelConfig, *, opener=None, clock=time.perf_counter
         },
         method="POST",
     )
-    client = opener or build_opener()
+    client = opener or _default_opener(probe_url)
     try:
         with client.open(request, timeout=config.timeout_seconds) as response:
             status = int(response.getcode())

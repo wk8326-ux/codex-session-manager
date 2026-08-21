@@ -8,7 +8,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
-from watchdog.codex_adapter import CodexAdapterError
+from watchdog.codex_adapter import CodexAdapterError, DefiniteSendFailure
 from watchdog.validation import (
     ValidationError,
     validate_required_text,
@@ -415,6 +415,15 @@ class RemoteApplication:
             result = self.adapter.send_message(
                 session["threadId"], prompt, image_url=image_url
             )
+        except DefiniteSendFailure as error:
+            if client_message_id:
+                self.remote_store.release_message_delivery(
+                    session_id=session_id,
+                    client_message_id=client_message_id,
+                )
+            raise RemoteValidationError(
+                "Codex 明确拒绝了这条消息，请检查后重试。"
+            ) from error
         except CodexAdapterError as error:
             if client_message_id:
                 self.remote_store.mark_message_delivery_uncertain(

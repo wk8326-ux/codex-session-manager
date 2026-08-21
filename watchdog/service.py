@@ -10,7 +10,7 @@ from .channels import ChannelConfig, ProbeResult
 from .codex_adapter import CodexAdapterError, DefiniteSendFailure
 from .decision import Decision, DecisionInput, decide
 from .models import SessionSnapshot
-from .secrets import SecretStore
+from .secrets import SecretStore, SecretStoreError
 from .store import ResumeOutcomePersistenceError, WatchdogStore
 
 
@@ -33,6 +33,7 @@ CHANNEL_CATEGORIES = frozenset(
         "other_http_error",
         "network_error",
         "protocol_error",
+        "configuration_error",
     }
 )
 PROBE_DETAILS = {
@@ -43,6 +44,7 @@ PROBE_DETAILS = {
     "other_http_error": "channel returned an HTTP error",
     "network_error": "channel network request failed",
     "protocol_error": "channel response was invalid",
+    "configuration_error": "channel secret could not be read on this device",
 }
 SESSION_STATES = frozenset(
     {
@@ -58,6 +60,9 @@ SESSION_STATES = frozenset(
         "monitor_error",
         "queued",
     }
+)
+TERMINAL_TURN_STATES = frozenset(
+    {"completed", "failed", "interrupted", "systemError"}
 )
 TURN_ID = re.compile(
     r"^(?:turn-[A-Za-z0-9][A-Za-z0-9._-]{0,119}|"
@@ -251,26 +256,25 @@ class WatchdogService:
         self._store.recover_interrupted_sends((now_provider or _utc_now)())
 
     def _probe_channel(self, channel: dict, now: str) -> ProbeResult:
-        api_key = ""
         try:
             api_key = self._secret_store.unprotect(channel["encryptedKey"])
-            result = self._probe(
-                ChannelConfig(
-                    base_url=channel["baseUrl"],
-                    probe_url_override=channel.get("probeUrlOverride") or "",
-                    model=channel["model"],
-                    api_key=api_key,
-                    timeout_seconds=float(channel["timeoutSeconds"]),
-                )
-            )
-        except Exception as error:
+        except SecretStoreError:
             return ProbeResult(
-                "network_error",
+                "configuration_error",
                 None,
-                f"channel probe failed ({type(error).__name__})",
+                PROBE_DETAILS["configuration_error"],
                 0,
                 now,
             )
+        result = self._probe(
+            ChannelConfig(
+                base_url=channel["baseUrl"],
+                probe_url_override=channel.get("probeUrlOverride") or "",
+                model=channel["model"],
+                api_key=api_key,
+                timeout_seconds=float(channel["timeoutSeconds"]),
+            )
+        )
         return ProbeResult(
             result.category,
             result.http_status,
@@ -293,7 +297,7 @@ class WatchdogService:
                 handled = self._store.finalize_resumed_turn(
                     turn_id, status, event_time
                 )
-                if not handled and status in {"completed", "failed", "interrupted"}:
+                if not handled and status in TERMINAL_TURN_STATES:
                     self._remember_turn_event(
                         turn_id, 1, "terminal", status, event_time
                     )
@@ -381,14 +385,17 @@ class WatchdogService:
         self._store.record_channel_probe(channel["id"], result)
 
         snapshot: SessionSnapshot | None = None
+        snapshot_error = ""
         if result.healthy:
             try:
                 snapshot = self._adapter.read_thread(session["threadId"])
-            except Exception:
-                snapshot = None
+            except CodexAdapterError as error:
+                snapshot_error = (
+                    f"Codex session read failed ({type(error).__name__}): {error}"
+                )
         latest = snapshot.latest_turn if snapshot is not None else None
         if latest is not None:
-            if latest.status in {"completed", "failed", "interrupted"}:
+            if latest.status in TERMINAL_TURN_STATES:
                 self._store.finalize_resumed_turn(latest.id, latest.status, now)
             self._store.mark_stale_resumed_turns_manual_attention(
                 session["id"], latest.id, now
@@ -505,7 +512,7 @@ class WatchdogService:
             decision=decision.code,
             duration_ms=result.duration_ms,
             resume_attempt=resume_attempt,
-            detail=resume_audit_detail,
+            detail=resume_audit_detail or snapshot_error or None,
         )
         if decision.code == "resume_queued":
             run_data["sessionState"] = "queued"
