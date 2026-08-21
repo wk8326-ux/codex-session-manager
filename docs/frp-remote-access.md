@@ -1,6 +1,6 @@
 # 使用自建 VPS 和 FRP 远程访问
 
-这套方案让电脑主动连接 VPS，手机只访问 VPS 上的 HTTPS 域名。管理端 `127.0.0.1:8765` 永远不进入隧道，只有经过设备认证的远程端 `127.0.0.1:8766` 被转发。
+这套方案让电脑主动连接 VPS，手机只访问 VPS 上的 HTTPS 域名。管理端 `127.0.0.1:8767` 永远不进入隧道，只有经过设备认证的远程端 `127.0.0.1:8766` 被转发。
 
 ```text
 手机 -> HTTPS 443 -> VPS Nginx -> 127.0.0.1:18766
@@ -39,7 +39,7 @@ systemd 服务示例：
 
 ```ini
 [Unit]
-Description=FRP Server for Local Project Console
+Description=FRP Server for Codex Session Manager
 After=network-online.target
 Wants=network-online.target
 
@@ -100,18 +100,18 @@ server {
 3. 把客户端保存为 `.runtime/frp/frpc-lpc.exe`。
 4. 复制 [`scripts/frpc.example.toml`](../scripts/frpc.example.toml) 为 `.runtime/frp/frpc.toml`。
 5. 修改服务器地址和 Token。
-6. 启动控制台。
+6. 启动 Codex 会话管理。
 
 `.runtime/` 已被 Git 忽略。Token、客户端二进制和日志都不会提交到仓库。
 
-控制台检测到客户端和配置后，会自动启动 `frpc`，并在“远程会话 > 配对设备”显示状态。正常关闭控制台时会先停止隧道；网络中断由 `frpc` 自动重连。
+会话管理检测到客户端和配置后，会自动启动 `frpc`，并在“远程会话 > 配对设备”显示状态。正常关闭时会先停止隧道；网络中断由 `frpc` 自动重连。
 
 也可以通过环境变量改变默认路径：
 
 ```powershell
-$env:LPC_FRPC_EXECUTABLE = 'D:\tools\frpc.exe'
-$env:LPC_FRPC_CONFIG = 'D:\secrets\frpc.toml'
-$env:LPC_FRPC_LOG = 'D:\logs\frpc.log'
+$env:CSM_FRPC_EXECUTABLE = 'D:\tools\frpc.exe'
+$env:CSM_FRPC_CONFIG = 'D:\secrets\frpc.toml'
+$env:CSM_FRPC_LOG = 'D:\logs\frpc.log'
 ```
 
 ## Windows Defender

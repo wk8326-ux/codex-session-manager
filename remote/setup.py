@@ -17,10 +17,6 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_FRP_VERSION = "0.61.1"
-SERVER_SCRIPT_URL = (
-    "https://raw.githubusercontent.com/wk8326-ux/"
-    "localhost-project-console/main/scripts/setup-relay-server.sh"
-)
 _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.I)
 _SSH_USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$", re.I)
 _FRP_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$", re.I)
@@ -160,12 +156,16 @@ class RelaySetupService:
             plan["frpVersion"],
         ]
         quoted = " ".join(shlex.quote(item) for item in arguments)
+        script_path = self.base_path / "scripts" / "setup-relay-server.sh"
+        if not script_path.is_file():
+            raise RelaySetupError("服务器安装脚本未随程序提供。")
+        encoded_script = base64.b64encode(script_path.read_bytes()).decode("ascii")
         command = (
-            f"curl -fsSL {shlex.quote(SERVER_SCRIPT_URL)} "
-            "-o /tmp/lpc-setup-relay.sh && "
-            f"sudo bash /tmp/lpc-setup-relay.sh {quoted}"
+            f"printf %s {shlex.quote(encoded_script)} | base64 -d "
+            "> /tmp/csm-setup-relay.sh && "
+            f"sudo bash /tmp/csm-setup-relay.sh {quoted}"
         )
-        return {**plan, "serverCommand": command, "scriptUrl": SERVER_SCRIPT_URL}
+        return {**plan, "serverCommand": command, "scriptSource": "bundled"}
 
     def check_dns(self, payload: dict) -> dict:
         domain = _hostname(payload.get("domain"), "访问域名", require_domain=True)
@@ -215,7 +215,7 @@ class RelaySetupService:
         parsed = urlparse(raw)
         if parsed.scheme != "https" or not parsed.hostname or parsed.path not in {"", "/"}:
             raise RelaySetupError("公网入口必须是 HTTPS 根地址。")
-        request = Request(raw, headers={"User-Agent": "LocalProjectConsole/1.0"})
+        request = Request(raw, headers={"User-Agent": "CodexSessionManager/0.1"})
         try:
             with urlopen(request, timeout=6, context=ssl.create_default_context()) as response:
                 status = int(response.getcode())

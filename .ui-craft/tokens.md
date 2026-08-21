@@ -1,9 +1,9 @@
-# Local Project Console tokens
+# Codex Session Manager tokens
 
 ## Visual direction
 
-- **Style:** restrained operational workbench
-- **Signature:** a continuous process bus connecting every registered service node
+- **Style:** restrained conversation operations workbench
+- **Signature:** live session state is always visible beside the latest conversation activity
 - **Density:** medium-high on desktop, progressive disclosure on mobile
 
 ## Color
@@ -30,7 +30,7 @@ Dark mode uses `#181818` canvas, `#212121` raised surfaces, and `#141414` naviga
 - Letter spacing remains `0` throughout.
 - Desktop body copy is `11-13px`; navigation and metadata use `9-12px`; page titles use `18-20px`.
 - Desktop controls use a compact `34px` visual height; touch layouts restore a `44px` hit target.
-- Project rows target `82px` on desktop so six services fit comfortably in the minimum window.
+- Session rows stay compact enough to compare state without shrinking mobile touch targets.
 
 ## Shape and depth
 

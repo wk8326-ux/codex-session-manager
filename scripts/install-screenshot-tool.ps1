@@ -9,6 +9,7 @@ $packageId = 'Flameshot.Flameshot'
 
 function Find-Flameshot {
     $candidates = @(
+        $env:CSM_FLAMESHOT_PATH,
         $env:LPC_FLAMESHOT_PATH,
         (Join-Path $env:ProgramFiles 'Flameshot\bin\flameshot.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Flameshot\bin\flameshot.exe')
@@ -35,22 +36,22 @@ function Get-FlameshotVersion([string]$Executable) {
 }
 
 if ($env:OS -ne 'Windows_NT') {
-    throw '[LPC] The Flameshot installer supports Windows only.'
+    throw '[CSM] The Flameshot installer supports Windows only.'
 }
 
 $existing = Find-Flameshot
 if (-not [string]::IsNullOrWhiteSpace($existing)) {
     $existingVersion = Get-FlameshotVersion $existing
     if ($existingVersion -eq $Version) {
-        Write-Host "[LPC] Flameshot $Version is already installed: $existing"
+        Write-Host "[CSM] Flameshot $Version is already installed: $existing"
         exit 0
     }
-    Write-Host "[LPC] Flameshot version $existingVersion will be replaced with $Version."
+    Write-Host "[CSM] Flameshot version $existingVersion will be replaced with $Version."
 }
 
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
 if ($null -eq $winget) {
-    throw '[LPC] winget was not found. Install Windows App Installer first.'
+    throw '[CSM] winget was not found. Install Windows App Installer first.'
 }
 
 $arguments = @(
@@ -69,27 +70,27 @@ if (-not [string]::IsNullOrWhiteSpace($Proxy)) {
         -not [Uri]::TryCreate($Proxy, [UriKind]::Absolute, [ref]$proxyUri) -or
         $proxyUri.Scheme -notin @('http', 'https')
     ) {
-        throw '[LPC] Proxy must be a valid HTTP or HTTPS URL.'
+        throw '[CSM] Proxy must be a valid HTTP or HTTPS URL.'
     }
     & $winget.Source settings --enable ProxyCommandLineOptions | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw '[LPC] Could not enable winget command-line proxy support.'
+        throw '[CSM] Could not enable winget command-line proxy support.'
     }
     $arguments += @('--proxy', $Proxy)
 }
 
-Write-Host "[LPC] Installing open-source screenshot tool Flameshot $Version..."
+Write-Host "[CSM] Installing open-source screenshot tool Flameshot $Version..."
 & $winget.Source @arguments
 if ($LASTEXITCODE -ne 0) {
-    throw "[LPC] Flameshot installation failed with winget exit code $LASTEXITCODE."
+    throw "[CSM] Flameshot installation failed with winget exit code $LASTEXITCODE."
 }
 
 $installed = Find-Flameshot
 if ([string]::IsNullOrWhiteSpace($installed)) {
-    throw '[LPC] winget finished but flameshot.exe was not found.'
+    throw '[CSM] winget finished but flameshot.exe was not found.'
 }
 $installedVersion = Get-FlameshotVersion $installed
 if ($installedVersion -ne $Version) {
-    throw "[LPC] Expected Flameshot $Version but found $installedVersion."
+    throw "[CSM] Expected Flameshot $Version but found $installedVersion."
 }
-Write-Host "[LPC] Flameshot $installedVersion installed: $installed"
+Write-Host "[CSM] Flameshot $installedVersion installed: $installed"

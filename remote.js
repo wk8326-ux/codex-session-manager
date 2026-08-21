@@ -2700,7 +2700,7 @@
     if ('serviceWorker' in navigator && window.isSecureContext) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (state.qrStream || state.pairingSecret || state.pendingToken) return;
-        const reloadKey = 'localhost-project-console.remote-worker-reloaded-v33';
+        const reloadKey = 'codex-session-manager.remote-worker-reloaded-v34';
         if (sessionStorage.getItem(reloadKey)) return;
         sessionStorage.setItem(reloadKey, '1');
         location.reload();

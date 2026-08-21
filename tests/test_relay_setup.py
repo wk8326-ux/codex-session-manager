@@ -47,8 +47,10 @@ class RelaySetupServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(plan["publicUrl"], "https://console.example.com")
-        self.assertIn("setup-relay-server.sh", plan["serverCommand"])
+        self.assertIn("/tmp/csm-setup-relay.sh", plan["serverCommand"])
         self.assertIn("--domain console.example.com", plan["serverCommand"])
+        self.assertEqual(plan["scriptSource"], "bundled")
+        self.assertNotIn("raw.githubusercontent.com", plan["serverCommand"])
         self.assertNotIn("token", plan["serverCommand"].lower())
         self.assertNotIn("password", plan["serverCommand"].lower())
 
@@ -185,13 +187,13 @@ class RelaySetupScriptContractTests(unittest.TestCase):
 class RelaySetupUiContractTests(unittest.TestCase):
     def test_remote_device_view_links_to_the_local_only_setup_wizard(self) -> None:
         remote_html = (ROOT / "remote.html").read_text(encoding="utf-8")
-        sidebar = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
+        navigation = (ROOT / "assets" / "session-manager-nav.js").read_text(encoding="utf-8")
         server = (ROOT / "app.py").read_text(encoding="utf-8")
         remote_handler = server[server.index("class RemoteHandler"):]
 
         self.assertIn('id="open-remote-setup" href="/remote-setup"', remote_html)
         self.assertIn("配置或迁移远程访问", remote_html)
-        self.assertNotIn("remote-setup", sidebar)
+        self.assertNotIn("remote-setup", navigation)
         self.assertNotIn('"/remote-setup"', remote_handler)
 
     def test_wizard_restores_only_contiguous_steps_and_never_persists_bundle(self) -> None:
@@ -210,7 +212,10 @@ class RelaySetupUiContractTests(unittest.TestCase):
 
         self.assertIn('/remote-setup.css?v=2', html)
         self.assertIn('/remote-setup.js?v=2', html)
-        self.assertGreaterEqual(server.count('cache="no-cache"'), 6)
+        admin_handler = server[server.index("class AdminHandler"):server.index("class RemoteHandler")]
+        self.assertIn('"/remote-setup"', admin_handler)
+        self.assertIn('"/remote-setup.css"', admin_handler)
+        self.assertIn('"/remote-setup.js"', admin_handler)
 
     def test_wizard_mobile_controls_and_focus_target_are_stable(self) -> None:
         html = (ROOT / "remote-setup.html").read_text(encoding="utf-8")

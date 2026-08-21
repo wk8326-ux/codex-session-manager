@@ -1,6 +1,6 @@
 # 会话监控配置与运维
 
-会话监控是 Local Project Console 中独立于项目启动面板的本地功能。它定期检查用户明确加入目录的 Codex 会话和 OpenAI 兼容 API 渠道，并记录每次检查为何静默、续跑或需要人工处理。
+会话监控是 Codex Session Manager 的本地能力。它定期检查用户明确加入目录的 Codex 会话和 OpenAI 兼容 API 渠道，并记录每次检查为何静默、续跑或需要人工处理。
 
 默认情况下，监控会运行，但自动续跑保持关闭；每个会话的“无人值守执行”也默认关闭。建议先完成只读检查和专用测试会话验证，再开启全局续跑开关，并只为确实需要自动恢复的会话单独授权。
 
@@ -30,8 +30,8 @@ python app.py
 
 Windows 也可以双击 `start-console.bat`。随后访问：
 
-- 项目控制台：`http://127.0.0.1:8765/`
-- 会话监控：`http://127.0.0.1:8765/watchdog`
+- 会话管理首页：`http://127.0.0.1:8767/`
+- 会话监控：`http://127.0.0.1:8767/watchdog`
 
 调度器随控制台进程启动。手工运行时，正常关闭终端或中断 `app.py` 后，HTTP 服务、调度线程和由控制台创建的 Codex App Server 子进程会一并关闭。
 
@@ -102,14 +102,14 @@ python scripts/probe_codex_app_server.py --thread-id <thread-uuid>
 全局设置可通过 API 查看或修改：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8765/api/watchdog/settings
+Invoke-RestMethod http://127.0.0.1:8767/api/watchdog/settings
 
 $body = @{
   defaultIntervalMinutes = 20
 } | ConvertTo-Json
 Invoke-RestMethod `
   -Method Put `
-  -Uri http://127.0.0.1:8765/api/watchdog/settings `
+  -Uri http://127.0.0.1:8767/api/watchdog/settings `
   -ContentType 'application/json' `
   -Body $body
 ```
@@ -254,7 +254,7 @@ $body = @{
 } | ConvertTo-Json
 Invoke-RestMethod `
   -Method Put `
-  -Uri http://127.0.0.1:8765/api/watchdog/settings `
+  -Uri http://127.0.0.1:8767/api/watchdog/settings `
   -ContentType 'application/json' `
   -Body $body
 ```
@@ -295,7 +295,7 @@ $body = @{
 } | ConvertTo-Json
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8765/api/watchdog/channels `
+  -Uri http://127.0.0.1:8767/api/watchdog/channels `
   -ContentType 'application/json' `
   -Body $body
 ```
@@ -305,7 +305,7 @@ Invoke-RestMethod `
 ### 控制台或调度器状态
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8765/api/watchdog/status
+Invoke-RestMethod http://127.0.0.1:8767/api/watchdog/status
 ```
 
 重点字段：
@@ -325,7 +325,7 @@ Invoke-RestMethod http://127.0.0.1:8765/api/watchdog/status
 ```powershell
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8765/api/watchdog/channels/<channel-id>/probe `
+  -Uri http://127.0.0.1:8767/api/watchdog/channels/<channel-id>/probe `
   -ContentType 'application/json' `
   -Body '{}'
 ```
@@ -342,7 +342,7 @@ Invoke-RestMethod `
 ### 查看最近执行决定
 
 ```powershell
-Invoke-RestMethod 'http://127.0.0.1:8765/api/watchdog/runs?limit=20'
+Invoke-RestMethod 'http://127.0.0.1:8767/api/watchdog/runs?limit=20'
 ```
 
 时间筛选必须使用 UTC `YYYY-MM-DDTHH:MM:SSZ` 格式。例如：

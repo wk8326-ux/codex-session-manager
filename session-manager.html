@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#181818">
-  <link rel="icon" href="/assets/project-console-icon.png">
-  <link rel="stylesheet" href="/assets/console-sidebar.css?v=12">
+  <link rel="icon" href="/assets/session-manager-icon.png">
+  <link rel="stylesheet" href="/assets/session-manager-nav.css?v=1">
   <script>
     (() => {
-      const key = 'localhost-project-console.theme';
+      const key = 'codex-session-manager.theme';
       let saved = null;
       try { saved = localStorage.getItem(key); } catch {}
       const theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
@@ -16,7 +16,7 @@
       document.documentElement.style.colorScheme = theme;
     })();
   </script>
-  <title>Codex 会话管理 · 本地项目控制台</title>
+  <title>Codex 会话管理</title>
   <style>
     :root { --canvas: #f4f4f4; --surface: #fff; --ink: #202020; --muted: #676767; --border: rgba(0,0,0,.12); --accent: #2d715b; }
     :root[data-theme="dark"] { --canvas: #181818; --surface: #212121; --ink: #f0f0f0; --muted: #a6a6a6; --border: rgba(255,255,255,.12); --accent: #75c4a4; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar" data-console-sidebar data-active="session-manager" aria-label="控制台主导航"></aside>
-    <script src="/assets/console-sidebar.js?v=11"></script>
+    <aside class="sidebar" data-session-nav data-active="overview" aria-label="会话管理主导航"></aside>
+    <script src="/assets/session-manager-nav.js?v=1"></script>
     <main class="workspace" id="main-content">
       <div class="workspace-inner">
         <p class="eyebrow">CODEX SESSION MANAGEMENT</p>

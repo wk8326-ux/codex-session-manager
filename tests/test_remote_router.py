@@ -57,7 +57,6 @@ class RemoteRouterTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.store = RemoteStore(Path(self.directory.name) / "watchdog.db")
         self.store.initialize()
-        sessions = Sessions()
         self.adapter = Adapter()
         self.approval_decisions: list[str] = []
         self.approvals = RemoteApprovalBroker(
@@ -122,9 +121,7 @@ class RemoteRouterTests(unittest.TestCase):
         )
         token = self.pair()
 
-        admin_list = self.admin.dispatch(
-            "GET", "/api/remote/sessions?summary=1", {}
-        )
+        admin_list = self.admin.dispatch("GET", "/api/remote/sessions?summary=1", {})
         remote_list = self.remote.dispatch(
             "GET",
             "/api/remote/sessions?summary=true",
@@ -138,10 +135,10 @@ class RemoteRouterTests(unittest.TestCase):
         self.assertFalse(admin_list.body[0]["statusKnown"])
         self.assertEqual(remote_list.body, admin_list.body)
 
-    def test_native_region_capture_is_available_only_on_the_local_admin_api(self) -> None:
-        response = self.admin.dispatch(
-            "POST", "/api/remote/native-screenshot", {}
-        )
+    def test_native_region_capture_is_available_only_on_the_local_admin_api(
+        self,
+    ) -> None:
+        response = self.admin.dispatch("POST", "/api/remote/native-screenshot", {})
 
         self.assertEqual(response.status, 200)
         self.assertTrue(response.body["captured"])
@@ -250,9 +247,7 @@ class RemoteRouterTests(unittest.TestCase):
         token = self.pair()
         headers = {"Authorization": f"Bearer {token}"}
 
-        listed = self.remote.dispatch(
-            "GET", "/api/remote/approvals", headers, None
-        )
+        listed = self.remote.dispatch("GET", "/api/remote/approvals", headers, None)
         self.assertEqual(listed.status, 200)
         self.assertEqual(listed.body[0]["summary"], "npm test")
         approval_id = listed.body[0]["id"]
@@ -267,9 +262,7 @@ class RemoteRouterTests(unittest.TestCase):
         self.assertEqual(resolved.status, 200)
         self.assertEqual(self.approval_decisions, ["accept"])
         self.assertEqual(
-            self.remote.dispatch(
-                "GET", "/api/remote/approvals", headers, None
-            ).body,
+            self.remote.dispatch("GET", "/api/remote/approvals", headers, None).body,
             [],
         )
 

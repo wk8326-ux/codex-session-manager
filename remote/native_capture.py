@@ -36,7 +36,11 @@ class FlameshotRegionCapture:
         if self.executable_path:
             return self.executable_path
 
-        override = os.environ.get("LPC_FLAMESHOT_PATH", "").strip()
+        override = (
+            os.environ.get("CSM_FLAMESHOT_PATH")
+            or os.environ.get("LPC_FLAMESHOT_PATH")
+            or ""
+        ).strip()
         candidates = [
             override,
             shutil.which("flameshot.exe") or "",

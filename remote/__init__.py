@@ -1,2 +1,2 @@
-"""Authenticated remote workspace for Local Project Console."""
+"""Authenticated remote workspace for Codex Session Manager."""
 

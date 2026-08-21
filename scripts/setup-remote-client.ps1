@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 function Fail([string]$Message) {
-    throw "[LPC] $Message"
+    throw "[CSM] $Message"
 }
 
 function Decode-Bundle([string]$Encoded) {
@@ -57,12 +57,12 @@ $configPath = Join-Path $runtimeDirectory 'frpc.toml'
 $versionPath = Join-Path $runtimeDirectory 'frpc.version'
 $logPath = Join-Path $runtimeDirectory 'frpc.log'
 
-Write-Host "[LPC] 服务器: $($config.serverAddr):$($config.serverPort)"
-Write-Host "[LPC] 公网入口: $($config.publicUrl)"
-Write-Host "[LPC] FRP 版本: $($config.frpVersion)"
+Write-Host "[CSM] 服务器: $($config.serverAddr):$($config.serverPort)"
+Write-Host "[CSM] 公网入口: $($config.publicUrl)"
+Write-Host "[CSM] FRP 版本: $($config.frpVersion)"
 
 if ($DryRun) {
-    Write-Host '[LPC] Dry run passed. No files were changed.'
+    Write-Host '[CSM] Dry run passed. No files were changed.'
     exit 0
 }
 
@@ -79,7 +79,7 @@ if (-not (Test-Path -LiteralPath $executablePath) -or $installedVersion -ne $con
     }
     $assetName = "frp_$($config.frpVersion)_windows_$architecture.zip"
     $releaseUri = "https://api.github.com/repos/fatedier/frp/releases/tags/v$($config.frpVersion)"
-    Write-Host '[LPC] 正在读取 FRP 官方发布信息...'
+    Write-Host '[CSM] 正在读取 FRP 官方发布信息...'
     $release = Invoke-RestMethod -Uri $releaseUri -Headers @{ 'User-Agent' = 'LocalProjectConsole/1.0' }
     $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
     if ($null -eq $asset -or $asset.browser_download_url -notlike 'https://github.com/*') {
@@ -96,7 +96,7 @@ if (-not (Test-Path -LiteralPath $executablePath) -or $installedVersion -ne $con
     }
     New-Item -ItemType Directory -Force -Path $downloadDirectory | Out-Null
     try {
-        Write-Host '[LPC] 正在下载并校验 frpc...'
+        Write-Host '[CSM] 正在下载并校验 frpc...'
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath -Headers @{ 'User-Agent' = 'LocalProjectConsole/1.0' }
         $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
         if ($actualHash -ne $expectedHash) { Fail 'frpc 下载文件的 SHA-256 不匹配。' }
@@ -145,18 +145,18 @@ if (-not (Test-Path -LiteralPath $logPath)) {
     New-Item -ItemType File -Path $logPath | Out-Null
 }
 
-Write-Host '[LPC] 本机 FRP 配置已写入 .runtime\frp。'
+Write-Host '[CSM] 本机 FRP 配置已写入 .runtime\frp。'
 try {
-    $result = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8765/api/relay-setup/tunnel/start' -ContentType 'application/json' -Body '{}'
+    $result = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8767/api/relay-setup/tunnel/start' -ContentType 'application/json' -Body '{}'
     if ($result.tunnel.running) {
-        Write-Host '[LPC] FRP 隧道已经启动。'
+        Write-Host '[CSM] FRP 隧道已经启动。'
     }
     else {
-        Write-Host '[LPC] 配置已完成，请重启控制台以启动 FRP 隧道。'
+        Write-Host '[CSM] 配置已完成，请重启会话管理以启动 FRP 隧道。'
     }
 }
 catch {
-    Write-Host '[LPC] 配置已完成。控制台未响应，请重启控制台以启动 FRP 隧道。'
+    Write-Host '[CSM] 配置已完成。会话管理未响应，请重启后启动 FRP 隧道。'
 }
 
-Write-Host '[LPC] Windows Defender 可能将反向代理工具标记为 PUA。只允许本脚本从官方发布页下载且 SHA-256 校验通过的具体文件。'
+Write-Host '[CSM] Windows Defender 可能将反向代理工具标记为 PUA。只允许本脚本从官方发布页下载且 SHA-256 校验通过的具体文件。'

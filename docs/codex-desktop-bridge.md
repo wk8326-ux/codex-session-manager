@@ -18,7 +18,7 @@
 
 ## 启用步骤
 
-1. 启动控制台，并确认 `http://127.0.0.1:8765/api/watchdog/status` 可访问。
+1. 启动 Codex 会话管理，并确认 `http://127.0.0.1:8767/api/watchdog/status` 可访问。
 2. 在会话监控页把“恢复通道”切换为 `Codex Desktop · 兼容桥接`。
 3. 在 Codex Desktop 中选择一个专用的本地桥接任务，为它创建 heartbeat 自动化。runner 可以绑定任意本地任务，不要把设备名或个人路径写进项目代码。
 4. 使用一次性测试会话完成领取、启动、实时显示和完成回执测试。
@@ -43,9 +43,9 @@ Desktop heartbeat runner 是控制台级的单例，不是某个监控会话的�
 将下面内容作为专用 Codex Desktop 任务的 heartbeat 提示词。端口改变时只需要修改 `baseUrl`，无需修改项目源码。
 
 ```text
-你是 Local Project Console 的 Codex Desktop 桥接 runner。
+你是 Codex Session Manager 的 Codex Desktop 兼容桥接 runner。
 
-baseUrl: http://127.0.0.1:8765
+baseUrl: http://127.0.0.1:8767
 runnerId: codex-desktop-local
 
 每次运行只处理一个任务，并严格执行：

@@ -143,7 +143,7 @@ chown root:frp /etc/frp/frps.toml
 backup_if_present /etc/systemd/system/lpc-frps.service
 cat >/etc/systemd/system/lpc-frps.service <<'EOF'
 [Unit]
-Description=FRP relay for Local Project Console
+Description=FRP relay for Codex Session Manager
 After=network-online.target
 Wants=network-online.target
 

@@ -90,7 +90,7 @@ def probe_channel(config: ChannelConfig, *, opener=None, clock=time.perf_counter
         headers={
             "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "LocalProjectConsole-Watchdog/1.0",
+            "User-Agent": "CodexSessionManager-Watchdog/0.1",
         },
         method="POST",
     )

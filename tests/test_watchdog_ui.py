@@ -6,121 +6,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WatchdogUiTests(unittest.TestCase):
-    def test_project_console_uses_compact_codex_desktop_density(self) -> None:
-        html = (ROOT / "index.html").read_text(encoding="utf-8")
-        sidebar = (ROOT / "assets" / "console-sidebar.css").read_text(
+    def test_admin_pages_share_session_manager_navigation(self) -> None:
+        navigation = (ROOT / "assets" / "session-manager-nav.js").read_text(
             encoding="utf-8"
         )
-
-        for contract in (
-            "--sidebar-width: 224px",
-            "--desktop-control-height: 34px",
-            "--desktop-service-row-height: 82px",
-            "font: 600 20px/1.25 var(--font-display)",
-            "min-height: var(--desktop-control-height)",
-            "min-height: var(--desktop-service-row-height)",
-        ):
-            self.assertIn(contract, html)
-        self.assertIn("font-size: 13px", sidebar)
-        self.assertIn("font-size: 28px", sidebar)
-        self.assertIn("min-height: 34px", sidebar)
-
-    def test_all_workspaces_reuse_one_persistent_system_aware_theme_control(self) -> None:
-        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
-        for filename in ("index.html", "watchdog.html"):
-            with self.subTest(filename=filename):
-                html = (ROOT / filename).read_text(encoding="utf-8")
-
-                self.assertNotIn('id="theme-toggle"', html)
-                self.assertEqual(html.count('src="/assets/console-sidebar.js?v=10"'), 1)
-                self.assertIn("prefers-color-scheme: dark", html)
-                self.assertIn("localhost-project-console.theme", html)
-                self.assertLess(
-                    html.index("document.documentElement.dataset.theme"),
-                    html.index("</head>"),
-                    "theme must resolve before styles are parsed to avoid a light-mode flash",
-                )
-
-        remote_html = (ROOT / "remote.html").read_text(encoding="utf-8")
-        remote_script = (ROOT / "remote.js").read_text(encoding="utf-8")
-        self.assertNotIn('src="/assets/console-sidebar.js?v=10"', remote_html)
-        self.assertIn('id="remote-theme-toggle"', remote_html)
-        self.assertIn("localhost-project-console.theme", remote_script)
-
-        self.assertIn("localStorage.setItem(THEME_KEY, next)", sidebar_script)
-        self.assertIn("addEventListener('storage'", sidebar_script)
-        self.assertIn('aria-label="切换至深色模式"', sidebar_script)
-        self.assertIn('aria-pressed="false"', sidebar_script)
-
-    def test_project_page_adds_only_one_session_manager_navigation_link(self) -> None:
-        html = (ROOT / "index.html").read_text(encoding="utf-8")
-        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
-
-        self.assertEqual(html.count('href="/watchdog"'), 0)
-        self.assertEqual(sidebar_script.count("navLink('session-manager', '/session-manager'"), 1)
-        self.assertNotIn("执行记录", html)
-        self.assertNotIn("添加监控渠道", html)
-
-    def test_sidebar_navigation_has_only_two_primary_entries(self) -> None:
-        removed_labels = ["查看范围", "全部项目", "工作区", "自动化工具"]
-        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
-        expected_active = {
-            "index.html": "projects",
-            "watchdog.html": "session-manager",
+        expected = {
+            "session-manager.html": "overview",
+            "watchdog.html": "monitor",
         }
-
-        for filename, active in expected_active.items():
+        for filename, active in expected.items():
             with self.subTest(filename=filename):
                 html = (ROOT / filename).read_text(encoding="utf-8")
                 self.assertIn(
-                    f'<aside class="sidebar" data-console-sidebar data-active="{active}"',
+                    f'<aside class="sidebar" data-session-nav data-active="{active}"',
                     html,
                 )
-                self.assertEqual(html.count('data-console-sidebar'), 1)
-                for label in removed_labels:
-                    self.assertNotIn(f">{label}<", sidebar_script)
+                self.assertEqual(html.count("data-session-nav"), 1)
+                self.assertIn('/assets/session-manager-nav.js?v=1', html)
 
-        for route in (
-            "navLink('projects', '/', 'layout', '项目控制台')",
-            "navLink('session-manager', '/session-manager', 'layers', 'Codex 会话管理')",
-        ):
-            self.assertEqual(sidebar_script.count(route), 1)
+        for label in ("功能总览", "监控与续跑", "远程会话"):
+            self.assertIn(label, navigation)
+        self.assertNotIn("项目控制台", navigation)
+        self.assertNotIn("工作区", navigation)
+
+    def test_admin_theme_is_persistent_and_remote_pwa_stays_independent(self) -> None:
+        navigation = (ROOT / "assets" / "session-manager-nav.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("codex-session-manager.theme", navigation)
+        self.assertIn("localStorage.setItem(THEME_KEY, next)", navigation)
 
         remote_html = (ROOT / "remote.html").read_text(encoding="utf-8")
-        self.assertNotIn("data-console-sidebar", remote_html)
-        self.assertIn('href="/"', remote_html)
-
-    def test_shared_sidebar_owns_all_fixed_layout_and_copy(self) -> None:
-        sidebar_script = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
-        sidebar_css = (ROOT / "assets" / "console-sidebar.css").read_text(encoding="utf-8")
-        remote_stylesheet = (ROOT / "remote.css").read_text(encoding="utf-8")
-        server = (ROOT / "app.py").read_text(encoding="utf-8")
-
-        for text in (
-            "本地项目控制台",
-            "LOCALHOST / 8765",
-            "本地服务运行中",
-            "控制台在线",
-            "127.0.0.1:8765",
-            "每 5 秒同步一次状态",
-        ):
-            self.assertIn(text, sidebar_script)
-        self.assertIn(".sidebar[data-console-sidebar]", sidebar_css)
-        self.assertIn("/api/shell/project-summary", sidebar_script)
-        self.assertIn("setInterval(refreshProjectSummary, 5000)", sidebar_script)
-        self.assertIn("if (active !== 'projects')", sidebar_script)
-        project_page = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("window.consoleSidebar?.setProjectSummary", project_page)
-        self.assertIn("sessionStorage.setItem(SUMMARY_KEY", sidebar_script)
-        self.assertIn("top: 50%", sidebar_css)
-        self.assertIn("place-items: center", sidebar_css)
-        self.assertIn("translateX(22px)", sidebar_css)
-        self.assertNotIn(".theme-switch span", remote_stylesheet)
-        self.assertIn("grid-template-rows: auto auto auto 1fr auto auto", sidebar_css)
-        self.assertIn("min-height: 34px", sidebar_css)
-        self.assertIn("font-size: 12px", sidebar_css)
-        self.assertEqual(server.count('"/assets/console-sidebar.css"'), 2)
-        self.assertEqual(server.count('"/assets/console-sidebar.js"'), 2)
+        remote_script = (ROOT / "remote.js").read_text(encoding="utf-8")
+        self.assertNotIn("data-session-nav", remote_html)
+        self.assertIn('id="remote-theme-toggle"', remote_html)
+        self.assertIn("localhost-project-console.theme", remote_script)
 
     def test_watchdog_page_has_four_horizontal_tabs(self) -> None:
         html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
@@ -135,7 +55,6 @@ class WatchdogUiTests(unittest.TestCase):
         html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
 
         self.assertIn('href="#watchdog-main"', html)
-        self.assertIn('aria-current="page"', html)
         self.assertIn('prefers-reduced-motion: reduce', html)
         self.assertIn('@media (max-width: 820px)', html)
         self.assertIn('@media (max-width: 520px)', html)
@@ -149,6 +68,13 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn(".dispatch-field > select,", html)
         self.assertIn(".dispatch-field > .resume-control", html)
         self.assertIn("所有已启用会话共用", html)
+
+    def test_watchdog_ui_has_no_project_console_dependency(self) -> None:
+        html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("/api/projects", html)
+        self.assertNotIn("/api/shell/project-summary", html)
+        self.assertNotIn("projectSummary", html)
 
 
 if __name__ == "__main__":

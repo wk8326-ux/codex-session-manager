@@ -1,8 +1,7 @@
-"""Transactional migration of legacy source data into an application home."""
+"""Transactional import of legacy session data from Local Project Console."""
 
 from __future__ import annotations
 
-import json
 import shutil
 import sqlite3
 import tempfile
@@ -27,16 +26,19 @@ class MigrationResult:
     backup: Path | None = None
 
 
-def _validate_projects(path: Path) -> None:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise MigrationError("projects.json must contain a JSON array")
+def _first_file(candidates: tuple[Path, ...]) -> Path | None:
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _first_directory(candidates: tuple[Path, ...]) -> Path | None:
+    return next((candidate for candidate in candidates if candidate.is_dir()), None)
 
 
 def _copy_database(source: Path, destination: Path) -> None:
-    with closing(sqlite3.connect(source)) as source_db, closing(
-        sqlite3.connect(destination)
-    ) as target_db:
+    with (
+        closing(sqlite3.connect(source)) as source_db,
+        closing(sqlite3.connect(destination)) as target_db,
+    ):
         source_db.backup(target_db)
         result = target_db.execute("PRAGMA integrity_check").fetchone()
         if not result or result[0] != "ok":
@@ -44,8 +46,9 @@ def _copy_database(source: Path, destination: Path) -> None:
 
 
 def _stage_frp_runtime(source_root: Path, staging_root: Path) -> bool:
-    source = source_root / ".runtime" / "frp"
-    if not source.is_dir():
+    runtime_root = _first_directory((source_root / ".runtime", source_root / "runtime"))
+    source = runtime_root / "frp" if runtime_root is not None else None
+    if source is None or not source.is_dir():
         return False
     destination = staging_root / "frp"
     destination.mkdir(parents=True, exist_ok=True)
@@ -58,39 +61,13 @@ def _stage_frp_runtime(source_root: Path, staging_root: Path) -> bool:
     return copied
 
 
-def _commit_directory(source: Path, destination: Path) -> None:
-    source.replace(destination)
-
-
-def _remove_empty_directory(path: Path) -> bool:
-    try:
-        path.rmdir()
-        return True
-    except OSError:
-        return False
-
-
 def _backup_path(data_root: Path) -> Path:
-    candidate = data_root.with_name(f"{data_root.name}.pre-import")
+    candidate = data_root.parent / f"{data_root.name}.pre-session-import"
     index = 1
     while candidate.exists():
-        candidate = data_root.with_name(f"{data_root.name}.pre-import-{index}")
+        candidate = data_root.parent / f"{data_root.name}.pre-session-import-{index}"
         index += 1
     return candidate
-
-
-def _rollback(
-    committed: list[Path], data_root: Path, backup: Path | None
-) -> None:
-    for destination in reversed(committed):
-        if destination.is_dir():
-            shutil.rmtree(destination, ignore_errors=True)
-        else:
-            destination.unlink(missing_ok=True)
-    if backup is not None and backup.exists():
-        backup.replace(data_root)
-    else:
-        data_root.mkdir(parents=True, exist_ok=True)
 
 
 def migrate_legacy_data(
@@ -99,65 +76,66 @@ def migrate_legacy_data(
     *,
     replace_existing: bool = False,
 ) -> MigrationResult:
-    """Copy legacy data once, leaving the source untouched on success or failure."""
+    """Import the shared database and stable tunnel files without touching source."""
 
     source_root = Path(source_root).resolve()
     paths.ensure_writable_directories()
-    if not replace_existing and (
-        paths.projects_path.exists() or paths.database_path.exists()
-    ):
+    if paths.database_path.exists() and not replace_existing:
         return MigrationResult(
             False, source_root, paths.data_root, (), "destination_has_data"
         )
 
-    projects_source = source_root / "projects.json"
-    database_source = source_root / "watchdog.db"
-    if not projects_source.exists() and not database_source.exists():
-        return MigrationResult(False, source_root, paths.data_root, (), "source_has_no_data")
+    database_source = _first_file(
+        (source_root / "watchdog.db", source_root / "data" / "watchdog.db")
+    )
+    runtime_source = _first_directory(
+        (source_root / ".runtime" / "frp", source_root / "runtime" / "frp")
+    )
+    if database_source is None and runtime_source is None:
+        return MigrationResult(
+            False, source_root, paths.data_root, (), "source_has_no_session_data"
+        )
 
     copied: list[str] = []
-    staging_parent = paths.data_root.parent
-    staging = Path(tempfile.mkdtemp(prefix="lpc-migration-", dir=staging_parent))
-    staged_data = staging / "data"
+    staging = Path(
+        tempfile.mkdtemp(prefix="csm-migration-", dir=paths.data_root.parent)
+    )
+    staged_database = staging / "watchdog.db"
     staged_runtime = staging / "runtime"
-    staged_data.mkdir()
-    committed: list[Path] = []
     backup: Path | None = None
+    database_committed = False
+    frp_committed = False
     try:
-        if projects_source.is_file():
-            staged_projects = staged_data / "projects.json"
-            shutil.copy2(projects_source, staged_projects)
-            _validate_projects(staged_projects)
-            copied.append("projects.json")
-        if database_source.is_file():
-            _copy_database(database_source, staged_data / "watchdog.db")
-            copied.append("watchdog.db")
-
+        if database_source is not None:
+            _copy_database(database_source, staged_database)
         staged_frp = _stage_frp_runtime(source_root, staged_runtime)
-        if paths.data_root.exists():
-            if replace_existing and any(paths.data_root.iterdir()):
-                backup = _backup_path(paths.data_root)
-                paths.data_root.replace(backup)
-            else:
-                _remove_empty_directory(paths.data_root)
-            if paths.data_root.exists():
-                raise MigrationError(
-                    f"destination data directory is not empty: {paths.data_root}"
-                )
 
-        _commit_directory(staged_data, paths.data_root)
-        committed.append(paths.data_root)
+        if database_source is not None:
+            if paths.database_path.exists():
+                backup = _backup_path(paths.data_root)
+                backup.mkdir(parents=True)
+                shutil.copy2(paths.database_path, backup / "watchdog.db")
+            staged_database.replace(paths.database_path)
+            database_committed = True
+            copied.append("watchdog.db")
 
         frp_destination = paths.runtime_root / "frp"
         if staged_frp and not frp_destination.exists():
-            _commit_directory(staged_runtime / "frp", frp_destination)
-            committed.append(frp_destination)
+            (staged_runtime / "frp").replace(frp_destination)
+            frp_committed = True
             copied.append("runtime/frp")
     except MigrationError:
-        _rollback(committed, paths.data_root, backup)
         raise
-    except (OSError, sqlite3.DatabaseError, json.JSONDecodeError) as error:
-        _rollback(committed, paths.data_root, backup)
+    except (OSError, sqlite3.DatabaseError) as error:
+        if frp_committed:
+            shutil.rmtree(paths.runtime_root / "frp", ignore_errors=True)
+        if database_committed:
+            if backup is not None:
+                shutil.copy2(backup / "watchdog.db", paths.database_path)
+            else:
+                paths.database_path.unlink(missing_ok=True)
+        if backup is not None and backup.exists() and not any(backup.iterdir()):
+            backup.rmdir()
         raise MigrationError(str(error)) from error
     finally:
         shutil.rmtree(staging, ignore_errors=True)

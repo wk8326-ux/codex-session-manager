@@ -513,8 +513,8 @@ class StdioJsonRpcClient:
                 "initialize",
                 {
                     "clientInfo": {
-                        "name": "localhost-project-console",
-                        "title": "Local Project Console",
+                        "name": "codex-session-manager",
+                        "title": "Codex Session Manager",
                         "version": "1.0",
                     },
                     "capabilities": None,

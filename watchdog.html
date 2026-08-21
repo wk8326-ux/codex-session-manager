@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#ebebeb">
-  <link rel="icon" href="/assets/project-console-icon.png">
+  <link rel="icon" href="/assets/session-manager-icon.png">
   <script>
     (() => {
-      const key = 'localhost-project-console.theme';
+      const key = 'codex-session-manager.theme';
       let saved = null;
       try { saved = localStorage.getItem(key); } catch { /* Storage can be unavailable in hardened browsers. */ }
       const theme = saved === 'light' || saved === 'dark'
@@ -18,7 +18,7 @@
       document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#181818' : '#ebebeb';
     })();
   </script>
-  <title>会话监控 · 本地项目控制台</title>
+  <title>监控与续跑 · Codex 会话管理</title>
   <style>
     :root {
       color-scheme: light;
@@ -427,13 +427,13 @@
       *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition-duration: 0.01ms !important; }
     }
   </style>
-  <link rel="stylesheet" href="/assets/console-sidebar.css?v=11">
+  <link rel="stylesheet" href="/assets/session-manager-nav.css?v=1">
 </head>
 <body>
   <a class="skip-link" href="#watchdog-main">跳到会话监控内容</a>
   <div class="app-shell">
-    <aside class="sidebar" data-console-sidebar data-active="session-manager" aria-label="控制台主导航"></aside>
-    <script src="/assets/console-sidebar.js?v=10"></script>
+    <aside class="sidebar" data-session-nav data-active="monitor" aria-label="会话管理主导航"></aside>
+    <script src="/assets/session-manager-nav.js?v=1"></script>
 
     <main class="workspace" id="watchdog-main">
       <div class="workspace-inner">
@@ -705,7 +705,6 @@
     const appState = {
       status: { schedulerRunning: false, schedulerEnabled: true, codexConnected: false, resumeActionsEnabled: false, resumeDispatchMode: 'direct_app_server', desktopBridge: {}, nextCheckAt: null },
       settings: { defaultIntervalMinutes: 15, minimumIntervalMinutes: 5, resumeDispatchMode: 'direct_app_server' },
-      projectSummary: { runningCount: 0, localCount: 0, counts: {} },
       sessions: [],
       channels: [],
       rules: [],
@@ -883,19 +882,6 @@
 
     function channelName(channelId) {
       return appState.channels.find(item => item.id === channelId)?.name || '已删除渠道';
-    }
-
-    function renderProjectSidebar() {
-      const summary = appState.projectSummary || {};
-      const running = Number(summary.runningCount || 0);
-      const local = Number(summary.localCount || 0);
-      document.getElementById('running-count').textContent = running;
-      document.getElementById('local-count').textContent = local;
-      document.getElementById('running-track').style.width = `${local ? Math.round(running / local * 100) : 0}%`;
-      Object.entries(summary.counts || {}).forEach(([key, value]) => {
-        const element = document.querySelector(`[data-project-count="${key}"]`);
-        if (element) element.textContent = value;
-      });
     }
 
     function renderStatus() {
@@ -1201,11 +1187,6 @@
       renderRuns();
     }
 
-    async function refreshProjectSidebar() {
-      appState.projectSummary = await apiRequest('/api/shell/project-summary');
-      renderProjectSidebar();
-    }
-
     async function loadInitial() {
       try {
         [appState.status, appState.settings, appState.channels, appState.sessions, appState.runs, appState.rules] = await Promise.all([
@@ -1217,7 +1198,6 @@
           apiRequest(WATCHDOG_ENDPOINTS.rules),
         ]);
         renderAll();
-        refreshProjectSidebar().catch(() => {});
       } catch (error) {
         document.getElementById('sessions-loading').hidden = true;
         document.getElementById('sessions-empty').hidden = false;
@@ -1228,7 +1208,7 @@
 
     async function refreshVisibleWatchdogData(tabId = null) {
       const activeTabId = tabId || tabs.find(tab => tab.getAttribute('aria-selected') === 'true')?.id;
-      const requests = [refreshSessionsAndStatus(), refreshProjectSidebar()];
+      const requests = [refreshSessionsAndStatus()];
       if (activeTabId === 'tab-runs') requests.push(refreshRuns());
       if (activeTabId === 'tab-channels') requests.push(refreshChannels());
       if (activeTabId === 'tab-rules') requests.push(refreshRules());

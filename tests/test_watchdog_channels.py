@@ -61,7 +61,10 @@ class FakeOpener:
 class ChannelProbeTests(unittest.TestCase):
     def setUp(self) -> None:
         ProbeHandler.status = 200
-        ProbeHandler.body = {"id": "chatcmpl-test", "choices": [{"message": {"content": "ok"}}]}
+        ProbeHandler.body = {
+            "id": "chatcmpl-test",
+            "choices": [{"message": {"content": "ok"}}],
+        }
         ProbeHandler.received_authorization = ""
 
     def test_healthy_probe_calls_real_chat_completion_endpoint(self) -> None:
@@ -69,15 +72,19 @@ class ChannelProbeTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            result = probe_channel(ChannelConfig(
-                base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
-                probe_url_override="",
-                model="test-model",
-                api_key="sk-secret",
-                timeout_seconds=2.0,
-            ))
+            result = probe_channel(
+                ChannelConfig(
+                    base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+                    probe_url_override="",
+                    model="test-model",
+                    api_key="sk-secret",
+                    timeout_seconds=2.0,
+                )
+            )
         finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
         self.assertEqual(result.category, "healthy")
         self.assertEqual(result.http_status, 200)
         self.assertTrue(result.healthy)
@@ -86,7 +93,15 @@ class ChannelProbeTests(unittest.TestCase):
         self.assertEqual(ProbeHandler.received_payload["max_tokens"], 1)
 
     def test_http_statuses_are_classified(self) -> None:
-        expected = {401: "auth_error", 403: "auth_error", 429: "rate_limited", 502: "upstream_error", 503: "upstream_error", 504: "upstream_error", 418: "other_http_error"}
+        expected = {
+            401: "auth_error",
+            403: "auth_error",
+            429: "rate_limited",
+            502: "upstream_error",
+            503: "upstream_error",
+            504: "upstream_error",
+            418: "other_http_error",
+        }
         for status, category in expected.items():
             with self.subTest(status=status):
                 self.assertEqual(classify_http_status(status), category)
@@ -94,11 +109,22 @@ class ChannelProbeTests(unittest.TestCase):
     def test_invalid_shape_is_protocol_error_without_secret(self) -> None:
         ProbeHandler.body = {"unexpected": True}
         server = ThreadingHTTPServer(("127.0.0.1", 0), ProbeHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
-            result = probe_channel(ChannelConfig(f"http://127.0.0.1:{server.server_address[1]}", "", "model", "sk-secret", 2.0))
+            result = probe_channel(
+                ChannelConfig(
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "",
+                    "model",
+                    "sk-secret",
+                    2.0,
+                )
+            )
         finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
         self.assertEqual(result.category, "protocol_error")
         self.assertFalse(result.healthy)
         self.assertNotIn("sk-secret", result.detail)
@@ -115,7 +141,9 @@ class ChannelProbeTests(unittest.TestCase):
         self.assertEqual(result.duration_ms, 250)
         self.assertNotIn("sk-secret", result.detail)
 
-    def test_timeout_and_connection_reset_are_network_errors_without_secret(self) -> None:
+    def test_timeout_and_connection_reset_are_network_errors_without_secret(
+        self,
+    ) -> None:
         for error in (TimeoutError("slow"), ConnectionResetError("reset")):
             with self.subTest(error=type(error).__name__):
                 result = probe_channel(
@@ -130,7 +158,9 @@ class ChannelProbeTests(unittest.TestCase):
                 self.assertNotIn("sk-secret", result.detail)
 
     def test_connection_error_is_network_error(self) -> None:
-        result = probe_channel(ChannelConfig("http://127.0.0.1:1", "", "model", "sk-secret", 0.1))
+        result = probe_channel(
+            ChannelConfig("http://127.0.0.1:1", "", "model", "sk-secret", 0.1)
+        )
         self.assertEqual(result.category, "network_error")
         self.assertFalse(result.healthy)
         self.assertNotIn("sk-secret", result.detail)
@@ -143,9 +173,7 @@ class ChannelProbeTests(unittest.TestCase):
             "watchdog.channels.build_opener", return_value=FakeOpener(response)
         ) as build:
             result = probe_channel(
-                ChannelConfig(
-                    "http://127.0.0.1:4173/v1", "", "model", "sk-secret", 1.0
-                )
+                ChannelConfig("http://127.0.0.1:4173/v1", "", "model", "sk-secret", 1.0)
             )
 
         self.assertTrue(result.healthy)

@@ -195,7 +195,7 @@ setTimeout(() => {
         self.assertIn("scheduleConversationRefresh(60)", event_source)
         self.assertNotIn("clearTimeout(state.conversationRefreshTimer)", event_source)
         self.assertNotIn("cancelConversationRefresh()", event_source)
-        self.assertIn("remote-worker-reloaded-v33", script)
+        self.assertIn("remote-worker-reloaded-v34", script)
 
     def test_conversation_refresh_timer_can_be_cancelled_and_rescheduled(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -236,13 +236,11 @@ if (state.conversationRefreshDueAt <= Date.now()) process.exit(3);
 
     def test_remote_page_has_stable_workspaces_and_mobile_controls(self) -> None:
         html = (ROOT / "remote.html").read_text(encoding="utf-8")
-        sidebar = (ROOT / "assets" / "console-sidebar.js").read_text(encoding="utf-8")
 
-        for label in ("项目控制台", "Codex 会话管理"):
-            self.assertIn(label, sidebar)
         self.assertNotIn('data-console-sidebar', html)
         self.assertNotIn('/assets/console-sidebar.css', html)
         self.assertNotIn('/assets/console-sidebar.js', html)
+        self.assertIn("Codex Session Manager", html)
         self.assertIn('id="composer"', html)
         self.assertIn('id="session-drawer"', html)
         self.assertIn('id="session-drawer-backdrop"', html)

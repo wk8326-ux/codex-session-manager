@@ -1,10 +1,10 @@
-const CACHE_NAME = 'local-project-console-remote-v33';
+const CACHE_NAME = 'codex-session-manager-remote-v34';
 const STATIC_ASSETS = [
   '/remote',
   '/remote.css?v=27',
   '/remote.js?v=28',
   '/manifest.webmanifest',
-  '/assets/project-console-icon.png',
+  '/assets/session-manager-icon.png',
   '/assets/vendor/qrcode.min.js',
   '/assets/vendor/jsQR.js?v=1',
 ];

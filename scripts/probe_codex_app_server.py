@@ -6,13 +6,15 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from watchdog.codex_adapter import CodexAppServerAdapter, StdioJsonRpcClient
+if TYPE_CHECKING:
+    from watchdog.codex_adapter import CodexAppServerAdapter
 
 
 TEST_THREAD_NAME = "watchdog-integration-test"
@@ -68,6 +70,8 @@ def wait_for_turn_completion(
 
 
 def main() -> int:
+    from watchdog.codex_adapter import CodexAppServerAdapter, StdioJsonRpcClient
+
     args = parse_args()
     client = StdioJsonRpcClient(
         on_attention=lambda thread_id, method: print(
@@ -88,8 +92,7 @@ def main() -> int:
             return 0
         if snapshot.name != TEST_THREAD_NAME:
             raise RuntimeError(
-                "refusing turn/start: thread name must be exactly "
-                f"{TEST_THREAD_NAME!r}"
+                f"refusing turn/start: thread name must be exactly {TEST_THREAD_NAME!r}"
             )
         turn_id = adapter.start_turn(args.thread_id, args.prompt)
         print(json.dumps({"turnId": turn_id}, ensure_ascii=False))

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-APP_NAME = "LocalProjectConsole"
+APP_NAME = "CodexSessionManager"
 APP_VERSION = "0.1.0"
 
 
@@ -49,10 +49,6 @@ class ApplicationPaths:
         self.log_root.mkdir(parents=True, exist_ok=True)
 
     @property
-    def projects_path(self) -> Path:
-        return self.data_root / "projects.json"
-
-    @property
     def database_path(self) -> Path:
         return self.data_root / "watchdog.db"
 
@@ -78,15 +74,19 @@ class ApplicationPaths:
         resource_root = _resource_root(source_root)
         frozen = bool(getattr(sys, "frozen", False))
         requested_mode = (
-            _argument_value(arguments, "--mode")
-            or os.environ.get("LPC_RUNTIME_MODE")
-            or ("installed" if frozen else "source")
-        ).strip().lower()
+            (
+                _argument_value(arguments, "--mode")
+                or os.environ.get("CSM_RUNTIME_MODE")
+                or ("installed" if frozen else "source")
+            )
+            .strip()
+            .lower()
+        )
         if requested_mode not in {"source", "installed", "portable"}:
             requested_mode = "installed" if frozen else "source"
 
         explicit_data = _argument_value(arguments, "--data-dir") or os.environ.get(
-            "LPC_DATA_DIR"
+            "CSM_DATA_DIR"
         )
         if explicit_data:
             data_root = Path(explicit_data).expanduser().resolve()
@@ -104,18 +104,24 @@ class ApplicationPaths:
 
         explicit_runtime = _argument_value(
             arguments, "--runtime-dir"
-        ) or os.environ.get("LPC_RUNTIME_DIR")
+        ) or os.environ.get("CSM_RUNTIME_DIR")
         explicit_logs = _argument_value(arguments, "--log-dir") or os.environ.get(
-            "LPC_LOG_DIR"
+            "CSM_LOG_DIR"
         )
         runtime_root = (
             Path(explicit_runtime).expanduser().resolve()
             if explicit_runtime
-            else (data_root / ".runtime" if requested_mode == "source" else home_root / "runtime")
+            else (
+                data_root / ".runtime"
+                if requested_mode == "source"
+                else home_root / "runtime"
+            )
         )
         log_root = (
             Path(explicit_logs).expanduser().resolve()
             if explicit_logs
-            else (data_root / "logs" if requested_mode == "source" else home_root / "logs")
+            else (
+                data_root / "logs" if requested_mode == "source" else home_root / "logs"
+            )
         )
         return cls(resource_root, data_root, runtime_root, log_root, requested_mode)

@@ -106,9 +106,18 @@ class FrpTunnelManager:
             "frpc-lpc.exe" if os.name == "nt" else "frpc-lpc"
         )
         return cls(
-            Path(os.environ.get("LPC_FRPC_EXECUTABLE", default_executable)),
-            Path(os.environ.get("LPC_FRPC_CONFIG", runtime_dir / "frpc.toml")),
-            Path(os.environ.get("LPC_FRPC_LOG", runtime_dir / "frpc.log")),
+            Path(
+                os.environ.get("CSM_FRPC_EXECUTABLE")
+                or os.environ.get("LPC_FRPC_EXECUTABLE", default_executable)
+            ),
+            Path(
+                os.environ.get("CSM_FRPC_CONFIG")
+                or os.environ.get("LPC_FRPC_CONFIG", runtime_dir / "frpc.toml")
+            ),
+            Path(
+                os.environ.get("CSM_FRPC_LOG")
+                or os.environ.get("LPC_FRPC_LOG", runtime_dir / "frpc.log")
+            ),
         )
 
     def configured(self) -> bool:

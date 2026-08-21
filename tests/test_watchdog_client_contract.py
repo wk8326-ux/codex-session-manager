@@ -10,21 +10,17 @@ class WatchdogClientContractTests(unittest.TestCase):
     def read_html(self) -> str:
         return (ROOT / "watchdog.html").read_text(encoding="utf-8")
 
-    def test_client_uses_watchdog_api_plus_read_only_shell_summary(self) -> None:
+    def test_client_uses_only_watchdog_routes(self) -> None:
         html = self.read_html()
         api_paths = re.findall(r'["\'`](/api/[^"\'`?\s]*)', html)
-        shell_summary = "/api/shell/project-summary"
 
         self.assertTrue(api_paths, "watchdog client must declare its API endpoints")
         self.assertTrue(
-            all(
-                path.startswith("/api/watchdog/") or path == shell_summary
-                for path in api_paths
-            ),
+            all(path.startswith("/api/watchdog/") for path in api_paths),
             f"unexpected cross-workspace API path found: {api_paths}",
         )
         self.assertNotIn("/api/projects", html)
-        self.assertIn(shell_summary, html)
+        self.assertNotIn("/api/shell/project-summary", html)
         for endpoint in (
             "/api/watchdog/status",
             "/api/watchdog/settings",

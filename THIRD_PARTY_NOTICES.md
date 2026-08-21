@@ -2,7 +2,7 @@
 
 ## Flameshot
 
-Local Project Console can invoke Flameshot as its Windows region-capture engine.
+Codex Session Manager can invoke Flameshot as its Windows region-capture engine.
 Flameshot is installed separately through Windows Package Manager and is not
 vendored in this repository.
 
