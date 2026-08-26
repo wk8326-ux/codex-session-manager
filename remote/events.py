@@ -82,3 +82,12 @@ class RemoteEventHub:
                 "streamId": self._stream_id,
                 "resyncRequired": resync_required,
             }
+
+    def stats(self) -> dict:
+        with self._condition:
+            return {
+                "sequence": self._sequence,
+                "bufferedEvents": len(self._events),
+                "capacity": self._events.maxlen,
+                "streamId": self._stream_id,
+            }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
@@ -27,24 +28,28 @@ class _StatusEntry:
 
 
 class SessionProjection:
-    """Hide App Server reads behind cached revisions and request coalescing."""
+    """Hide App Server reads behind bounded caches and request coalescing."""
 
     def __init__(
         self,
         adapter: object,
         *,
         fresh_seconds: float = 1.5,
+        max_sessions: int = 24,
+        max_status_entries: int = 96,
         generation_provider: Callable[[], int] | None = None,
         max_workers: int = 4,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._adapter = adapter
         self._fresh_seconds = max(0.0, fresh_seconds)
+        self._max_sessions = max(1, int(max_sessions))
+        self._max_status_entries = max(1, int(max_status_entries))
         self._generation_provider = generation_provider or (lambda: 0)
         self._clock = clock
         self._lock = threading.RLock()
-        self._entries: dict[str, _ProjectionEntry] = {}
-        self._statuses: dict[str, _StatusEntry] = {}
+        self._entries: OrderedDict[str, _ProjectionEntry] = OrderedDict()
+        self._statuses: OrderedDict[str, _StatusEntry] = OrderedDict()
         self._inflight: dict[str, threading.Event] = {}
         self._revision = 0
         self._generation = self._generation_provider()
@@ -65,9 +70,11 @@ class SessionProjection:
             if entry is not None:
                 entry.fetched_at = 0.0
                 entry.revision = self._revision
+                self._entries.move_to_end(thread_id)
             status = self._statuses.get(thread_id)
             if status is not None:
                 status.fetched_at = 0.0
+                self._statuses.move_to_end(thread_id)
 
     def read(self, thread_id: str, *, turn_limit: int = 6, force: bool = False) -> dict:
         bounded_limit = max(1, min(int(turn_limit), 30))
@@ -81,6 +88,7 @@ class SessionProjection:
                     and entry.turn_limit >= bounded_limit
                     and self._clock() - entry.fetched_at <= self._fresh_seconds
                 ):
+                    self._entries.move_to_end(thread_id)
                     return self._limited(entry.detail, bounded_limit)
                 event = self._inflight.get(thread_id)
                 if event is None:
@@ -107,6 +115,9 @@ class SessionProjection:
                     self._revision,
                     bounded_limit,
                 )
+                self._entries.move_to_end(thread_id)
+                while len(self._entries) > self._max_sessions:
+                    self._entries.popitem(last=False)
             return self._limited(detail, bounded_limit)
         finally:
             with self._lock:
@@ -124,6 +135,7 @@ class SessionProjection:
                     cached is not None
                     and self._clock() - cached.fetched_at <= self._fresh_seconds
                 ):
+                    self._statuses.move_to_end(thread_id)
                     return thread_id, copy.deepcopy(cached.status)
             try:
                 snapshot = self._adapter.read_thread(thread_id)
@@ -132,10 +144,31 @@ class SessionProjection:
             status = self._snapshot_status(snapshot)
             with self._lock:
                 self._statuses[thread_id] = _StatusEntry(status, self._clock())
+                self._statuses.move_to_end(thread_id)
+                while len(self._statuses) > self._max_status_entries:
+                    self._statuses.popitem(last=False)
             return thread_id, copy.deepcopy(status)
 
-        futures = [self._executor.submit(read_status, thread_id) for thread_id in unique_ids]
+        futures = [
+            self._executor.submit(read_status, thread_id) for thread_id in unique_ids
+        ]
         return dict(future.result() for future in futures)
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "sessions": len(self._entries),
+                "maxSessions": self._max_sessions,
+                "cachedTurns": sum(
+                    len(entry.detail.get("turns") or ())
+                    for entry in self._entries.values()
+                ),
+                "inflightReads": len(self._inflight),
+                "statusEntries": len(self._statuses),
+                "maxStatusEntries": self._max_status_entries,
+                "revision": self._revision,
+                "generation": self._generation,
+            }
 
     def revision(self, thread_id: str) -> int:
         with self._lock:
@@ -154,10 +187,11 @@ class SessionProjection:
 
     @staticmethod
     def _limited(detail: dict, turn_limit: int) -> dict:
-        result = copy.deepcopy(detail)
-        turns = result.get("turns")
-        if isinstance(turns, list):
-            result["turns"] = turns[-turn_limit:]
+        result = dict(detail)
+        turns = detail.get("turns")
+        result["turns"] = [
+            copy.deepcopy(turn) for turn in turns[-turn_limit:]
+        ] if isinstance(turns, list) else []
         return result
 
     @staticmethod

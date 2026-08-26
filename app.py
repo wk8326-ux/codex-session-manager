@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import socket
@@ -33,6 +34,7 @@ REMOTE_ADMIN_API: object | None = None
 REMOTE_HTTP_API: object | None = None
 RELAY_SETUP_API: object | None = None
 CODEX_RUNTIME: object | None = None
+SESSION_RUNTIME: object | None = None
 STARTUP_STATE = {"phase": "starting", "error": ""}
 STATIC_ASSETS = StaticAssetCache()
 
@@ -102,6 +104,7 @@ class InstanceLock:
 @dataclass
 class SessionRuntime:
     api: object
+    event_hub: object
     scheduler: object
     adapter: object
     projection: object
@@ -221,6 +224,7 @@ def create_runtime(paths: ApplicationPaths) -> SessionRuntime:
     native_capture = FlameshotRegionCapture()
     return SessionRuntime(
         WatchdogHttpApi(application),
+        event_hub,
         scheduler,
         adapter,
         projection,
@@ -229,6 +233,61 @@ def create_runtime(paths: ApplicationPaths) -> SessionRuntime:
         tunnel,
         relay_setup_api,
     )
+
+
+def _process_rss_bytes() -> int | None:
+    """Return the current working set without adding a runtime dependency."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class ProcessMemoryCounters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            get_current_process = ctypes.windll.kernel32.GetCurrentProcess
+            get_current_process.restype = wintypes.HANDLE
+            get_process_memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+            get_process_memory_info.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(ProcessMemoryCounters),
+                ctypes.c_size_t,
+            ]
+            get_process_memory_info.restype = wintypes.BOOL
+            if get_process_memory_info(
+                get_current_process(), ctypes.byref(counters), ctypes.sizeof(counters)
+            ):
+                return int(counters.WorkingSetSize)
+        except (AttributeError, OSError):
+            return None
+    try:
+        import resource
+
+        # Linux reports this value in KiB.
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def _safe_status(provider: object) -> dict:
+    try:
+        value = provider()
+        return value if isinstance(value, dict) else {}
+    except Exception as error:
+        return {"error": str(error)}
 
 
 class ResponseHandler(BaseHTTPRequestHandler):
@@ -347,6 +406,53 @@ class AdminHandler(ResponseHandler):
                     "startedAt": STARTED_AT,
                     "ports": {"admin": ADMIN_PORT, "remote": REMOTE_PORT},
                     "codex": codex,
+                },
+            )
+            return
+        if path == "/api/diagnostics":
+            runtime = SESSION_RUNTIME
+            codex = (
+                CODEX_RUNTIME.status()
+                if CODEX_RUNTIME is not None
+                else {"connected": False, "connecting": False}
+            )
+            self.respond_json(
+                HTTPStatus.OK,
+                {
+                    "service": "codex-session-manager",
+                    "version": APP_VERSION,
+                    "ready": STARTUP_STATE["phase"] == "ready",
+                    "startup": dict(STARTUP_STATE),
+                    "pid": os.getpid(),
+                    "startedAt": STARTED_AT,
+                    "process": {
+                        "rssBytes": _process_rss_bytes(),
+                        "threadCount": threading.active_count(),
+                        "pythonVersion": sys.version.split()[0],
+                    },
+                    "garbageCollector": {
+                        **{
+                            f"generation{index}": count
+                            for index, count in enumerate(gc.get_count())
+                        },
+                        "collections": [stat.get("collections", 0) for stat in gc.get_stats()],
+                    },
+                    "projection": (
+                        _safe_status(runtime.projection.stats)
+                        if runtime is not None
+                        else {}
+                    ),
+                    "eventHub": (
+                        _safe_status(runtime.event_hub.stats)
+                        if runtime is not None
+                        else {}
+                    ),
+                    "tunnel": (
+                        _safe_status(runtime.tunnel.status)
+                        if runtime is not None
+                        else {}
+                    ),
+                    "codex": _safe_status(lambda: codex),
                 },
             )
             return
@@ -485,8 +591,16 @@ class RemoteHandler(ResponseHandler):
             "/remote": ("remote.html", "text/html; charset=utf-8", "no-cache"),
             "/remote/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
             "/pair": ("remote.html", "text/html; charset=utf-8", "no-cache"),
-            "/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache"),
-            "/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache"),
+            "/remote.css": (
+                "remote.css",
+                "text/css; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            ),
+            "/remote.js": (
+                "remote.js",
+                "text/javascript; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            ),
             "/manifest.webmanifest": (
                 "manifest.webmanifest",
                 "application/manifest+json",
@@ -556,7 +670,7 @@ def stop_running_instance(paths: ApplicationPaths) -> bool:
 
 def run(paths: ApplicationPaths = PATHS) -> None:
     global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API, CODEX_RUNTIME
-    global STARTUP_STATE
+    global SESSION_RUNTIME, STARTUP_STATE
     paths.ensure_writable_directories()
     lock = InstanceLock(paths.runtime_root / "session-manager.lock")
     lock.acquire()
@@ -584,6 +698,7 @@ def run(paths: ApplicationPaths = PATHS) -> None:
             REMOTE_HTTP_API = runtime.remote_http_api
             RELAY_SETUP_API = runtime.relay_setup_api
             CODEX_RUNTIME = runtime.adapter
+            SESSION_RUNTIME = runtime
         except Exception as error:
             STARTUP_STATE = {"phase": "failed", "error": str(error)}
             import traceback
@@ -634,6 +749,7 @@ def run(paths: ApplicationPaths = PATHS) -> None:
         REMOTE_HTTP_API = None
         RELAY_SETUP_API = None
         CODEX_RUNTIME = None
+        SESSION_RUNTIME = None
         STARTUP_STATE = {"phase": "stopped", "error": ""}
         lock.release()
 

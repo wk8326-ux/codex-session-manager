@@ -9,6 +9,7 @@ import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import app
@@ -48,6 +49,41 @@ class SessionManagerHttpTests(unittest.TestCase):
         self.assertEqual(payload["service"], "codex-session-manager")
         self.assertEqual(payload["role"], "session-manager")
         self.assertEqual(payload["ports"], {"admin": 8767, "remote": 8766})
+
+    def test_diagnostics_reports_memory_cache_tunnel_and_codex(self) -> None:
+        class DiagnosticRuntime:
+            projection = SimpleNamespace(stats=lambda: {"sessions": 3, "maxSessions": 24})
+            event_hub = SimpleNamespace(
+                stats=lambda: {"sequence": 9, "bufferedEvents": 4}
+            )
+            tunnel = SimpleNamespace(
+                status=lambda: {
+                    "running": True,
+                    "restartCount": 1,
+                    "recentRestarts": [{"reason": "process-exit"}],
+                }
+            )
+
+        class DiagnosticCodex:
+            @staticmethod
+            def status():
+                return {"connected": True, "connecting": False}
+
+        with (
+            patch.object(app, "STARTUP_STATE", {"phase": "ready", "error": ""}),
+            patch.object(app, "SESSION_RUNTIME", DiagnosticRuntime()),
+            patch.object(app, "CODEX_RUNTIME", DiagnosticCodex()),
+        ):
+            status, body = self.request("GET", "/api/diagnostics")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ready"])
+        self.assertGreater(payload["process"]["rssBytes"], 0)
+        self.assertEqual(payload["projection"]["sessions"], 3)
+        self.assertEqual(payload["eventHub"]["sequence"], 9)
+        self.assertEqual(payload["tunnel"]["restartCount"], 1)
+        self.assertTrue(payload["codex"]["connected"])
 
     def test_health_responds_while_runtime_is_starting(self) -> None:
         with patch.object(app, "STARTUP_STATE", {"phase": "starting", "error": ""}):

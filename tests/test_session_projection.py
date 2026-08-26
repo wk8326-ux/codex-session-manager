@@ -101,6 +101,20 @@ class SessionProjectionTests(unittest.TestCase):
         finally:
             projection.close()
 
+    def test_projection_cache_is_bounded(self) -> None:
+        adapter = Adapter()
+        adapter.release.set()
+        projection = SessionProjection(adapter, fresh_seconds=0, max_sessions=2)
+        try:
+            for thread_id in ("one", "two", "three"):
+                projection.read(thread_id)
+
+            stats = projection.stats()
+            self.assertEqual(stats["sessions"], 2)
+            self.assertEqual(stats["maxSessions"], 2)
+        finally:
+            projection.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -212,7 +212,7 @@ class TunnelSupervisorTests(unittest.TestCase):
             self.assertFalse(status["health"]["public"]["ok"])
             self.assertEqual(adapter.stops, 0)
 
-    def test_sustained_public_failure_restarts_frpc_once(self) -> None:
+    def test_sustained_public_failure_does_not_restart_a_healthy_tunnel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             adapter = FakeTunnelAdapter(Path(directory))
             supervisor = TunnelSupervisor(
@@ -236,9 +236,106 @@ class TunnelSupervisorTests(unittest.TestCase):
             supervisor.check_once()
             status = supervisor.check_once()
 
+            self.assertEqual(status["state"], "degraded")
+            self.assertEqual(status["consecutivePublicFailures"], 2)
+            self.assertEqual(status["consecutiveRelayFailures"], 0)
+            self.assertEqual(adapter.stops, 0)
+            self.assertEqual(adapter.starts, 0)
+            self.assertEqual(status["restartCount"], 0)
+
+    def test_sustained_relay_failure_restarts_frpc(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = FakeTunnelAdapter(Path(directory))
+            supervisor = TunnelSupervisor(
+                adapter,
+                local_url="http://127.0.0.1:8766/api/remote/health",
+                public_url_provider=lambda: "https://console.example.com",
+                relay_failure_threshold=2,
+                restart_cooldown_seconds=0,
+                http_probe=lambda url, _timeout: {
+                    "ok": "127.0.0.1" in url,
+                    "latencyMs": 1,
+                    "detail": "" if "127.0.0.1" in url else "timeout",
+                },
+                tcp_probe=lambda _target, _timeout: {
+                    "ok": False,
+                    "latencyMs": None,
+                    "detail": "refused",
+                },
+            )
+
+            supervisor.check_once()
+            status = supervisor.check_once()
+
             self.assertEqual(adapter.stops, 1)
             self.assertEqual(adapter.starts, 1)
             self.assertEqual(status["restartCount"], 1)
+            self.assertEqual(status["lastRestartReason"], "FRP relay is unreachable")
+            self.assertEqual(
+                status["recentRestarts"][0]["reason"], "FRP relay is unreachable"
+            )
+
+    def test_stopped_process_restarts_even_when_public_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = FakeTunnelAdapter(Path(directory))
+            adapter.running = False
+            supervisor = TunnelSupervisor(
+                adapter,
+                local_url="http://127.0.0.1:8766/api/remote/health",
+                public_url_provider=lambda: "https://console.example.com",
+                restart_cooldown_seconds=0,
+                http_probe=lambda url, _timeout: {
+                    "ok": "127.0.0.1" in url,
+                    "latencyMs": 1,
+                    "detail": "" if "127.0.0.1" in url else "timeout",
+                },
+                tcp_probe=lambda _target, _timeout: {
+                    "ok": False,
+                    "latencyMs": None,
+                    "detail": "refused",
+                },
+            )
+
+            status = supervisor.check_once()
+
+            self.assertEqual(adapter.starts, 1)
+            self.assertTrue(status["running"])
+            self.assertEqual(status["lastRestartReason"], "frpc is not running")
+
+    def test_repeated_restarts_use_exponential_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = FakeTunnelAdapter(Path(directory))
+            supervisor = TunnelSupervisor(
+                adapter,
+                local_url="http://127.0.0.1:8766/api/remote/health",
+                public_url_provider=lambda: "",
+                relay_failure_threshold=1,
+                restart_cooldown_seconds=100,
+                max_restart_cooldown_seconds=300,
+                http_probe=lambda _url, _timeout: {
+                    "ok": True,
+                    "latencyMs": 1,
+                    "detail": "",
+                },
+                tcp_probe=lambda _target, _timeout: {
+                    "ok": False,
+                    "latencyMs": None,
+                    "detail": "refused",
+                },
+            )
+
+            supervisor.check_once()
+            self.assertEqual(adapter.starts, 1)
+            supervisor.check_once()
+            self.assertEqual(adapter.starts, 1)
+
+            supervisor._next_restart_at = 0
+            supervisor.check_once()
+            self.assertEqual(adapter.starts, 2)
+            self.assertGreater(
+                supervisor._next_restart_at,
+                supervisor._last_restart_at,
+            )
 
 
 if __name__ == "__main__":

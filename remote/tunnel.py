@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import tomllib
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -309,10 +310,12 @@ class TunnelSupervisor:
         *,
         local_url: str,
         public_url_provider: Callable[[], str],
-        check_interval_seconds: float = 15.0,
-        failure_threshold: int = 3,
-        restart_cooldown_seconds: float = 60.0,
-        probe_timeout_seconds: float = 3.0,
+        check_interval_seconds: float = 20.0,
+        failure_threshold: int = 6,
+        relay_failure_threshold: int = 3,
+        restart_cooldown_seconds: float = 120.0,
+        max_restart_cooldown_seconds: float = 900.0,
+        probe_timeout_seconds: float = 6.0,
         http_probe: Callable[[str, float], dict] = _http_probe,
         tcp_probe: Callable[[tuple[str, int] | None, float], dict] = _tcp_probe,
     ) -> None:
@@ -321,7 +324,11 @@ class TunnelSupervisor:
         self._public_url_provider = public_url_provider
         self._check_interval = max(1.0, check_interval_seconds)
         self._failure_threshold = max(1, failure_threshold)
+        self._relay_failure_threshold = max(1, relay_failure_threshold)
         self._restart_cooldown = max(0.0, restart_cooldown_seconds)
+        self._max_restart_cooldown = max(
+            self._restart_cooldown, max(0.0, max_restart_cooldown_seconds)
+        )
         self._probe_timeout = max(0.1, probe_timeout_seconds)
         self._http_probe = http_probe
         self._tcp_probe = tcp_probe
@@ -330,8 +337,13 @@ class TunnelSupervisor:
         self._thread: threading.Thread | None = None
         self._health = self._empty_health()
         self._public_failures = 0
+        self._relay_failures = 0
         self._restart_count = 0
         self._last_restart_at = 0.0
+        self._next_restart_at = 0.0
+        self._restart_backoff_steps = 0
+        self._last_restart_reason = ""
+        self._recent_restarts: deque[dict] = deque(maxlen=10)
 
     def start(self) -> bool:
         started = self._adapter.start()
@@ -356,9 +368,10 @@ class TunnelSupervisor:
     def check_once(self) -> dict:
         base = self._adapter.status()
         local = self._http_probe(self._local_url, self._probe_timeout)
+        configured = bool(base.get("configured"))
         relay = self._tcp_probe(
             _relay_target(self._adapter.config_path), self._probe_timeout
-        ) if base.get("configured") else {
+        ) if configured else {
             "ok": False,
             "latencyMs": None,
             "detail": "tunnel is not configured",
@@ -369,26 +382,64 @@ class TunnelSupervisor:
             if public_base
             else {"ok": False, "latencyMs": None, "detail": "public URL is not configured"}
         )
+        if relay.get("ok"):
+            self._relay_failures = 0
+        else:
+            self._relay_failures += 1
+
+        # Public reachability crosses the user's browser/CDN/network path. A
+        # timeout there is diagnostic, but restarting a healthy frpc cannot fix
+        # it and previously caused self-inflicted mobile disconnects.
         if public.get("ok"):
             self._public_failures = 0
         else:
             self._public_failures += 1
 
+        now = time.monotonic()
+        if (
+            configured
+            and base.get("running")
+            and local.get("ok")
+            and relay.get("ok")
+        ):
+            self._restart_backoff_steps = 0
+            self._next_restart_at = 0.0
+
         should_restart = bool(
-            base.get("configured")
+            configured
             and local.get("ok")
             and (
                 not base.get("running")
-                or self._public_failures >= self._failure_threshold
+                or self._relay_failures >= self._relay_failure_threshold
             )
-            and time.monotonic() - self._last_restart_at >= self._restart_cooldown
+            and now >= self._next_restart_at
         )
         if should_restart:
+            reason = (
+                "frpc is not running"
+                if not base.get("running")
+                else "FRP relay is unreachable"
+            )
             if base.get("running"):
                 self._adapter.stop()
             self._adapter.start()
-            self._last_restart_at = time.monotonic()
+            now = time.monotonic()
+            self._last_restart_at = now
             self._restart_count += 1
+            self._last_restart_reason = reason
+            self._recent_restarts.append(
+                {
+                    "at": _utc_now(),
+                    "reason": reason,
+                    "wasRunning": bool(base.get("running")),
+                }
+            )
+            self._restart_backoff_steps += 1
+            delay = min(
+                self._max_restart_cooldown,
+                self._restart_cooldown * (2 ** (self._restart_backoff_steps - 1)),
+            )
+            self._next_restart_at = now + delay
             self._public_failures = 0
             base = self._adapter.status()
 
@@ -408,6 +459,9 @@ class TunnelSupervisor:
             health = {key: dict(value) for key, value in self._health.items()}
             restart_count = self._restart_count
             failures = self._public_failures
+            relay_failures = self._relay_failures
+            recent_restarts = list(self._recent_restarts)
+            last_restart_reason = self._last_restart_reason
         if not base.get("configured"):
             state = "not-configured"
         elif not base.get("running"):
@@ -423,7 +477,10 @@ class TunnelSupervisor:
             "state": state,
             "health": health,
             "consecutivePublicFailures": failures,
+            "consecutiveRelayFailures": relay_failures,
             "restartCount": restart_count,
+            "lastRestartReason": last_restart_reason,
+            "recentRestarts": recent_restarts,
         }
 
     def _run(self) -> None:

@@ -1,8 +1,8 @@
-const CACHE_NAME = 'codex-session-manager-remote-v36';
+const CACHE_NAME = 'codex-session-manager-remote-v37';
 const STATIC_ASSETS = [
   '/remote',
-  '/remote.css?v=27',
-  '/remote.js?v=30',
+  '/remote.css?v=28',
+  '/remote.js?v=31',
   '/manifest.webmanifest',
   '/assets/session-manager-icon.png',
   '/assets/vendor/qrcode.min.js',
@@ -32,21 +32,17 @@ self.addEventListener('fetch', event => {
   event.respondWith(staleWhileRevalidate(event.request));
 });
 
-async function navigationResponse(request) {
-  const cached = await caches.match(request) || await caches.match('/remote');
-  try {
-    const response = await Promise.race([
-      fetch(request),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
-    ]);
-    if (response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
-    }
+async function navigationResponse(event) {
+  const request = event.request;
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request, { ignoreSearch: true })
+    || await cache.match('/remote', { ignoreSearch: true });
+  const update = fetch(request).then(response => {
+    if (response.ok) cache.put(request, response.clone());
     return response;
-  } catch {
-    return cached || Response.error();
-  }
+  }).catch(() => null);
+  event.waitUntil(update);
+  return cached || update || Response.error();
 }
 
 async function staleWhileRevalidate(request) {

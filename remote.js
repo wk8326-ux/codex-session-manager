@@ -7,6 +7,7 @@
   const SCREENSHOT_SHORTCUT_KEY = 'localhost-project-console.remote-screenshot-shortcut';
   const SNAPSHOT_DB_NAME = 'codex-session-manager';
   const SNAPSHOT_STORE_NAME = 'conversation-snapshots';
+  const OUTGOING_STORE_NAME = 'pending-outgoing';
   const DEFAULT_SCREENSHOT_SHORTCUT = Object.freeze({
     code: 'KeyS',
     ctrlKey: false,
@@ -1315,6 +1316,7 @@
       turnId: '',
     };
     state.outgoingMessages.push(outgoing);
+    persistOutgoingMessages();
     renderOutgoingMessages();
     return outgoing;
   }
@@ -1391,6 +1393,7 @@
     const outgoing = state.outgoingMessages.find(item => item.id === outgoingId);
     if (!outgoing) return;
     Object.assign(outgoing, updates);
+    persistOutgoingMessages();
     reconcileOutgoingMessages(
       state.conversation,
       outgoing.sessionId,
@@ -1735,10 +1738,13 @@
     if (!('indexedDB' in window)) return Promise.resolve(null);
     if (openSnapshotDatabase.promise) return openSnapshotDatabase.promise;
     openSnapshotDatabase.promise = new Promise(resolve => {
-      const request = indexedDB.open(SNAPSHOT_DB_NAME, 1);
+      const request = indexedDB.open(SNAPSHOT_DB_NAME, 2);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains(SNAPSHOT_STORE_NAME)) {
           request.result.createObjectStore(SNAPSHOT_STORE_NAME, { keyPath: 'sessionId' });
+        }
+        if (!request.result.objectStoreNames.contains(OUTGOING_STORE_NAME)) {
+          request.result.createObjectStore(OUTGOING_STORE_NAME, { keyPath: 'id' });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -1766,6 +1772,45 @@
       const transaction = database.transaction(SNAPSHOT_STORE_NAME, 'readwrite');
       transaction.objectStore(SNAPSHOT_STORE_NAME).put({ sessionId, ...entry });
     } catch {}
+  }
+
+  async function readPersistedOutgoingMessages() {
+    const database = await openSnapshotDatabase();
+    if (!database) return [];
+    return new Promise(resolve => {
+      const request = database.transaction(OUTGOING_STORE_NAME, 'readonly')
+        .objectStore(OUTGOING_STORE_NAME).getAll();
+      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+      request.onerror = () => resolve([]);
+    });
+  }
+
+  async function persistOutgoingMessages() {
+    const database = await openSnapshotDatabase();
+    if (!database) return;
+    try {
+      const transaction = database.transaction(OUTGOING_STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(OUTGOING_STORE_NAME);
+      store.clear();
+      for (const outgoing of state.outgoingMessages.slice(-20)) store.put(outgoing);
+    } catch {}
+  }
+
+  async function restorePersistedOutgoingMessages() {
+    const persisted = await readPersistedOutgoingMessages();
+    state.outgoingMessages = persisted.filter(outgoing => (
+      outgoing && outgoing.id && outgoing.sessionId
+      && ['sending', 'confirming', 'unconfirmed', 'delivered', 'failed'].includes(outgoing.status)
+    )).slice(-20);
+    const uncertain = state.outgoingMessages.filter(outgoing => (
+      ['sending', 'confirming', 'unconfirmed'].includes(outgoing.status)
+    ));
+    for (const outgoing of uncertain) {
+      outgoing.status = 'confirming';
+      scheduleOutgoingConfirmation(outgoing.id);
+    }
+    if (state.outgoingMessages.length) persistOutgoingMessages();
+    renderOutgoingMessages();
   }
 
   async function prunePersistedConversations(activeSessionIds) {
@@ -1818,6 +1863,7 @@
         sessionId,
         signature,
       );
+      if (outgoingChanged) persistOutgoingMessages();
       const session = state.sessions.find(item => item.id === sessionId) || result;
       setSessionStatusOverride(
         session.threadId,
@@ -2739,6 +2785,7 @@
     syncSessionDrawerAccessibility();
     setupInteractions();
     releaseMessageFocus();
+    await restorePersistedOutgoingMessages();
     parsePairingLink();
     state.token = readToken();
     state.device = readStoredDevice();

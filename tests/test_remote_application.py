@@ -83,6 +83,23 @@ class Adapter:
         ][:limit]
 
 
+class RemoteEventHubTests(unittest.TestCase):
+    def test_stats_exposes_buffer_pressure_without_event_payloads(self) -> None:
+        hub = RemoteEventHub(lambda: {THREAD_ID})
+
+        hub.publish("turn/started", {"threadId": THREAD_ID, "secret": "hidden"})
+
+        self.assertEqual(
+            hub.stats(),
+            {
+                "sequence": 1,
+                "bufferedEvents": 1,
+                "capacity": 512,
+                "streamId": hub.wait(0)["streamId"],
+            },
+        )
+
+
 class RemoteApplicationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
