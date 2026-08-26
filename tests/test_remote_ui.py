@@ -27,13 +27,13 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn(".runtime-strip.running .runtime-progress", stylesheet)
         self.assertIn(".composer-tools", stylesheet)
         self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
-        self.assertIn("remote.css?v=28", html)
-        self.assertIn("remote.js?v=31", html)
-        self.assertIn("remote.css?v=28", worker)
-        self.assertIn("remote.js?v=31", worker)
+        self.assertIn("remote.css?v=29", html)
+        self.assertIn("remote.js?v=32", html)
+        self.assertIn("remote.css?v=29", worker)
+        self.assertIn("remote.js?v=32", worker)
+        self.assertIn("const response = await fetch(request);", worker)
+        self.assertIn("if (!response.ok) throw new Error(`HTTP ${response.status}`);", worker)
         self.assertIn("const cached = await cache.match(request, { ignoreSearch: true })", worker)
-        self.assertIn("event.waitUntil(update);", worker)
-        self.assertIn("return cached || update || Response.error();", worker)
         self.assertIn('<script src="/assets/vendor/qrcode.min.js" defer></script>', html)
         self.assertIn("OUTGOING_STORE_NAME = 'pending-outgoing'", script)
         self.assertIn("function persistOutgoingMessages", script)
@@ -203,7 +203,7 @@ setTimeout(() => {
         self.assertIn("scheduleConversationRefresh(60)", event_source)
         self.assertNotIn("clearTimeout(state.conversationRefreshTimer)", event_source)
         self.assertNotIn("cancelConversationRefresh()", event_source)
-        self.assertIn("remote-worker-reloaded-v35", script)
+        self.assertNotIn("remote-worker-reloaded-v35", script)
 
     def test_conversation_refresh_timer_can_be_cancelled_and_rescheduled(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -1070,10 +1070,12 @@ vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.poll = p
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
         server = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/remote.css?v=28', script)
-        self.assertIn('href="/remote.css?v=28"', html)
-        self.assertIn('/remote.js?v=31', script)
+        self.assertIn('/remote.css?v=29', script)
+        self.assertIn('href="/remote.css?v=29"', html)
+        self.assertIn('/remote.js?v=32', script)
         self.assertIn("staleWhileRevalidate", script)
+        self.assertIn("async function navigationResponse(event)", script)
+        self.assertNotIn("location.reload()", (ROOT / "remote.js").read_text(encoding="utf-8"))
         self.assertNotIn("cache: 'no-store'", script)
         self.assertIn(
             '"/remote.css": (\n                "remote.css",\n                "text/css; charset=utf-8",\n                "public, max-age=31536000, immutable",\n            )',
@@ -1084,6 +1086,14 @@ vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.poll = p
             server,
         )
         self.assertNotIn("'/assets/vendor/jsQR.js?v=1',", script)
+
+    def test_admin_origin_never_keeps_the_remote_service_worker(self) -> None:
+        script = (ROOT / "remote.js").read_text(encoding="utf-8")
+
+        self.assertIn("async function syncServiceWorker()", script)
+        self.assertIn("if (state.admin) {", script)
+        self.assertIn("await existing?.unregister();", script)
+        self.assertIn("const registration = await navigator.serviceWorker.register('/service-worker.js');", script)
 
     def test_browser_renders_conversation_text_without_html_injection(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")

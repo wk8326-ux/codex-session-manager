@@ -40,6 +40,12 @@ migrate-legacy-data.bat "D:\path\to\localhost-project-console"
 
 迁移只复制 `watchdog.db` 和稳定的 FRP 配置，不复制 `projects.json`、PID、锁或日志。源目录不会被删除；目标已有数据库时默认拒绝覆盖。
 
+## 移动端缓存
+
+PWA 页面导航使用“网络优先，离线回退缓存”；静态资源使用带版本号的 URL 更新。手机端正常刷新即可拿到最新界面，不需要手动清缓存。
+
+如果旧版本曾出现过“打开后立刻变成 ERR_FAILED”，这是旧 Service Worker 的导航缓存缺陷。对该站点执行一次“清除站点数据”，或卸载后重新安装 PWA 即可恢复；更新后的版本会在管理端自动注销多余的 Service Worker。
+
 ## 添加到项目控制台
 
 先启动 Local Project Console，再双击：

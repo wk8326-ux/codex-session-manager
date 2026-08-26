@@ -2827,18 +2827,20 @@
     } else {
       showPairScreen();
     }
-    if ('serviceWorker' in navigator && window.isSecureContext) {
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (state.qrStream || state.pairingSecret || state.pendingToken) return;
-        const reloadKey = 'codex-session-manager.remote-worker-reloaded-v35';
-        if (sessionStorage.getItem(reloadKey)) return;
-        sessionStorage.setItem(reloadKey, '1');
-        location.reload();
-      });
-      navigator.serviceWorker.register('/service-worker.js')
-        .then(registration => registration.update())
-        .catch(() => {});
-    }
+    await syncServiceWorker();
+  }
+
+  async function syncServiceWorker() {
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+    try {
+      const existing = await navigator.serviceWorker.getRegistration();
+      if (state.admin) {
+        await existing?.unregister();
+        return;
+      }
+      const registration = await navigator.serviceWorker.register('/service-worker.js');
+      await registration.update();
+    } catch {}
   }
 
   initialize();
