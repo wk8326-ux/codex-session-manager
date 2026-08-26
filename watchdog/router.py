@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from .application import ResourceConflictError, ResourceNotFoundError
 from .codex_adapter import CodexAdapterError
-from .http_api import ApiResponse
 from .store import ChannelInUseError, WatchdogStoreError
 from .validation import ValidationError
 
 
-class WatchdogRouter:
+@dataclass(frozen=True)
+class ApiResponse:
+    status: int
+    body: Any
+
+
+class WatchdogHttpApi:
     """Dispatch the complete watchdog HTTP API without touching project state."""
 
     _RUN_FILTERS = {"sessionId", "channelId", "decision", "from", "to", "limit"}

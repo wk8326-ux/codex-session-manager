@@ -247,7 +247,7 @@ class CodexAdapterTests(unittest.TestCase):
             ],
         )
 
-    def test_failed_turn_exposes_assistant_diagnostic_text_for_recovery_rules(self) -> None:
+    def test_failed_turn_exposes_error_item_text_for_recovery_rules(self) -> None:
         message = "Selected model is at capacity. Please try a different model."
         transport = FakeTransport(
             {
@@ -261,7 +261,7 @@ class CodexAdapterTests(unittest.TestCase):
                                 "status": "failed",
                                 "items": [
                                     {"id": "user", "type": "userMessage", "content": []},
-                                    {"id": "agent", "type": "agentMessage", "text": message},
+                                    {"id": "error", "type": "error", "message": message},
                                 ],
                             }
                         ],
@@ -276,6 +276,48 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(turn.error_message, "")
         self.assertEqual(turn.diagnostic_text, message)
         self.assertEqual(turn.recovery_text, message)
+
+    def test_failed_turn_does_not_treat_conversation_text_as_error_evidence(self) -> None:
+        capacity_message = "Selected model is at capacity. Please try again."
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "status": {"type": "idle"},
+                        "turns": [
+                            {
+                                "id": "turn-failed",
+                                "status": "failed",
+                                "items": [
+                                    {
+                                        "id": "agent",
+                                        "type": "agentMessage",
+                                        "text": capacity_message,
+                                    },
+                                    {
+                                        "id": "plan",
+                                        "type": "plan",
+                                        "text": capacity_message,
+                                    },
+                                    {
+                                        "id": "system",
+                                        "type": "systemMessage",
+                                        "message": capacity_message,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+        turn = CodexAppServerAdapter(transport).read_thread(THREAD_ID).latest_turn
+
+        self.assertIsNotNone(turn)
+        self.assertEqual(turn.diagnostic_text, "")
+        self.assertEqual(turn.recovery_text, "")
 
     def test_trailing_compatibility_rollouts_do_not_hide_a_real_turn_failure(self) -> None:
         capacity_message = (

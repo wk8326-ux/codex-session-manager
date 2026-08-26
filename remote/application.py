@@ -5,7 +5,6 @@ import binascii
 import hashlib
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from watchdog.codex_adapter import CodexAdapterError, DefiniteSendFailure
@@ -22,6 +21,7 @@ from .approvals import (
     RemoteApprovalBroker,
 )
 from .events import RemoteEventHub
+from .projection import SessionProjection
 from .store import MessageDeliveryConflict, PairingRejected, RemoteStore
 
 
@@ -85,23 +85,30 @@ class RemoteApplication:
         remote_store: RemoteStore,
         adapter: object,
         event_hub: RemoteEventHub,
-        project_provider,
         *,
         default_base_url: str,
-        codex_connected: bool,
+        codex_connected,
         approval_broker: RemoteApprovalBroker | None = None,
         tunnel_status_provider=None,
         tunnel_start_provider=None,
+        projection: SessionProjection | None = None,
     ) -> None:
         self.remote_store = remote_store
         self.adapter = adapter
         self.event_hub = event_hub
-        self.project_provider = project_provider
         self.default_base_url = default_base_url
         self.codex_connected = codex_connected
         self.approval_broker = approval_broker
         self.tunnel_status_provider = tunnel_status_provider
         self.tunnel_start_provider = tunnel_start_provider
+        self.projection = projection or SessionProjection(adapter)
+
+    def _codex_connected(self) -> bool:
+        return bool(
+            self.codex_connected()
+            if callable(self.codex_connected)
+            else self.codex_connected
+        )
 
     @staticmethod
     def _base_url(value: object) -> str:
@@ -121,10 +128,6 @@ class RemoteApplication:
 
     def admin_status(self) -> dict:
         base_url = self.remote_store.get_public_base_url() or self.default_base_url
-        projects = self.project_provider()
-        local_projects = [
-            project for project in projects if project.get("mode") != "external"
-        ]
         tunnel = (
             self.tunnel_status_provider()
             if self.tunnel_status_provider is not None
@@ -140,15 +143,9 @@ class RemoteApplication:
         )
         return {
             "enabled": True,
-            "codexConnected": self.codex_connected,
+            "codexConnected": self._codex_connected(),
             "baseUrl": base_url,
             "deviceCount": len(self.remote_store.list_devices()),
-            "projectSummary": {
-                "runningCount": sum(
-                    project.get("state") == "running" for project in local_projects
-                ),
-                "localCount": len(local_projects),
-            },
             "tunnel": tunnel,
         }
 
@@ -203,59 +200,20 @@ class RemoteApplication:
         summaries = [self._session_summary(session) for session in sessions]
         if not sessions:
             return summaries
-
-        read_thread = getattr(self.adapter, "read_thread", None)
-        exact_by_thread_id: dict[str, tuple[bool, object | None]] = {}
-        if callable(read_thread):
-            def read_exact(thread_id: str) -> tuple[bool, object | None]:
-                try:
-                    return True, read_thread(thread_id)
-                except CodexAdapterError:
-                    return False, None
-
-            thread_ids = [summary["threadId"] for summary in summaries]
-            with ThreadPoolExecutor(max_workers=min(8, len(thread_ids))) as executor:
-                exact_by_thread_id = dict(zip(thread_ids, executor.map(read_exact, thread_ids)))
-
-        unresolved = [
-            summary for summary in summaries
-            if not exact_by_thread_id.get(summary["threadId"], (False, None))[0]
-        ]
-        fallback_by_thread_id = {}
-        if unresolved:
-            try:
-                snapshots = self.adapter.list_threads(limit=max(50, len(sessions)))
-            except CodexAdapterError:
-                snapshots = []
-            fallback_by_thread_id = {
-                snapshot.thread_id: snapshot for snapshot in snapshots
-            }
-
-        enriched = []
+        statuses = self.projection.list_statuses(
+            [summary["threadId"] for summary in summaries]
+        )
+        unknown = {
+            "statusKnown": False,
+            "threadStatus": "",
+            "activeFlags": [],
+            "latestTurnStatus": "",
+            "latestTurnHasError": False,
+            "latestTurnHttpStatus": None,
+        }
+        enriched: list[dict] = []
         for summary in summaries:
-            exact_known, exact = exact_by_thread_id.get(
-                summary["threadId"], (False, None)
-            )
-            snapshot = exact if exact_known else fallback_by_thread_id.get(
-                summary["threadId"]
-            )
-            latest = getattr(snapshot, "latest_turn", None)
-            status_known = exact_known or latest is not None
-            enriched.append(
-                {
-                    **summary,
-                    "statusKnown": status_known,
-                    "threadStatus": getattr(snapshot, "thread_status", ""),
-                    "activeFlags": list(getattr(snapshot, "active_flags", ())),
-                    "latestTurnStatus": getattr(latest, "status", "") if latest else "",
-                    "latestTurnHasError": bool(
-                        latest and getattr(latest, "error_message", "")
-                    ),
-                    "latestTurnHttpStatus": (
-                        getattr(latest, "http_status", None) if latest else None
-                    ),
-                }
-            )
+            enriched.append({**summary, **(statuses.get(summary["threadId"]) or unknown)})
         return enriched
 
     def list_session_summaries(self) -> list[dict]:
@@ -316,6 +274,7 @@ class RemoteApplication:
             self.approval_broker.cancel_thread(session["threadId"])
         if not self.remote_store.delete_synced_session(session_id):
             raise RemoteNotFound("远程同步会话不存在。")
+        self.projection.invalidate(session["threadId"])
 
     def list_approvals(self) -> list[dict]:
         if self.approval_broker is None:
@@ -367,7 +326,7 @@ class RemoteApplication:
         session = self._session(session_id)
         bounded_limit = max(1, min(int(turn_limit), 30))
         try:
-            detail = self.adapter.read_thread_detail(
+            detail = self.projection.read(
                 session["threadId"], turn_limit=bounded_limit
             )
         except CodexAdapterError as error:
@@ -437,6 +396,7 @@ class RemoteApplication:
             "threadId": session["threadId"],
             "clientMessageId": client_message_id,
         }
+        self.projection.invalidate(session["threadId"])
         if client_message_id:
             self.remote_store.complete_message_delivery(
                 session_id=session_id,
@@ -444,16 +404,3 @@ class RemoteApplication:
                 result=response,
             )
         return response
-
-    def list_projects(self) -> list[dict]:
-        projects = self.project_provider()
-        return [
-            {
-                "id": project.get("id", ""),
-                "name": project.get("name", ""),
-                "mode": project.get("mode", "local"),
-                "state": project.get("state", "unknown"),
-                "stateLabel": project.get("stateLabel", "未知"),
-            }
-            for project in projects
-        ]

@@ -28,9 +28,9 @@ class RemoteUiContractTests(unittest.TestCase):
         self.assertIn(".composer-tools", stylesheet)
         self.assertIn("@media (prefers-reduced-motion: reduce)", stylesheet)
         self.assertIn("remote.css?v=27", html)
-        self.assertIn("remote.js?v=28", html)
+        self.assertIn("remote.js?v=30", html)
         self.assertIn("remote.css?v=27", worker)
-        self.assertIn("remote.js?v=28", worker)
+        self.assertIn("remote.js?v=30", worker)
 
     def test_mobile_session_navigation_does_not_open_the_keyboard(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
@@ -183,7 +183,7 @@ setTimeout(() => {
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         scheduler_source = script[
             script.index("function scheduleConversationRefresh"):
-            script.index("function startConversationHeartbeat")
+            script.index("function startSessionStatusHeartbeat")
         ]
         event_source = script[
             script.index("function scheduleEventRefresh"):
@@ -195,13 +195,13 @@ setTimeout(() => {
         self.assertIn("scheduleConversationRefresh(60)", event_source)
         self.assertNotIn("clearTimeout(state.conversationRefreshTimer)", event_source)
         self.assertNotIn("cancelConversationRefresh()", event_source)
-        self.assertIn("remote-worker-reloaded-v34", script)
+        self.assertIn("remote-worker-reloaded-v35", script)
 
     def test_conversation_refresh_timer_can_be_cancelled_and_rescheduled(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         timer_source = script[
             script.index("  function cancelConversationRefresh"):
-            script.index("\n  function startConversationHeartbeat", script.index("  function cancelConversationRefresh"))
+            script.index("\n  function startSessionStatusHeartbeat", script.index("  function cancelConversationRefresh"))
         ]
         node_script = r"""
 const vm = require('vm');
@@ -480,7 +480,8 @@ vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.setOverr
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
         server = (ROOT / "app.py").read_text(encoding="utf-8")
 
-        self.assertIn('/assets/vendor/jsQR.js?v=1', html)
+        self.assertNotIn('src="/assets/vendor/jsQR.js?v=1"', html)
+        self.assertIn("loadScriptOnce('/assets/vendor/jsQR.js?v=1', 'jsQR')", script)
         self.assertIn("async function createQrDetector", script)
         self.assertIn("typeof window.jsQR === 'function'", script)
         self.assertIn("window.jsQR(image.data", script)
@@ -623,8 +624,8 @@ for (const item of cases) {
 
         self.assertIn("height: clamp(", stylesheet)
         self.assertIn("overflow-y: auto", stylesheet)
-        self.assertIn("ACTIVE_REFRESH_MS = 1200", script)
-        self.assertIn("IDLE_REFRESH_MS = 5000", script)
+        self.assertIn("ACTIVE_REFRESH_MS = 2500", script)
+        self.assertIn("IDLE_REFRESH_MS = 8000", script)
         self.assertIn("document.visibilityState", script)
         self.assertIn("followTail", script)
         self.assertIn("scrollToLatest", script)
@@ -955,6 +956,9 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
         self.assertIn("conversationRequests: new Set()", script)
         self.assertIn("function restoreCachedConversation(session)", script)
         self.assertIn("state.conversationCache.set(sessionId", script)
+        self.assertIn("indexedDB.open(SNAPSHOT_DB_NAME, 1)", script)
+        self.assertIn("await readPersistedConversation(sessionId)", script)
+        self.assertIn("persistConversation(sessionId, cacheEntry)", script)
         self.assertNotIn("conversationRefreshInFlight: false", script)
 
     def test_session_statuses_periodically_resync_and_recover_event_gaps(self) -> None:
@@ -1060,11 +1064,12 @@ vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.poll = p
         server = (ROOT / "app.py").read_text(encoding="utf-8")
         self.assertIn('/remote.css?v=27', script)
         self.assertIn('href="/remote.css?v=27"', html)
-        self.assertIn('/remote.js?v=28', script)
-        self.assertIn("fetch(event.request, { cache: 'no-store' })", script)
+        self.assertIn('/remote.js?v=30', script)
+        self.assertIn("staleWhileRevalidate", script)
+        self.assertNotIn("cache: 'no-store'", script)
         self.assertIn('"/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache")', server)
         self.assertIn('"/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache")', server)
-        self.assertIn('/assets/vendor/jsQR.js?v=1', script)
+        self.assertNotIn("'/assets/vendor/jsQR.js?v=1',", script)
 
     def test_browser_renders_conversation_text_without_html_injection(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")

@@ -36,6 +36,11 @@ class FakeStore:
         self.prune_calls.append(now)
 
 
+class SleepingStore(FakeStore):
+    def next_check_at(self) -> str | None:
+        return "2099-01-01T00:00:00Z"
+
+
 class SchedulerTests(unittest.TestCase):
     def test_start_is_idempotent_and_stop_joins_worker(self) -> None:
         service = FakeService()
@@ -75,6 +80,20 @@ class SchedulerTests(unittest.TestCase):
         scheduler.stop(timeout=1)
 
         self.assertEqual(store.prune_calls, ["2026-07-31T06:00:00Z"])
+
+    def test_wake_interrupts_a_long_idle_wait(self) -> None:
+        service = FakeService()
+        scheduler = WatchdogScheduler(
+            service,
+            store=SleepingStore(),
+            poll_seconds=60,
+            now_provider=lambda: "2026-08-24T00:00:00Z",
+        )
+        scheduler.start()
+        self.assertTrue(service.wait_for_calls(1, timeout=1))
+        scheduler.wake()
+        self.assertTrue(service.wait_for_calls(2, timeout=1))
+        scheduler.stop(timeout=1)
 
 
 if __name__ == "__main__":

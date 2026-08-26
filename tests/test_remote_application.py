@@ -105,17 +105,6 @@ class RemoteApplicationTests(unittest.TestCase):
             remote_store,
             self.adapter,
             self.hub,
-            lambda: [
-                {
-                    "id": "project-1",
-                    "name": "Invoice",
-                    "mode": "local",
-                    "state": "running",
-                    "stateLabel": "运行中",
-                    "path": "C:\\private",
-                    "startCommand": "secret command",
-                }
-            ],
             default_base_url="http://192.0.2.10:8766",
             codex_connected=True,
             approval_broker=self.approvals,
@@ -228,9 +217,7 @@ class RemoteApplicationTests(unittest.TestCase):
 
         self.assertTrue(status["tunnel"]["running"])
         self.assertEqual(status["tunnel"]["provider"], "frp")
-        self.assertEqual(
-            status["projectSummary"], {"runningCount": 1, "localCount": 1}
-        )
+        self.assertNotIn("projectSummary", status)
 
     def test_session_detail_is_limited_to_recent_turns(self) -> None:
         synced = self.application.create_synced_session(
@@ -242,7 +229,11 @@ class RemoteApplicationTests(unittest.TestCase):
         self.assertEqual(self.adapter.last_turn_limit, 12)
 
         self.application.read_session(synced["id"], turn_limit=6)
-        self.assertEqual(self.adapter.last_turn_limit, 6)
+        self.assertEqual(
+            self.adapter.last_turn_limit,
+            12,
+            "a smaller view should reuse the cached projection",
+        )
 
     def test_local_sessions_can_be_selected_without_entering_monitoring_catalog(self) -> None:
         local = self.application.list_local_sessions(limit=50)
@@ -399,13 +390,6 @@ class RemoteApplicationTests(unittest.TestCase):
 
         self.assertEqual(self.approval_decisions, ["decline"])
         self.assertEqual(self.application.list_approvals(), [])
-
-    def test_project_overview_omits_paths_commands_and_urls(self) -> None:
-        projects = self.application.list_projects()
-
-        self.assertEqual(projects[0]["state"], "running")
-        self.assertNotIn("path", projects[0])
-        self.assertNotIn("startCommand", projects[0])
 
     def test_event_hub_only_forwards_registered_thread_metadata(self) -> None:
         self.hub.publish(

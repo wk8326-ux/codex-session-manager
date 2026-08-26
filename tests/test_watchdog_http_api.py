@@ -1,6 +1,6 @@
 import unittest
 
-from watchdog.http_api import WatchdogHttpApi
+from watchdog.router import WatchdogHttpApi
 
 
 class FakeService:

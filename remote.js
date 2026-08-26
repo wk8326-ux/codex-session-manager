@@ -5,6 +5,8 @@
   const THEME_KEY = 'localhost-project-console.theme';
   const DRAWER_STATE_KEY = 'localhost-project-console.remote-drawer-open';
   const SCREENSHOT_SHORTCUT_KEY = 'localhost-project-console.remote-screenshot-shortcut';
+  const SNAPSHOT_DB_NAME = 'codex-session-manager';
+  const SNAPSHOT_STORE_NAME = 'conversation-snapshots';
   const DEFAULT_SCREENSHOT_SHORTCUT = Object.freeze({
     code: 'KeyS',
     ctrlKey: false,
@@ -12,11 +14,10 @@
     shiftKey: true,
     metaKey: false,
   });
-  const ACTIVE_REFRESH_MS = 1200;
-  const IDLE_REFRESH_MS = 5000;
-  const HIDDEN_REFRESH_MS = 12000;
-  const CONVERSATION_HEARTBEAT_MS = 10000;
-  const SESSION_STATUS_REFRESH_MS = 30000;
+  const ACTIVE_REFRESH_MS = 2500;
+  const IDLE_REFRESH_MS = 8000;
+  const HIDDEN_REFRESH_MS = 30000;
+  const SESSION_STATUS_REFRESH_MS = 45000;
   const LIVE_ACTIVITY_GRACE_MS = 180000;
   const INITIAL_LIVE_TURN_MAX_AGE_MS = 7200000;
   const CONNECTION_FAILURE_THRESHOLD = 3;
@@ -59,7 +60,6 @@
     conversationRefreshTimer: 0,
     conversationRefreshDueAt: 0,
     conversationRefreshQueued: false,
-    conversationHeartbeatTimer: 0,
     conversationLoadingTimer: 0,
     conversationSelectionVersion: 0,
     conversationCache: new Map(),
@@ -454,6 +454,10 @@
       } catch {}
     }
 
+    if (typeof window.jsQR !== 'function') {
+      await loadScriptOnce('/assets/vendor/jsQR.js?v=1', 'jsQR');
+    }
+
     if (typeof window.jsQR === 'function') {
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -479,6 +483,26 @@
     }
 
     throw new Error('当前浏览器缺少二维码识别组件，请粘贴电脑端的配对链接。');
+  }
+
+  function loadScriptOnce(source, globalName) {
+    if (window[globalName]) return Promise.resolve();
+    const existing = document.querySelector(`script[data-lazy-source="${source}"]`);
+    if (existing) {
+      return new Promise((resolve, reject) => {
+        existing.addEventListener('load', resolve, { once: true });
+        existing.addEventListener('error', reject, { once: true });
+      });
+    }
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = source;
+      script.async = true;
+      script.dataset.lazySource = source;
+      script.addEventListener('load', resolve, { once: true });
+      script.addEventListener('error', () => reject(new Error('二维码识别组件加载失败。')), { once: true });
+      document.head.append(script);
+    });
   }
 
   async function startQrScanner() {
@@ -1689,14 +1713,6 @@
     }, normalizedDelay);
   }
 
-  function startConversationHeartbeat() {
-    if (state.conversationHeartbeatTimer) return;
-    state.conversationHeartbeatTimer = setInterval(() => {
-      if (document.visibilityState === 'hidden' || !state.selectedSessionId) return;
-      refreshSelectedSession();
-    }, CONVERSATION_HEARTBEAT_MS);
-  }
-
   function startSessionStatusHeartbeat() {
     if (state.sessionStatusTimer) return;
     state.sessionStatusTimer = setInterval(() => {
@@ -1713,6 +1729,59 @@
     state.lastConversationActivityAt = cached.lastConversationActivityAt;
     renderConversation(session, cached.conversation);
     return true;
+  }
+
+  function openSnapshotDatabase() {
+    if (!('indexedDB' in window)) return Promise.resolve(null);
+    if (openSnapshotDatabase.promise) return openSnapshotDatabase.promise;
+    openSnapshotDatabase.promise = new Promise(resolve => {
+      const request = indexedDB.open(SNAPSHOT_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(SNAPSHOT_STORE_NAME)) {
+          request.result.createObjectStore(SNAPSHOT_STORE_NAME, { keyPath: 'sessionId' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+      request.onblocked = () => resolve(null);
+    });
+    return openSnapshotDatabase.promise;
+  }
+
+  async function readPersistedConversation(sessionId) {
+    const database = await openSnapshotDatabase();
+    if (!database) return null;
+    return new Promise(resolve => {
+      const request = database.transaction(SNAPSHOT_STORE_NAME, 'readonly')
+        .objectStore(SNAPSHOT_STORE_NAME).get(sessionId);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  }
+
+  async function persistConversation(sessionId, entry) {
+    const database = await openSnapshotDatabase();
+    if (!database) return;
+    try {
+      const transaction = database.transaction(SNAPSHOT_STORE_NAME, 'readwrite');
+      transaction.objectStore(SNAPSHOT_STORE_NAME).put({ sessionId, ...entry });
+    } catch {}
+  }
+
+  async function prunePersistedConversations(activeSessionIds) {
+    const database = await openSnapshotDatabase();
+    if (!database) return;
+    try {
+      const transaction = database.transaction(SNAPSHOT_STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(SNAPSHOT_STORE_NAME);
+      const request = store.openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (!activeSessionIds.has(cursor.key)) cursor.delete();
+        cursor.continue();
+      };
+    } catch {}
   }
 
   async function refreshSelectedSession({ force = false, quiet = true } = {}) {
@@ -1734,12 +1803,16 @@
         !previous?.signature && conversationLooksRecentlyActive(result.conversation)
       ) ? Date.now() : (previous?.lastConversationActivityAt || 0);
       const lastUpdatedAt = Date.now();
-      state.conversationCache.set(sessionId, {
+      const cacheEntry = {
         conversation: result.conversation,
         signature,
         lastUpdatedAt,
         lastConversationActivityAt,
-      });
+      };
+      state.conversationCache.set(sessionId, cacheEntry);
+      if (!previous || previous.signature !== signature) {
+        persistConversation(sessionId, cacheEntry);
+      }
       const outgoingChanged = reconcileOutgoingMessages(
         result.conversation,
         sessionId,
@@ -1807,12 +1880,23 @@
     renderApprovals();
     $('#session-select').setAttribute('aria-busy', 'true');
     const session = state.sessions.find(item => item.id === sessionId);
-    const restored = restoreCachedConversation(session);
+    let restored = restoreCachedConversation(session);
+    const selectionVersion = state.conversationSelectionVersion;
+    if (!restored) {
+      const persisted = await readPersistedConversation(sessionId);
+      if (
+        persisted?.conversation
+        && selectionVersion === state.conversationSelectionVersion
+        && sessionId === state.selectedSessionId
+      ) {
+        state.conversationCache.set(sessionId, persisted);
+        restored = restoreCachedConversation(session);
+      }
+    }
     $('#message-input').disabled = !restored || state.messageSending;
     $('#send-button').disabled = !restored || state.messageSending;
     $('#attach-image').disabled = !restored || state.messageSending;
     $('#capture-screen').disabled = !restored || state.messageSending;
-    const selectionVersion = state.conversationSelectionVersion;
     if (!restored) {
       state.conversationLoadingTimer = setTimeout(() => {
         if (selectionVersion === state.conversationSelectionVersion) renderConversationLoading(session);
@@ -1829,7 +1913,6 @@
 
   function renderRemoteAccess(status) {
     state.adminStatus = status;
-    window.consoleSidebar?.setProjectSummary(status?.projectSummary);
     const tunnel = status?.tunnel || {};
     const labels = {
       running: ['FRP 隧道运行中', `客户端进程 ${tunnel.pid || '已连接'} · 随控制台启动和关闭`],
@@ -1929,6 +2012,7 @@
     for (const sessionId of state.conversationCache.keys()) {
       if (!activeSessionIds.has(sessionId)) state.conversationCache.delete(sessionId);
     }
+    prunePersistedConversations(activeSessionIds);
     for (const threadId of state.sessionStatusOverrides.keys()) {
       if (!activeThreadIds.has(threadId)) state.sessionStatusOverrides.delete(threadId);
     }
@@ -2635,7 +2719,6 @@
     try {
       await loadWorkspaceData();
       pollEvents();
-      startConversationHeartbeat();
       startSessionStatusHeartbeat();
     } catch (error) {
       if (!state.admin && error.authorizationFailed) showPairScreen(error.message);
@@ -2700,7 +2783,7 @@
     if ('serviceWorker' in navigator && window.isSecureContext) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (state.qrStream || state.pairingSecret || state.pendingToken) return;
-        const reloadKey = 'codex-session-manager.remote-worker-reloaded-v34';
+        const reloadKey = 'codex-session-manager.remote-worker-reloaded-v35';
         if (sessionStorage.getItem(reloadKey)) return;
         sessionStorage.setItem(reloadKey, '1');
         location.reload();

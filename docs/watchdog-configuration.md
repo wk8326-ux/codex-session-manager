@@ -28,14 +28,12 @@ python scripts/probe_codex_app_server.py --list --limit 5
 python app.py
 ```
 
-Windows 也可以双击 `start-console.bat`。随后访问：
+Windows 也可以双击 `start-session-manager.bat`。随后访问：
 
 - 会话管理首页：`http://127.0.0.1:8767/`
 - 会话监控：`http://127.0.0.1:8767/watchdog`
 
-调度器随控制台进程启动。手工运行时，正常关闭终端或中断 `app.py` 后，HTTP 服务、调度线程和由控制台创建的 Codex App Server 子进程会一并关闭。
-
-需要后台常驻时，可以双击仓库根目录的 `install-system-startup.bat`。它会为当前 Windows 用户注册登录启动、异常重启的计划任务；使用方法和卸载命令见 README 的“Windows 后台常驻”。
+调度器随会话管理进程启动。手工运行时，正常关闭终端或中断 `app.py` 后，HTTP 服务、调度线程和由会话管理创建的 Codex App Server 子进程会一并关闭。需要常驻时，可把 `start-session-manager.bat` 作为普通项目登记到 Local Project Console；本仓库目前不附带系统启动计划任务安装器。
 
 ## 添加监控渠道
 
@@ -96,8 +94,8 @@ python scripts/probe_codex_app_server.py --thread-id <thread-uuid>
 - 全局默认周期：15 分钟。
 - 单会话周期：留空时继承全局默认值。
 - 最小周期：5 分钟，低于该值会被拒绝。
-- 页面状态和会话摘要每 15 秒轻量刷新一次；这不是渠道探测周期。
-- 调度器每秒检查是否有“到期”的已启用会话，但只对到期会话执行实际探测。
+- 页面状态和会话摘要独立于渠道探测周期；运行态使用事件和自适应校准。
+- 调度器睡眠到最早的 `nextCheckAt`，最长每 60 秒重新核对一次；配置变更会立即唤醒。
 
 全局设置可通过 API 查看或修改：
 
@@ -312,7 +310,7 @@ Invoke-RestMethod http://127.0.0.1:8767/api/watchdog/status
 
 - `schedulerRunning`：调度线程是否存活。
 - `schedulerEnabled`：是否允许执行到期任务。
-- `codexConnected`：控制台启动时是否成功连接 Codex App Server。
+- `codexConnected`：当前是否连接 Codex App Server；断开和重连会动态更新。
 - `resumeActionsEnabled`：是否允许发送续跑提示词。
 - `resumeDispatchMode`：`desktop_bridge` 或 `direct_app_server`。
 - `desktopBridge`：待领取、已领取、运行中、已结束数量和最近领取时间。

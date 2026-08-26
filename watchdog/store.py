@@ -7,6 +7,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from .channels import ProbeResult
+from .row_mapping import row_to_dict
+from .schema import initialize_schema
 
 
 class WatchdogStoreError(RuntimeError):
@@ -84,225 +86,15 @@ class WatchdogStore:
         connection = sqlite3.connect(self._path, timeout=5)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
         return _DatabaseConnection(connection)
 
     def initialize(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS schema_version (
-                    version INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS watchdog_settings (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    default_interval_minutes INTEGER NOT NULL DEFAULT 15,
-                    minimum_interval_minutes INTEGER NOT NULL DEFAULT 5,
-                    record_retention_days INTEGER NOT NULL DEFAULT 90,
-                    record_limit INTEGER NOT NULL DEFAULT 10000,
-                    scheduler_enabled INTEGER NOT NULL DEFAULT 1,
-                    resume_actions_enabled INTEGER NOT NULL DEFAULT 0,
-                    resume_dispatch_mode TEXT NOT NULL DEFAULT 'direct_app_server'
-                );
-                CREATE TABLE IF NOT EXISTS api_channels (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    base_url TEXT NOT NULL,
-                    probe_url_override TEXT,
-                    model TEXT NOT NULL,
-                    api_key_ciphertext BLOB NOT NULL,
-                    timeout_seconds INTEGER NOT NULL DEFAULT 15,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    last_probe_status TEXT,
-                    last_http_status INTEGER,
-                    last_probe_detail TEXT,
-                    last_checked_at TEXT,
-                    created_at TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL DEFAULT ''
-                );
-                CREATE TABLE IF NOT EXISTS monitored_sessions (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    thread_id TEXT NOT NULL UNIQUE,
-                    host_kind TEXT NOT NULL DEFAULT 'local',
-                    channel_id TEXT NOT NULL,
-                    interval_minutes INTEGER CHECK (interval_minutes IS NULL OR interval_minutes >= 5),
-                    resume_prompt TEXT NOT NULL,
-                    unattended_approvals_enabled INTEGER NOT NULL DEFAULT 0,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    last_session_state TEXT,
-                    last_turn_id TEXT,
-                    last_check_result TEXT,
-                    last_checked_at TEXT,
-                    next_check_at TEXT,
-                    created_at TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL DEFAULT '',
-                    FOREIGN KEY (channel_id) REFERENCES api_channels(id)
-                );
-                CREATE TABLE IF NOT EXISTS recovery_rules (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    scope TEXT NOT NULL,
-                    match_type TEXT NOT NULL,
-                    pattern TEXT NOT NULL,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    description TEXT NOT NULL DEFAULT '',
-                    is_builtin INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS recovery_incidents (
-                    id TEXT PRIMARY KEY,
-                    fingerprint TEXT NOT NULL UNIQUE,
-                    session_id TEXT NOT NULL,
-                    turn_id TEXT NOT NULL,
-                    error_signature TEXT NOT NULL,
-                    first_seen_at TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'candidate',
-                    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
-                    last_attempt_at TEXT,
-                    resolved_at TEXT,
-                    detail TEXT NOT NULL DEFAULT '',
-                    resumed_turn_id TEXT,
-                    FOREIGN KEY (session_id) REFERENCES monitored_sessions(id)
-                );
-                CREATE TABLE IF NOT EXISTS monitor_runs (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT,
-                    channel_id TEXT,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    channel_status TEXT,
-                    http_status INTEGER,
-                    session_state TEXT,
-                    turn_id TEXT,
-                    resumed_turn_id TEXT,
-                    error_category TEXT,
-                    decision TEXT NOT NULL,
-                    resume_attempt INTEGER,
-                    duration_ms INTEGER,
-                    detail_sanitized TEXT NOT NULL DEFAULT '',
-                    FOREIGN KEY (session_id) REFERENCES monitored_sessions(id),
-                    FOREIGN KEY (channel_id) REFERENCES api_channels(id)
-                );
-                CREATE TABLE IF NOT EXISTS desktop_bridge_jobs (
-                    id TEXT PRIMARY KEY,
-                    incident_fingerprint TEXT NOT NULL,
-                    incident_attempt INTEGER NOT NULL,
-                    monitor_run_id TEXT NOT NULL UNIQUE,
-                    session_id TEXT NOT NULL,
-                    thread_id TEXT NOT NULL,
-                    prompt TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    runner_id TEXT,
-                    lease_token TEXT,
-                    lease_expires_at TEXT,
-                    claim_attempt_count INTEGER NOT NULL DEFAULT 0,
-                    resumed_turn_id TEXT,
-                    detail TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    claimed_at TEXT,
-                    started_at TEXT,
-                    finished_at TEXT,
-                    UNIQUE (incident_fingerprint, incident_attempt),
-                    FOREIGN KEY (incident_fingerprint)
-                        REFERENCES recovery_incidents(fingerprint),
-                    FOREIGN KEY (monitor_run_id) REFERENCES monitor_runs(id),
-                    FOREIGN KEY (session_id) REFERENCES monitored_sessions(id)
-                );
-                CREATE INDEX IF NOT EXISTS monitored_sessions_due
-                    ON monitored_sessions(enabled, next_check_at);
-                CREATE INDEX IF NOT EXISTS monitor_runs_started
-                    ON monitor_runs(started_at);
-                CREATE INDEX IF NOT EXISTS desktop_bridge_jobs_pending
-                    ON desktop_bridge_jobs(status, created_at);
-                """
-            )
-            self._ensure_column(
-                connection,
-                "monitored_sessions",
-                "unattended_approvals_enabled",
-                "INTEGER NOT NULL DEFAULT 0",
-            )
-            self._ensure_column(
-                connection,
-                "recovery_incidents",
-                "resumed_turn_id",
-                "TEXT",
-            )
-            self._ensure_column(
-                connection,
-                "monitor_runs",
-                "resumed_turn_id",
-                "TEXT",
-            )
-            self._ensure_column(
-                connection,
-                "watchdog_settings",
-                "resume_dispatch_mode",
-                "TEXT NOT NULL DEFAULT 'direct_app_server'",
-            )
-            self._ensure_column(
-                connection,
-                "recovery_rules",
-                "is_builtin",
-                "INTEGER NOT NULL DEFAULT 0",
-            )
-            if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
-                connection.execute("INSERT INTO schema_version(version) VALUES (3)")
-            else:
-                connection.execute("UPDATE schema_version SET version = 3")
-            connection.execute(
-                """INSERT OR IGNORE INTO watchdog_settings(
-                    id, default_interval_minutes, minimum_interval_minutes,
-                    record_retention_days, record_limit, scheduler_enabled,
-                    resume_actions_enabled
-                ) VALUES (1, 15, 5, 90, 10000, 1, 0)"""
-            )
-            for status in ("429", "502", "503", "504"):
-                connection.execute(
-                    """INSERT OR IGNORE INTO recovery_rules(
-                        id, name, scope, match_type, pattern, enabled, description,
-                        is_builtin
-                    ) VALUES (?, ?, 'channel', 'http_status', ?, 1, ?, 1)""",
-                    (f"http-{status}", f"HTTP {status}", status, "Built-in recoverable status"),
-                )
-            for pattern, description in (
-                ("timeout", "Request timed out"),
-                ("connection_reset", "Connection reset"),
-            ):
-                connection.execute(
-                    """INSERT OR IGNORE INTO recovery_rules(
-                        id, name, scope, match_type, pattern, enabled, description,
-                        is_builtin
-                    ) VALUES (?, ?, 'session_turn', 'error_kind', ?, 1, ?, 1)""",
-                    (f"builtin-{pattern}", pattern, pattern, description),
-                )
-            connection.execute(
-                """UPDATE recovery_rules SET is_builtin = 1
-                   WHERE id IN (
-                       'http-429', 'http-502', 'http-503', 'http-504',
-                       'builtin-timeout', 'builtin-connection_reset'
-                   )"""
-            )
+            initialize_schema(connection)
             self._cancel_unstarted_desktop_bridge_jobs(
                 connection,
                 datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            )
-
-    @staticmethod
-    def _ensure_column(
-        connection: sqlite3.Connection,
-        table: str,
-        column: str,
-        definition: str,
-    ) -> None:
-        existing = {
-            row[1] for row in connection.execute(f"PRAGMA table_info({table})")
-        }
-        if column not in existing:
-            connection.execute(
-                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
             )
 
     @staticmethod
@@ -311,56 +103,7 @@ class WatchdogStore:
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict | None:
-        if row is None:
-            return None
-        values = dict(row)
-        aliases = {
-            "base_url": "baseUrl", "probe_url_override": "probeUrlOverride",
-            "api_key_ciphertext": "encryptedKey", "timeout_seconds": "timeoutSeconds",
-            "last_probe_status": "lastProbeStatus", "last_http_status": "lastHttpStatus",
-            "last_probe_detail": "lastProbeDetail", "last_checked_at": "lastCheckedAt",
-            "created_at": "createdAt", "updated_at": "updatedAt", "thread_id": "threadId",
-            "host_kind": "hostKind", "channel_id": "channelId",
-            "interval_minutes": "intervalMinutes", "resume_prompt": "resumePrompt",
-            "unattended_approvals_enabled": "unattendedApprovalsEnabled",
-            "last_session_state": "lastSessionState", "last_turn_id": "lastTurnId",
-            "last_check_result": "lastCheckResult", "next_check_at": "nextCheckAt",
-            "match_type": "matchType", "first_seen_at": "firstSeenAt",
-            "error_signature": "errorSignature", "attempt_count": "attemptCount",
-            "last_attempt_at": "lastAttemptAt", "resolved_at": "resolvedAt",
-            "session_id": "sessionId", "started_at": "startedAt", "finished_at": "finishedAt",
-            "channel_status": "channelStatus", "http_status": "httpStatus",
-            "session_state": "sessionState", "turn_id": "turnId", "error_category": "errorCategory",
-            "resumed_turn_id": "resumedTurnId",
-            "resume_attempt": "resumeAttempt", "duration_ms": "durationMs",
-            "detail_sanitized": "detailSanitized", "default_interval_minutes": "defaultIntervalMinutes",
-            "minimum_interval_minutes": "minimumIntervalMinutes", "record_retention_days": "recordRetentionDays",
-            "record_limit": "recordLimit", "scheduler_enabled": "schedulerEnabled",
-            "resume_actions_enabled": "resumeActionsEnabled",
-            "resume_dispatch_mode": "resumeDispatchMode",
-            "is_builtin": "builtIn",
-            "incident_fingerprint": "incidentFingerprint",
-            "incident_attempt": "incidentAttempt",
-            "monitor_run_id": "monitorRunId",
-            "runner_id": "runnerId",
-            "lease_token": "leaseToken",
-            "lease_expires_at": "leaseExpiresAt",
-            "claim_attempt_count": "claimAttemptCount",
-            "claimed_at": "claimedAt",
-        }
-        for source, target in aliases.items():
-            if source in values:
-                values[target] = values.pop(source)
-        for key in (
-            "enabled",
-            "schedulerEnabled",
-            "resumeActionsEnabled",
-            "unattendedApprovalsEnabled",
-            "builtIn",
-        ):
-            if key in values:
-                values[key] = bool(values[key])
-        return values
+        return row_to_dict(row)
 
     def _one(self, query: str, params: tuple = ()) -> dict | None:
         with self._connect() as connection:
@@ -630,6 +373,15 @@ class WatchdogStore:
     def list_sessions(self) -> list[dict]:
         with self._connect() as connection:
             return [self._row(row) for row in connection.execute("SELECT * FROM monitored_sessions ORDER BY created_at, name")]
+
+    def next_check_at(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT MIN(next_check_at) AS next_check_at
+                   FROM monitored_sessions
+                   WHERE enabled = 1 AND next_check_at IS NOT NULL"""
+            ).fetchone()
+        return str(row["next_check_at"]) if row and row["next_check_at"] else None
 
     def get_session(self, session_id: str) -> dict | None:
         return self._one("SELECT * FROM monitored_sessions WHERE id = ?", (session_id,))

@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from runtime_paths import APP_VERSION, ApplicationPaths
+from static_assets import StaticAssetCache
 
 
 SOURCE_ROOT = Path(__file__).resolve().parent
@@ -31,6 +32,9 @@ WATCHDOG_API: object | None = None
 REMOTE_ADMIN_API: object | None = None
 REMOTE_HTTP_API: object | None = None
 RELAY_SETUP_API: object | None = None
+CODEX_RUNTIME: object | None = None
+STARTUP_STATE = {"phase": "starting", "error": ""}
+STATIC_ASSETS = StaticAssetCache()
 
 # Patchable in tests; production imports the concrete client lazily.
 StdioJsonRpcClient = None
@@ -100,38 +104,11 @@ class SessionRuntime:
     api: object
     scheduler: object
     adapter: object
+    projection: object
     remote_admin_api: object
     remote_http_api: object
     tunnel: object
     relay_setup_api: object
-
-
-class UnavailableCodexAdapter:
-    def __init__(self, error_type: type[Exception] = RuntimeError) -> None:
-        self._error_type = error_type
-
-    def _unavailable(self) -> None:
-        raise self._error_type("Codex App Server is unavailable")
-
-    def read_thread(self, thread_id: str):
-        self._unavailable()
-
-    def list_threads(self, limit: int = 5):
-        self._unavailable()
-
-    def start_turn(self, thread_id: str, prompt: str) -> str:
-        self._unavailable()
-
-    def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
-        self._unavailable()
-
-    def send_message(
-        self, thread_id: str, prompt: str, image_url: str | None = None
-    ) -> dict:
-        self._unavailable()
-
-    def close(self) -> None:
-        return
 
 
 def default_remote_base_url() -> str:
@@ -152,18 +129,16 @@ def create_runtime(paths: ApplicationPaths) -> SessionRuntime:
     from remote.approvals import RemoteApprovalBroker
     from remote.events import RemoteEventHub
     from remote.native_capture import FlameshotRegionCapture
+    from remote.projection import SessionProjection
     from remote.router import AdminRemoteApi, RemoteHttpApi
     from remote.setup import RelaySetupApi, RelaySetupService
     from remote.store import RemoteStore
-    from remote.tunnel import FrpTunnelManager
+    from remote.tunnel import FrpTunnelManager, TunnelSupervisor
     from watchdog.application import WatchdogApplication
     from watchdog.channels import probe_channel
-    from watchdog.codex_adapter import (
-        CodexAdapterError,
-        CodexAppServerAdapter,
-        StdioJsonRpcClient as DefaultStdioJsonRpcClient,
-    )
-    from watchdog.http_api import WatchdogHttpApi
+    from watchdog.codex_adapter import StdioJsonRpcClient as DefaultStdioJsonRpcClient
+    from watchdog.codex_runtime import CodexRuntime
+    from watchdog.router import WatchdogHttpApi
     from watchdog.scheduler import WatchdogScheduler
     from watchdog.secrets import DpapiSecretStore
     from watchdog.service import WatchdogService
@@ -176,42 +151,43 @@ def create_runtime(paths: ApplicationPaths) -> SessionRuntime:
     secrets = DpapiSecretStore(entropy=b"localhost-project-console/watchdog/v1")
     remote_store = RemoteStore(paths.database_path)
     remote_store.initialize()
-    event_hub = RemoteEventHub(
-        lambda: {session["threadId"] for session in remote_store.list_synced_sessions()}
-    )
+    event_hub = RemoteEventHub(remote_store.synced_thread_ids)
     approval_broker = RemoteApprovalBroker(
-        lambda: {
-            session["threadId"] for session in remote_store.list_synced_sessions()
-        },
+        remote_store.synced_thread_ids,
         publish_event=event_hub.publish,
         record_audit=remote_store.record_approval_audit,
     )
-    codex_connected = True
-    try:
-        client_factory = StdioJsonRpcClient or DefaultStdioJsonRpcClient
-        client = client_factory(
-            approval_policy=lambda thread_id, _turn_id: bool(
-                store.get_settings()["resumeActionsEnabled"]
-                and store.unattended_approvals_enabled(thread_id)
-            ),
-            approval_broker=approval_broker,
-        )
-        adapter: object = CodexAppServerAdapter(client)
-    except Exception:
-        adapter = UnavailableCodexAdapter(CodexAdapterError)
-        codex_connected = False
+    adapter: object = CodexRuntime(
+        client_factory=StdioJsonRpcClient or DefaultStdioJsonRpcClient,
+        approval_policy=lambda thread_id, _turn_id: bool(
+            store.get_settings()["resumeActionsEnabled"]
+            and store.unattended_approvals_enabled(thread_id)
+        ),
+        approval_broker=approval_broker,
+    )
+    projection = SessionProjection(
+        adapter,
+        generation_provider=lambda: adapter.status()["generation"],
+    )
 
     monitor = WatchdogService(store, secrets, probe_channel, adapter)
-    tunnel = FrpTunnelManager.from_runtime_path(paths.runtime_root)
-    if codex_connected:
+    tunnel = TunnelSupervisor(
+        FrpTunnelManager.from_runtime_path(paths.runtime_root),
+        local_url=f"http://127.0.0.1:{REMOTE_PORT}/api/remote/health",
+        public_url_provider=remote_store.get_public_base_url,
+    )
+    def handle_event(method: str, params: dict) -> None:
+        thread_id = params.get("threadId")
+        if not isinstance(thread_id, str):
+            thread = params.get("thread")
+            thread_id = thread.get("id") if isinstance(thread, dict) else ""
+        projection.invalidate(thread_id if isinstance(thread_id, str) else "")
+        try:
+            monitor.handle_app_server_event(method, params)
+        finally:
+            event_hub.publish(method, params)
 
-        def handle_event(method: str, params: dict) -> None:
-            try:
-                monitor.handle_app_server_event(method, params)
-            finally:
-                event_hub.publish(method, params)
-
-        client.set_event_handler(handle_event)
+    adapter.set_event_handler(handle_event)
 
     scheduler = WatchdogScheduler(monitor, store=store)
     application = WatchdogApplication(
@@ -221,18 +197,18 @@ def create_runtime(paths: ApplicationPaths) -> SessionRuntime:
         adapter,
         monitor,
         scheduler,
-        codex_connected=codex_connected,
+        codex_connected=adapter.is_connected,
     )
     remote_application = RemoteApplication(
         remote_store,
         adapter,
         event_hub,
-        lambda: [],
         default_base_url=default_remote_base_url(),
-        codex_connected=codex_connected,
+        codex_connected=adapter.is_connected,
         approval_broker=approval_broker,
         tunnel_status_provider=tunnel.status,
         tunnel_start_provider=tunnel.start,
+        projection=projection,
     )
     relay_setup_api = RelaySetupApi(
         RelaySetupService(
@@ -247,6 +223,7 @@ def create_runtime(paths: ApplicationPaths) -> SessionRuntime:
         WatchdogHttpApi(application),
         scheduler,
         adapter,
+        projection,
         AdminRemoteApi(remote_application, native_capture=native_capture.capture),
         RemoteHttpApi(remote_application),
         tunnel,
@@ -280,10 +257,14 @@ class ResponseHandler(BaseHTTPRequestHandler):
     def respond_file(
         self, path: Path, content_type: str, *, cache: str = "no-cache"
     ) -> None:
-        body = path.read_bytes()
+        asset = STATIC_ASSETS.load(path, self.headers.get("Accept-Encoding", ""))
+        body = asset.body
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", cache)
+        self.send_header("Vary", "Accept-Encoding")
+        if asset.content_encoding:
+            self.send_header("Content-Encoding", asset.content_encoding)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -301,6 +282,12 @@ class AdminHandler(ResponseHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/api/watchdog" or path.startswith("/api/watchdog/"):
+            if WATCHDOG_API is None:
+                self.respond_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"message": "核心功能正在启动。", "startup": dict(STARTUP_STATE)},
+                )
+                return True
             response = WATCHDOG_API.dispatch(
                 method,
                 path,
@@ -308,8 +295,20 @@ class AdminHandler(ResponseHandler):
                 payload,
             )
         elif path == "/api/remote" or path.startswith("/api/remote/"):
+            if REMOTE_ADMIN_API is None:
+                self.respond_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"message": "远程会话正在启动。", "startup": dict(STARTUP_STATE)},
+                )
+                return True
             response = REMOTE_ADMIN_API.dispatch(method, self.path, payload)
         elif path == "/api/relay-setup" or path.startswith("/api/relay-setup/"):
+            if RELAY_SETUP_API is None:
+                self.respond_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"message": "远程配置正在启动。", "startup": dict(STARTUP_STATE)},
+                )
+                return True
             response = RELAY_SETUP_API.dispatch(method, path, payload)
         else:
             return False
@@ -324,17 +323,30 @@ class AdminHandler(ResponseHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in {"/api/health", "/api/auxiliary-health"}:
+            codex = (
+                CODEX_RUNTIME.status()
+                if CODEX_RUNTIME is not None
+                else {
+                    "connected": False,
+                    "connecting": False,
+                    "generation": 0,
+                    "lastError": "",
+                    "retryInMs": 0,
+                }
+            )
             self.respond_json(
                 HTTPStatus.OK,
                 {
                     "service": "codex-session-manager",
                     "version": APP_VERSION,
                     "role": "session-manager",
-                    "ready": True,
+                    "ready": STARTUP_STATE["phase"] == "ready",
+                    "startup": dict(STARTUP_STATE),
                     "mode": PATHS.mode,
                     "pid": os.getpid(),
                     "startedAt": STARTED_AT,
                     "ports": {"admin": ADMIN_PORT, "remote": REMOTE_PORT},
+                    "codex": codex,
                 },
             )
             return
@@ -430,9 +442,13 @@ class RemoteHandler(ResponseHandler):
     def respond_file(
         self, path: Path, content_type: str, *, cache: str = "public, max-age=3600"
     ) -> None:
-        body = path.read_bytes()
+        asset = STATIC_ASSETS.load(path, self.headers.get("Accept-Encoding", ""))
+        body = asset.body
         self.send_response(HTTPStatus.OK)
         self._headers(content_type, len(body), cache=cache)
+        self.send_header("Vary", "Accept-Encoding")
+        if asset.content_encoding:
+            self.send_header("Content-Encoding", asset.content_encoding)
         if path.name == "service-worker.js":
             self.send_header("Service-Worker-Allowed", "/")
         self.end_headers()
@@ -539,23 +555,43 @@ def stop_running_instance(paths: ApplicationPaths) -> bool:
 
 
 def run(paths: ApplicationPaths = PATHS) -> None:
-    global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API
+    global WATCHDOG_API, REMOTE_ADMIN_API, REMOTE_HTTP_API, RELAY_SETUP_API, CODEX_RUNTIME
+    global STARTUP_STATE
     paths.ensure_writable_directories()
     lock = InstanceLock(paths.runtime_root / "session-manager.lock")
     lock.acquire()
     runtime = None
     admin_server = None
+    admin_thread = None
     remote_server = None
     remote_thread = None
     tunnel = None
     scheduler_started = False
     try:
-        runtime = create_runtime(paths)
-        WATCHDOG_API = runtime.api
-        REMOTE_ADMIN_API = runtime.remote_admin_api
-        REMOTE_HTTP_API = runtime.remote_http_api
-        RELAY_SETUP_API = runtime.relay_setup_api
         admin_server = ThreadingHTTPServer((HOST, ADMIN_PORT), AdminHandler)
+        admin_thread = threading.Thread(
+            target=admin_server.serve_forever,
+            name="codex-session-manager-admin",
+            daemon=True,
+        )
+        admin_thread.start()
+        STARTUP_STATE = {"phase": "starting", "error": ""}
+        print(f"Codex Session Manager starting: http://{HOST}:{ADMIN_PORT}")
+        try:
+            runtime = create_runtime(paths)
+            WATCHDOG_API = runtime.api
+            REMOTE_ADMIN_API = runtime.remote_admin_api
+            REMOTE_HTTP_API = runtime.remote_http_api
+            RELAY_SETUP_API = runtime.relay_setup_api
+            CODEX_RUNTIME = runtime.adapter
+        except Exception as error:
+            STARTUP_STATE = {"phase": "failed", "error": str(error)}
+            import traceback
+
+            traceback.print_exc()
+            while admin_thread.is_alive():
+                admin_thread.join(timeout=1)
+            return
         remote_server = ThreadingHTTPServer((REMOTE_HOST, REMOTE_PORT), RemoteHandler)
         remote_thread = threading.Thread(
             target=remote_server.serve_forever,
@@ -563,19 +599,23 @@ def run(paths: ApplicationPaths = PATHS) -> None:
             daemon=True,
         )
         remote_thread.start()
+        runtime.adapter.start()
         tunnel = runtime.tunnel
         tunnel.start()
         runtime.scheduler.start()
         scheduler_started = True
+        STARTUP_STATE = {"phase": "ready", "error": ""}
         print(f"Codex Session Manager: http://{HOST}:{ADMIN_PORT}")
         print(f"Remote PWA: {REMOTE_HOST}:{REMOTE_PORT}")
-        admin_server.serve_forever()
+        while admin_thread.is_alive():
+            admin_thread.join(timeout=1)
     finally:
         if scheduler_started and runtime is not None:
             runtime.scheduler.stop()
         if tunnel is not None:
             tunnel.stop()
         if runtime is not None:
+            runtime.projection.close()
             runtime.adapter.close()
         if remote_server is not None:
             if remote_thread is not None:
@@ -584,11 +624,17 @@ def run(paths: ApplicationPaths = PATHS) -> None:
         if remote_thread is not None:
             remote_thread.join(timeout=2)
         if admin_server is not None:
+            if admin_thread is not None:
+                admin_server.shutdown()
             admin_server.server_close()
+        if admin_thread is not None:
+            admin_thread.join(timeout=2)
         WATCHDOG_API = None
         REMOTE_ADMIN_API = None
         REMOTE_HTTP_API = None
         RELAY_SETUP_API = None
+        CODEX_RUNTIME = None
+        STARTUP_STATE = {"phase": "stopped", "error": ""}
         lock.release()
 
 

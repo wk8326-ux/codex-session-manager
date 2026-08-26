@@ -5,7 +5,6 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from watchdog.channels import ProbeResult, probe_channel
@@ -417,67 +416,44 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertEqual(incident["status"], "manual_attention")
         self.assertEqual(resumed_run["decision"], "resume_manual_attention")
 
-    def test_healthy_local_channel_resumes_one_503_incident_once(self) -> None:
-        class HealthyChannelHandler(BaseHTTPRequestHandler):
-            def log_message(self, format: str, *args: object) -> None:
-                return
+    def test_healthy_channel_resumes_one_503_incident_once(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        secrets = MemorySecretStore()
+        channel = self.store.create_channel(
+            {
+                "name": "healthy-compatible-channel",
+                "baseUrl": "https://api.example/v1",
+                "model": "test-model",
+                "encryptedKey": secrets.protect(API_KEY),
+            }
+        )
+        session = self.store.create_session(
+            {
+                "name": "recoverable-session",
+                "threadId": THREAD_ID,
+                "channelId": channel["id"],
+                "intervalMinutes": None,
+                "resumePrompt": "continue current task",
+                "enabled": True,
+                "nextCheckAt": "2026-07-31T06:00:00Z",
+            }
+        )
+        adapter = FakeAdapter(failed_snapshot(), ["turn-new"])
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service = WatchdogService(
+            self.store, secrets, FakeProbe(healthy), adapter
+        )
 
-            def do_POST(self) -> None:
-                body = b'{"choices":[{"message":{"content":"ok"}}]}'
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+        first = service.check_session(session["id"], NOW)
+        second = service.check_session(session["id"], "2026-07-31T06:05:01Z")
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), HealthyChannelHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            self.store.update_settings({"resumeActionsEnabled": True})
-            secrets = MemorySecretStore()
-            channel = self.store.create_channel(
-                {
-                    "name": "local-compatible-channel",
-                    "baseUrl": (
-                        f"http://127.0.0.1:{server.server_address[1]}/v1"
-                    ),
-                    "model": "test-model",
-                    "encryptedKey": secrets.protect(API_KEY),
-                }
-            )
-            session = self.store.create_session(
-                {
-                    "name": "recoverable-session",
-                    "threadId": THREAD_ID,
-                    "channelId": channel["id"],
-                    "intervalMinutes": None,
-                    "resumePrompt": "continue current task",
-                    "enabled": True,
-                    "nextCheckAt": "2026-07-31T06:00:00Z",
-                }
-            )
-            adapter = FakeAdapter(failed_snapshot(), ["turn-new"])
-            service = WatchdogService(
-                self.store, secrets, probe_channel, adapter
-            )
-
-            first = service.check_session(session["id"], NOW)
-            second = service.check_session(
-                session["id"], "2026-07-31T06:05:01Z"
-            )
-
-            self.assertEqual(first["decision"], "resume_started")
-            self.assertEqual(first["resumeAttempt"], 1)
-            self.assertEqual(second["decision"], "silent_already_handled")
-            self.assertEqual(
-                adapter.start_calls,
-                [(THREAD_ID, "continue current task")],
-            )
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=2)
+        self.assertEqual(first["decision"], "resume_started", first)
+        self.assertEqual(first["resumeAttempt"], 1)
+        self.assertEqual(second["decision"], "silent_already_handled", second)
+        self.assertEqual(
+            adapter.start_calls,
+            [(THREAD_ID, "continue current task")],
+        )
 
     def test_start_turn_id_is_persisted_without_leaking_into_detail(self) -> None:
         self.store.update_settings({"resumeActionsEnabled": True})

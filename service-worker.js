@@ -1,12 +1,11 @@
-const CACHE_NAME = 'codex-session-manager-remote-v34';
+const CACHE_NAME = 'codex-session-manager-remote-v36';
 const STATIC_ASSETS = [
   '/remote',
   '/remote.css?v=27',
-  '/remote.js?v=28',
+  '/remote.js?v=30',
   '/manifest.webmanifest',
   '/assets/session-manager-icon.png',
   '/assets/vendor/qrcode.min.js',
-  '/assets/vendor/jsQR.js?v=1',
 ];
 
 self.addEventListener('install', event => {
@@ -26,13 +25,36 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
-  event.respondWith(
-    fetch(event.request, { cache: 'no-store' }).then(response => {
-      if (response.ok && url.origin === location.origin) {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
-      }
-      return response;
-    }).catch(() => caches.match(event.request))
-  );
+  if (event.request.mode === 'navigate') {
+    event.respondWith(navigationResponse(event.request));
+    return;
+  }
+  event.respondWith(staleWhileRevalidate(event.request));
 });
+
+async function navigationResponse(request) {
+  const cached = await caches.match(request) || await caches.match('/remote');
+  try {
+    const response = await Promise.race([
+      fetch(request),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
+    ]);
+    if (response.ok) {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    return cached || Response.error();
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+  const update = fetch(request).then(response => {
+    if (response.ok) cache.put(request, response.clone());
+    return response;
+  });
+  return cached || update;
+}

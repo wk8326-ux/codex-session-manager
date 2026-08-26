@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
-from watchdog.http_api import ApiResponse
+from watchdog.router import ApiResponse
 
 
 class FakeWatchdogApi:
@@ -40,13 +40,42 @@ class SessionManagerHttpTests(unittest.TestCase):
         return response.status, body
 
     def test_health_identifies_independent_runtime(self) -> None:
-        status, body = self.request("GET", "/api/health")
-        payload = json.loads(body)
+        with patch.object(app, "STARTUP_STATE", {"phase": "ready", "error": ""}):
+            status, body = self.request("GET", "/api/health")
+            payload = json.loads(body)
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["service"], "codex-session-manager")
         self.assertEqual(payload["role"], "session-manager")
         self.assertEqual(payload["ports"], {"admin": 8767, "remote": 8766})
+
+    def test_health_responds_while_runtime_is_starting(self) -> None:
+        with patch.object(app, "STARTUP_STATE", {"phase": "starting", "error": ""}):
+            status, body = self.request("GET", "/api/health")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["startup"]["phase"], "starting")
+
+    def test_health_reports_runtime_initialization_failure(self) -> None:
+        startup = {"phase": "failed", "error": "database could not be opened"}
+        with patch.object(app, "STARTUP_STATE", startup):
+            status, body = self.request("GET", "/api/health")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["startup"], startup)
+
+    def test_runtime_api_returns_service_unavailable_while_starting(self) -> None:
+        with patch.object(app, "WATCHDOG_API", None), patch.object(
+            app, "STARTUP_STATE", {"phase": "starting", "error": ""}
+        ):
+            status, body = self.request("GET", "/api/watchdog/status")
+
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body)["startup"]["phase"], "starting")
 
     def test_project_console_routes_are_not_exposed(self) -> None:
         self.assertEqual(self.request("GET", "/api/projects")[0], 404)
@@ -67,6 +96,27 @@ class SessionManagerHttpTests(unittest.TestCase):
 
 
 class StatelessCommandTests(unittest.TestCase):
+    def test_importing_adapter_does_not_import_watchdog_router(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; import watchdog.codex_adapter; "
+                    "print('watchdog.router' in sys.modules); "
+                    "print('watchdog.application' in sys.modules)"
+                ),
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["False", "False"])
+
     def test_version_does_not_create_runtime_directories(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:

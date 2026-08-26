@@ -111,8 +111,7 @@ def _turn_diagnostic_text(turn: dict) -> str:
     for item in items:
         if not isinstance(item, dict):
             continue
-        item_type = item.get("type")
-        if item_type not in {"agentMessage", "plan", "systemMessage", "error"}:
+        if item.get("type") != "error":
             continue
         value = item.get("text") or item.get("message")
         if isinstance(value, str) and value.strip():
@@ -562,11 +561,6 @@ class StdioJsonRpcClient:
     def close(self) -> None:
         if self._closed:
             return
-        if self._approval_broker is not None:
-            try:
-                self._approval_broker.close()
-            except Exception:
-                pass
         self._closed = True
         stdin = self._process.stdin
         if stdin is not None:
@@ -584,6 +578,9 @@ class StdioJsonRpcClient:
         self._fail_pending(UncertainSendFailure("Codex App Server transport closed"))
         if self._reader is not threading.current_thread():
             self._reader.join(timeout=2)
+
+    def is_alive(self) -> bool:
+        return not self._closed and self._process.poll() is None
 
     def set_event_handler(self, handler: EventHandler) -> None:
         self._on_event = handler

@@ -21,6 +21,15 @@ python app.py
 
 手机 PWA：`http://<电脑局域网 IP>:8766/`，跨网络访问建议按配置向导部署专用隧道。
 
+8767 会先绑定并提供启动状态，Codex App Server、远程端和隧道随后初始化。可用以下接口
+区分“HTTP Host 已启动”和“全部功能已就绪”：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8767/api/health
+```
+
+`ready: false` 时页面和健康检查仍可响应；`startup.phase` 会显示 `starting` 或 `failed`。
+
 双击 `start-session-manager.bat` 也可以启动；关闭对应终端或在 Local Project Console 中点击“关闭”即可停止。
 
 从拆分前的 Local Project Console 迁移时，先关闭旧的会话管理进程，再运行：
@@ -87,3 +96,5 @@ logs/                服务日志
 - [会话监控配置与运维](docs/watchdog-configuration.md)
 - [远程访问架构](docs/remote-access.md)
 - [FRP 配置](docs/frp-remote-access.md)
+- [领域上下文](CONTEXT.md)
+- [架构决策记录](docs/adr/)

@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 from watchdog.application import WatchdogApplication
 from watchdog.channels import ProbeResult
-from watchdog.http_api import WatchdogHttpApi
+from watchdog.router import WatchdogHttpApi
 from watchdog.models import SessionSnapshot
 from watchdog.store import WatchdogStore
 

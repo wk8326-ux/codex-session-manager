@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from remote.store import MessageDeliveryConflict, PairingRejected, RemoteStore
 
@@ -67,6 +68,32 @@ class RemoteStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.authenticate(devices[0]["deviceToken"]))
         self.assertIsNotNone(self.store.authenticate(devices[1]["deviceToken"]))
 
+    def test_authentication_cache_throttles_last_seen_writes(self) -> None:
+        store = RemoteStore(
+            self.database,
+            authentication_ttl_seconds=60,
+            last_seen_write_seconds=60,
+        )
+        pairing = store.create_pairing()
+        device = store.claim_pairing(pairing["id"], pairing["secret"], "Phone")
+
+        with patch(
+            "remote.store.utc_now",
+            side_effect=["2026-08-24T00:00:01Z", "2026-08-24T00:00:02Z"],
+        ) as now:
+            first = store.authenticate(device["deviceToken"])
+            second = store.authenticate(device["deviceToken"])
+
+        self.assertEqual(first, second)
+        self.assertEqual(now.call_count, 1)
+        connection = sqlite3.connect(self.database)
+        persisted = connection.execute(
+            "SELECT last_seen_at FROM remote_devices WHERE id = ?",
+            (device["deviceId"],),
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(persisted, "2026-08-24T00:00:01Z")
+
     def test_synced_sessions_are_persisted_independently_and_thread_ids_are_unique(self) -> None:
         created = self.store.create_synced_session(
             name="Woxsheet",
@@ -83,6 +110,16 @@ class RemoteStoreTests(unittest.TestCase):
 
         self.assertTrue(self.store.delete_synced_session(created["id"]))
         self.assertEqual(self.store.list_synced_sessions(), [])
+
+    def test_synced_thread_id_cache_is_invalidated_by_crud(self) -> None:
+        self.assertEqual(self.store.synced_thread_ids(), set())
+        created = self.store.create_synced_session(
+            name="Woxsheet",
+            thread_id="00000000-0000-4000-8000-000000000001",
+        )
+        self.assertEqual(self.store.synced_thread_ids(), {created["threadId"]})
+        self.store.delete_synced_session(created["id"])
+        self.assertEqual(self.store.synced_thread_ids(), set())
 
     def test_message_delivery_result_is_persistent_and_content_bound(self) -> None:
         session = self.store.create_synced_session(

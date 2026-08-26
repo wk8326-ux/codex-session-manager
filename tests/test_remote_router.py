@@ -70,7 +70,6 @@ class RemoteRouterTests(unittest.TestCase):
             self.store,
             self.adapter,
             RemoteEventHub(lambda: {THREAD_ID}),
-            lambda: [],
             default_base_url="http://192.0.2.10:8766",
             codex_connected=True,
             approval_broker=self.approvals,
@@ -279,6 +278,12 @@ class RemoteRouterTests(unittest.TestCase):
         self.assertIsNone(
             self.remote.dispatch("GET", "/api/watchdog/channels", headers, None)
         )
+
+    def test_remote_health_is_available_without_device_authentication(self) -> None:
+        response = self.remote.dispatch("GET", "/api/remote/health", {}, None)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.body["ready"])
 
 
 if __name__ == "__main__":

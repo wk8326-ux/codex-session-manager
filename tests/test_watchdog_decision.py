@@ -85,7 +85,44 @@ class DecisionTests(unittest.TestCase):
 
         self.assertEqual(result.code, "resume_candidate")
 
-    def test_configured_text_can_override_a_completed_lifecycle_status(self) -> None:
+    def test_configured_text_cannot_override_terminal_or_active_lifecycle_status(self) -> None:
+        rules = [
+            {
+                "matchType": "message_contains",
+                "pattern": "model is at capacity",
+                "enabled": True,
+            }
+        ]
+
+        for status, expected in (
+            ("completed", "silent_session_completed"),
+            ("inProgress", "silent_session_running"),
+        ):
+            with self.subTest(status=status):
+                result = decide(
+                    DecisionInput(
+                        "healthy",
+                        snapshot(
+                            status,
+                            diagnostic=(
+                                "Selected model is at capacity. Try another model."
+                            ),
+                        ),
+                        rules,
+                    )
+                )
+
+                self.assertEqual(result.code, expected)
+                self.assertEqual(result.error_signature, "")
+
+    def test_interrupted_without_error_is_explicit_and_never_resumed(self) -> None:
+        result = decide(DecisionInput("healthy", snapshot("interrupted"), []))
+        self.assertEqual(result.code, "silent_interrupted_without_error")
+        self.assertEqual(
+            result.detail, "latest turn was interrupted without a recoverable API error"
+        )
+
+    def test_interrupted_with_trusted_error_message_can_resume(self) -> None:
         rules = [
             {
                 "matchType": "message_contains",
@@ -98,22 +135,14 @@ class DecisionTests(unittest.TestCase):
             DecisionInput(
                 "healthy",
                 snapshot(
-                    "completed",
-                    diagnostic="Selected model is at capacity. Try another model.",
+                    "interrupted",
+                    message="Selected model is at capacity. Please try again.",
                 ),
                 rules,
             )
         )
 
         self.assertEqual(result.code, "resume_candidate")
-        self.assertTrue(result.error_signature.startswith("message:"))
-
-    def test_interrupted_without_error_is_explicit_and_never_resumed(self) -> None:
-        result = decide(DecisionInput("healthy", snapshot("interrupted"), []))
-        self.assertEqual(result.code, "silent_interrupted_without_error")
-        self.assertEqual(
-            result.detail, "latest turn was interrupted without a recoverable API error"
-        )
 
     def test_manual_wait_is_never_resumed(self) -> None:
         for flag in ("waitingOnUserInput", "waitingOnApproval"):

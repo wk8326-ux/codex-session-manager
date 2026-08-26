@@ -76,7 +76,9 @@ def decide(value: DecisionInput) -> Decision:
         return Decision("silent_no_turn", detail=current.thread_status)
     if turn.status == "inProgress":
         return Decision("silent_session_running")
-    if turn.status not in {"completed", "failed", "interrupted", "systemError"}:
+    if turn.status == "completed":
+        return Decision("silent_session_completed")
+    if turn.status not in {"failed", "interrupted", "systemError"}:
         return Decision("silent_unknown", detail=turn.status)
     signature = _error_signature(turn)
     matched = bool(signature) and any(
@@ -84,8 +86,6 @@ def decide(value: DecisionInput) -> Decision:
     )
     if matched:
         return Decision("resume_candidate", signature, "enabled recovery rule matched")
-    if turn.status == "completed":
-        return Decision("silent_session_completed")
     if not signature:
         return Decision(
             "silent_interrupted_without_error",

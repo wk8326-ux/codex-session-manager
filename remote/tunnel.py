@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import threading
+import time
+import tomllib
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 
 def _utc_now() -> str:
@@ -94,6 +99,7 @@ class FrpTunnelManager:
         self._log_file = None
         self._started_at = ""
         self._last_error = ""
+        self._last_exit_code: int | None = None
 
     @classmethod
     def from_base_path(cls, base_path: Path) -> "FrpTunnelManager":
@@ -146,6 +152,10 @@ class FrpTunnelManager:
     def _running_pid(self) -> int | None:
         if self._process is not None and self._process.poll() is None:
             return self._process.pid
+        if self._process is not None:
+            self._last_exit_code = self._process.poll()
+            if self._last_exit_code not in {None, 0}:
+                self._last_error = f"frpc exited with code {self._last_exit_code}"
         self._process = None
         return self._persisted_pid()
 
@@ -188,6 +198,7 @@ class FrpTunnelManager:
                 return False
             self._started_at = _utc_now()
             self._last_error = ""
+            self._last_exit_code = None
             return True
 
     def stop(self) -> None:
@@ -211,16 +222,11 @@ class FrpTunnelManager:
             configured = self.configured()
             running_pid = self._running_pid()
             running = running_pid is not None
-            exit_code = (
-                self._process.poll()
-                if self._process is not None and not running
-                else None
-            )
             if running:
                 state = "running"
             elif not configured:
                 state = "not-configured"
-            elif self._last_error or (exit_code is not None and exit_code != 0):
+            elif self._last_error or self._last_exit_code not in {None, 0}:
                 state = "failed"
             else:
                 state = "stopped"
@@ -232,9 +238,202 @@ class FrpTunnelManager:
                 "pid": running_pid,
                 "startedAt": self._started_at if running else "",
                 "detail": self._last_error,
+                "exitCode": self._last_exit_code,
             }
 
     def _close_log(self) -> None:
         if self._log_file is not None:
             self._log_file.close()
             self._log_file = None
+
+
+def _http_probe(url: str, timeout: float) -> dict:
+    started = time.monotonic()
+    try:
+        with urlopen(
+            Request(url, headers={"User-Agent": "codex-session-manager-health"}),
+            timeout=timeout,
+        ) as response:
+            response.read(256)
+            status = int(response.status)
+    except Exception as error:
+        return {
+            "ok": False,
+            "latencyMs": round((time.monotonic() - started) * 1000),
+            "detail": f"{type(error).__name__}: {error}",
+        }
+    return {
+        "ok": 200 <= status < 300,
+        "httpStatus": status,
+        "latencyMs": round((time.monotonic() - started) * 1000),
+        "detail": "",
+    }
+
+
+def _relay_target(config_path: Path) -> tuple[str, int] | None:
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        host = str(data.get("serverAddr") or "").strip()
+        port = int(data.get("serverPort") or 7000)
+    except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError):
+        return None
+    return (host, port) if host else None
+
+
+def _tcp_probe(target: tuple[str, int] | None, timeout: float) -> dict:
+    if target is None:
+        return {"ok": False, "latencyMs": None, "detail": "relay is not configured"}
+    started = time.monotonic()
+    try:
+        with socket.create_connection(target, timeout=timeout):
+            pass
+    except OSError as error:
+        return {
+            "ok": False,
+            "latencyMs": round((time.monotonic() - started) * 1000),
+            "detail": f"{type(error).__name__}: {error}",
+        }
+    return {
+        "ok": True,
+        "latencyMs": round((time.monotonic() - started) * 1000),
+        "detail": "",
+    }
+
+
+class TunnelSupervisor:
+    """Supervise one tunnel adapter using layered end-to-end health."""
+
+    def __init__(
+        self,
+        adapter: FrpTunnelManager,
+        *,
+        local_url: str,
+        public_url_provider: Callable[[], str],
+        check_interval_seconds: float = 15.0,
+        failure_threshold: int = 3,
+        restart_cooldown_seconds: float = 60.0,
+        probe_timeout_seconds: float = 3.0,
+        http_probe: Callable[[str, float], dict] = _http_probe,
+        tcp_probe: Callable[[tuple[str, int] | None, float], dict] = _tcp_probe,
+    ) -> None:
+        self._adapter = adapter
+        self._local_url = local_url
+        self._public_url_provider = public_url_provider
+        self._check_interval = max(1.0, check_interval_seconds)
+        self._failure_threshold = max(1, failure_threshold)
+        self._restart_cooldown = max(0.0, restart_cooldown_seconds)
+        self._probe_timeout = max(0.1, probe_timeout_seconds)
+        self._http_probe = http_probe
+        self._tcp_probe = tcp_probe
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._health = self._empty_health()
+        self._public_failures = 0
+        self._restart_count = 0
+        self._last_restart_at = 0.0
+
+    def start(self) -> bool:
+        started = self._adapter.start()
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._stop_event.clear()
+                self._thread = threading.Thread(
+                    target=self._run,
+                    name="tunnel-supervisor",
+                    daemon=True,
+                )
+                self._thread.start()
+        return started
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+        self._adapter.stop()
+
+    def check_once(self) -> dict:
+        base = self._adapter.status()
+        local = self._http_probe(self._local_url, self._probe_timeout)
+        relay = self._tcp_probe(
+            _relay_target(self._adapter.config_path), self._probe_timeout
+        ) if base.get("configured") else {
+            "ok": False,
+            "latencyMs": None,
+            "detail": "tunnel is not configured",
+        }
+        public_base = self._public_url_provider().strip().rstrip("/")
+        public = (
+            self._http_probe(f"{public_base}/api/remote/health", self._probe_timeout)
+            if public_base
+            else {"ok": False, "latencyMs": None, "detail": "public URL is not configured"}
+        )
+        if public.get("ok"):
+            self._public_failures = 0
+        else:
+            self._public_failures += 1
+
+        should_restart = bool(
+            base.get("configured")
+            and local.get("ok")
+            and (
+                not base.get("running")
+                or self._public_failures >= self._failure_threshold
+            )
+            and time.monotonic() - self._last_restart_at >= self._restart_cooldown
+        )
+        if should_restart:
+            if base.get("running"):
+                self._adapter.stop()
+            self._adapter.start()
+            self._last_restart_at = time.monotonic()
+            self._restart_count += 1
+            self._public_failures = 0
+            base = self._adapter.status()
+
+        checked_at = _utc_now()
+        health = {
+            "local": {**local, "checkedAt": checked_at},
+            "relay": {**relay, "checkedAt": checked_at},
+            "public": {**public, "checkedAt": checked_at},
+        }
+        with self._lock:
+            self._health = health
+        return self.status()
+
+    def status(self) -> dict:
+        base = self._adapter.status()
+        with self._lock:
+            health = {key: dict(value) for key, value in self._health.items()}
+            restart_count = self._restart_count
+            failures = self._public_failures
+        if not base.get("configured"):
+            state = "not-configured"
+        elif not base.get("running"):
+            state = "failed" if base.get("state") == "failed" else "stopped"
+        elif health["local"].get("ok") and health["public"].get("ok"):
+            state = "running"
+        elif any(item.get("checkedAt") for item in health.values()):
+            state = "degraded"
+        else:
+            state = "starting"
+        return {
+            **base,
+            "state": state,
+            "health": health,
+            "consecutivePublicFailures": failures,
+            "restartCount": restart_count,
+        }
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self.check_once()
+            self._stop_event.wait(self._check_interval)
+
+    @staticmethod
+    def _empty_health() -> dict:
+        return {
+            name: {"ok": False, "latencyMs": None, "detail": "not checked", "checkedAt": ""}
+            for name in ("local", "relay", "public")
+        }

@@ -94,6 +94,11 @@ class WatchdogApplication:
         self._codex_connected = codex_connected
         self._now = now_provider
 
+    def _wake_scheduler(self) -> None:
+        wake = getattr(self._scheduler, "wake", None)
+        if callable(wake):
+            wake()
+
     def get_status(self) -> dict:
         settings = self._store.get_settings()
         due = [
@@ -189,7 +194,9 @@ class WatchdogApplication:
                     "resumeDispatchMode must be direct_app_server or desktop_bridge"
                 )
             changes["resumeDispatchMode"] = mode
-        return self._store.update_settings(changes)
+        updated = self._store.update_settings(changes)
+        self._wake_scheduler()
+        return updated
 
     @staticmethod
     def _safe_channel(channel: dict) -> dict:
@@ -399,7 +406,9 @@ class WatchdogApplication:
             "updatedAt": now,
         }
         try:
-            return self._safe_session(self._store.create_session(data))
+            created = self._safe_session(self._store.create_session(data))
+            self._wake_scheduler()
+            return created
         except sqlite3.IntegrityError as error:
             raise ResourceConflictError("该 Codex 会话已在监控目录中。") from error
 
@@ -442,12 +451,14 @@ class WatchdogApplication:
         except sqlite3.IntegrityError as error:
             raise ResourceConflictError("该 Codex 会话已在监控目录中。") from error
         assert updated is not None
+        self._wake_scheduler()
         return self._safe_session(updated)
 
     def delete_session(self, session_id: str) -> None:
         if self._store.get_session(session_id) is None:
             raise ResourceNotFoundError("监控会话不存在。")
         self._store.delete_session(session_id)
+        self._wake_scheduler()
 
     def check_session(self, session_id: str) -> dict:
         session = self._store.get_session(session_id)
@@ -459,6 +470,7 @@ class WatchdogApplication:
         if channel is None or not channel["enabled"]:
             raise ResourceConflictError("请先启用绑定的监控渠道。")
         run = self._monitor_service.check_session(session_id, self._now())
+        self._wake_scheduler()
         return self._safe_run(run)
 
     def list_local_sessions(self, limit: int) -> list[dict]:

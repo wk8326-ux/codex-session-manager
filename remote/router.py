@@ -132,8 +132,6 @@ class AdminRemoteApi:
                         HTTPStatus.OK,
                         self.application.read_session(remainder, _turn_limit(parsed)),
                     )
-            if method == "GET" and route == "/api/remote/projects":
-                return RemoteResponse(HTTPStatus.OK, self.application.list_projects())
             if method == "GET" and route == "/api/remote/events":
                 query = parse_qs(parsed.query)
                 after = max(0, int(query.get("after", ["0"])[0]))
@@ -168,6 +166,11 @@ class RemoteHttpApi:
         parsed = urlparse(raw_path)
         path = parsed.path
         try:
+            if method == "GET" and path == "/api/remote/health":
+                return RemoteResponse(
+                    HTTPStatus.OK,
+                    {"service": "codex-session-manager-remote", "ready": True},
+                )
             pairing_prefix = "/api/remote/pairings/"
             if method == "POST" and path.startswith(pairing_prefix) and path.endswith("/claim"):
                 pairing_id = path[len(pairing_prefix):-len("/claim")]
@@ -223,8 +226,6 @@ class RemoteHttpApi:
                         HTTPStatus.OK,
                         self.application.read_session(remainder, _turn_limit(parsed)),
                     )
-            if method == "GET" and path == "/api/remote/projects":
-                return RemoteResponse(HTTPStatus.OK, self.application.list_projects())
             if method == "GET" and path == "/api/remote/events":
                 query = parse_qs(parsed.query)
                 try:

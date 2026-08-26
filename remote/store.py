@@ -5,6 +5,8 @@ import hmac
 import json
 import secrets
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,16 +35,26 @@ def _digest(value: str) -> str:
 
 
 class RemoteStore:
-    def __init__(self, database_path: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        *,
+        authentication_ttl_seconds: float = 30.0,
+        last_seen_write_seconds: float = 60.0,
+    ) -> None:
         self._path = Path(database_path)
+        self._authentication_ttl = max(0.0, authentication_ttl_seconds)
+        self._last_seen_write_seconds = max(0.0, last_seen_write_seconds)
+        self._cache_lock = threading.RLock()
+        self._authentication_cache: dict[str, tuple[float, dict]] = {}
+        self._last_seen_writes: dict[str, float] = {}
+        self._synced_sessions_cache: list[dict] | None = None
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self._path, timeout=5)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
         try:
             yield connection
             connection.commit()
@@ -55,6 +67,7 @@ class RemoteStore:
     def initialize(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS remote_settings (
@@ -201,26 +214,44 @@ class RemoteStore:
     def authenticate(self, token: str) -> dict | None:
         if not token:
             return None
+        token_hash = _digest(token)
+        monotonic_now = time.monotonic()
+        with self._cache_lock:
+            cached = self._authentication_cache.get(token_hash)
+            if cached is not None and cached[0] >= monotonic_now:
+                return dict(cached[1])
         now = utc_now()
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT id, name, created_at, last_seen_at
                    FROM remote_devices
                    WHERE token_hash = ? AND revoked_at IS NULL""",
-                (_digest(token),),
+                (token_hash,),
             ).fetchone()
             if row is None:
                 return None
-            connection.execute(
-                "UPDATE remote_devices SET last_seen_at = ? WHERE id = ?",
-                (now, row["id"]),
-            )
-        return {
+            with self._cache_lock:
+                last_write = self._last_seen_writes.get(row["id"], 0.0)
+                should_write = monotonic_now - last_write >= self._last_seen_write_seconds
+                if should_write:
+                    self._last_seen_writes[row["id"]] = monotonic_now
+            if should_write:
+                connection.execute(
+                    "UPDATE remote_devices SET last_seen_at = ? WHERE id = ?",
+                    (now, row["id"]),
+                )
+        device = {
             "id": row["id"],
             "name": row["name"],
             "createdAt": row["created_at"],
-            "lastSeenAt": now,
+            "lastSeenAt": now if should_write else row["last_seen_at"],
         }
+        with self._cache_lock:
+            self._authentication_cache[token_hash] = (
+                monotonic_now + self._authentication_ttl,
+                device,
+            )
+        return dict(device)
 
     def list_devices(self) -> list[dict]:
         with self._connect() as connection:
@@ -246,7 +277,16 @@ class RemoteStore:
                    WHERE id = ? AND revoked_at IS NULL""",
                 (utc_now(), device_id),
             )
-        return cursor.rowcount == 1
+        revoked = cursor.rowcount == 1
+        if revoked:
+            with self._cache_lock:
+                self._authentication_cache = {
+                    key: value
+                    for key, value in self._authentication_cache.items()
+                    if value[1].get("id") != device_id
+                }
+                self._last_seen_writes.pop(device_id, None)
+        return revoked
 
     @staticmethod
     def _synced_session(row: sqlite3.Row) -> dict:
@@ -270,15 +310,27 @@ class RemoteStore:
                 "SELECT * FROM remote_synced_sessions WHERE id = ?", (session_id,)
             ).fetchone()
         assert row is not None
-        return self._synced_session(row)
+        result = self._synced_session(row)
+        with self._cache_lock:
+            self._synced_sessions_cache = None
+        return result
 
     def list_synced_sessions(self) -> list[dict]:
+        with self._cache_lock:
+            if self._synced_sessions_cache is not None:
+                return [dict(item) for item in self._synced_sessions_cache]
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT * FROM remote_synced_sessions
                    ORDER BY created_at, name, id"""
             ).fetchall()
-        return [self._synced_session(row) for row in rows]
+        sessions = [self._synced_session(row) for row in rows]
+        with self._cache_lock:
+            self._synced_sessions_cache = [dict(item) for item in sessions]
+        return sessions
+
+    def synced_thread_ids(self) -> set[str]:
+        return {session["threadId"] for session in self.list_synced_sessions()}
 
     def get_synced_session(self, session_id: str) -> dict | None:
         with self._connect() as connection:
@@ -292,7 +344,11 @@ class RemoteStore:
             cursor = connection.execute(
                 "DELETE FROM remote_synced_sessions WHERE id = ?", (session_id,)
             )
-        return cursor.rowcount == 1
+        deleted = cursor.rowcount == 1
+        if deleted:
+            with self._cache_lock:
+                self._synced_sessions_cache = None
+        return deleted
 
     def claim_message_delivery(
         self,
