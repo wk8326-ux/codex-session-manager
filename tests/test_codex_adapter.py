@@ -600,6 +600,33 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNone(sessions[0].latest_turn)
         self.assertEqual(transport.calls, [("thread/list", {"limit": 5})])
 
+    def test_list_threads_deduplicates_repeated_codex_records(self) -> None:
+        duplicate = {
+            "id": THREAD_ID,
+            "name": "watchdog-integration-test",
+            "status": {"type": "idle"},
+        }
+        other_id = "00000000-0000-4000-8000-000000000002"
+        transport = FakeTransport(
+            {
+                "thread/list": {
+                    "data": [
+                        duplicate,
+                        dict(duplicate),
+                        {
+                            "id": other_id,
+                            "name": "second-session",
+                            "status": {"type": "active"},
+                        },
+                    ]
+                }
+            }
+        )
+
+        sessions = CodexAppServerAdapter(transport).list_threads(limit=10)
+
+        self.assertEqual([session.thread_id for session in sessions], [THREAD_ID, other_id])
+
 
 class QueueStdout:
     def __init__(self) -> None:

@@ -323,10 +323,15 @@ class CodexAppServerAdapter:
         response = self._transport.request("thread/list", {"limit": limit})
         if not isinstance(response, dict) or not isinstance(response.get("data"), list):
             raise CodexProtocolError("thread/list returned malformed data")
-        return [
-            _session_snapshot(thread, require_turns=False)
-            for thread in response["data"]
-        ]
+        snapshots: list[SessionSnapshot] = []
+        seen_thread_ids: set[str] = set()
+        for thread in response["data"]:
+            snapshot = _session_snapshot(thread, require_turns=False)
+            if snapshot.thread_id in seen_thread_ids:
+                continue
+            seen_thread_ids.add(snapshot.thread_id)
+            snapshots.append(snapshot)
+        return snapshots
 
     def start_turn(
         self, thread_id: str, prompt: str, image_url: str | None = None
