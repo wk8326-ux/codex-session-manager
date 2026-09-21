@@ -291,6 +291,12 @@ def _safe_status(provider: object) -> dict:
 
 
 class ResponseHandler(BaseHTTPRequestHandler):
+    # Upper bound for request bodies on every port. The remote PWA accepts
+    # screenshots, so this has to cover a base64 image plus JSON overhead.
+    MAX_REQUEST_BYTES = 2_100_000
+    # path -> (file name, content type, cache policy)
+    STATIC_ROUTES: dict[str, tuple[str, str, str]] = {}
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
@@ -300,18 +306,29 @@ class ResponseHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             self.close_connection = True
 
+    def _security_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+
     def respond_json(self, status: int, payload: object) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
     def respond_empty(self, status: int) -> None:
         self.send_response(status)
         self.send_header("Content-Length", "0")
+        self._security_headers()
         self.end_headers()
+
+    def _file_extra_headers(self, path: Path) -> None:
+        """Hook for handlers that need extra headers on specific files."""
 
     def respond_file(
         self, path: Path, content_type: str, *, cache: str = "no-cache"
@@ -325,17 +342,101 @@ class ResponseHandler(BaseHTTPRequestHandler):
         if asset.content_encoding:
             self.send_header("Content-Encoding", asset.content_encoding)
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
+        self._file_extra_headers(path)
         self.end_headers()
         self.wfile.write(body)
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
+        if length > self.MAX_REQUEST_BYTES:
+            raise ValueError("request too large")
         value = json.loads(self.rfile.read(length).decode("utf-8"))
         return value if isinstance(value, dict) else {}
+
+    def respond_static(self, path: str) -> bool:
+        """Serve a registered static asset; return False when unregistered."""
+
+        route = self.STATIC_ROUTES.get(path)
+        if route is None:
+            return False
+        self.respond_file(ROOT / route[0], route[1], cache=route[2])
+        return True
 
 
 class AdminHandler(ResponseHandler):
     """Local-only administration UI and API on 127.0.0.1:8767."""
+
+    STATIC_ROUTES = {
+        "/": ("session-manager.html", "text/html; charset=utf-8", "no-cache"),
+        "/session-manager": (
+            "session-manager.html",
+            "text/html; charset=utf-8",
+            "no-cache",
+        ),
+        "/session-manager/": (
+            "session-manager.html",
+            "text/html; charset=utf-8",
+            "no-cache",
+        ),
+        "/watchdog": ("watchdog.html", "text/html; charset=utf-8", "no-cache"),
+        "/watchdog/": ("watchdog.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote.css": ("remote.css", "text/css; charset=utf-8", "no-cache"),
+        "/remote.js": ("remote.js", "text/javascript; charset=utf-8", "no-cache"),
+        "/remote-setup": ("remote-setup.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote-setup/": (
+            "remote-setup.html",
+            "text/html; charset=utf-8",
+            "no-cache",
+        ),
+        "/remote-setup.css": (
+            "remote-setup.css",
+            "text/css; charset=utf-8",
+            "no-cache",
+        ),
+        "/remote-setup.js": (
+            "remote-setup.js",
+            "text/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "/manifest.webmanifest": (
+            "manifest.webmanifest",
+            "application/manifest+json",
+            "no-cache",
+        ),
+        "/service-worker.js": (
+            "service-worker.js",
+            "text/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "/assets/session-manager-nav.css": (
+            "assets/session-manager-nav.css",
+            "text/css; charset=utf-8",
+            "no-cache",
+        ),
+        "/assets/session-manager-nav.js": (
+            "assets/session-manager-nav.js",
+            "text/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "/assets/session-manager-icon.png": (
+            "assets/session-manager-icon.png",
+            "image/png",
+            "no-cache",
+        ),
+        "/assets/vendor/qrcode.min.js": (
+            "assets/vendor/qrcode.min.js",
+            "text/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "/assets/vendor/jsQR.js": (
+            "assets/vendor/jsQR.js",
+            "text/javascript; charset=utf-8",
+            "no-cache",
+        ),
+    }
 
     def dispatch(self, method: str, payload: object = None) -> bool:
         parsed = urlparse(self.path)
@@ -458,54 +559,8 @@ class AdminHandler(ResponseHandler):
             return
         if self.dispatch("GET"):
             return
-        static = {
-            "/": ("session-manager.html", "text/html; charset=utf-8"),
-            "/session-manager": ("session-manager.html", "text/html; charset=utf-8"),
-            "/session-manager/": ("session-manager.html", "text/html; charset=utf-8"),
-            "/watchdog": ("watchdog.html", "text/html; charset=utf-8"),
-            "/watchdog/": ("watchdog.html", "text/html; charset=utf-8"),
-            "/remote": ("remote.html", "text/html; charset=utf-8"),
-            "/remote/": ("remote.html", "text/html; charset=utf-8"),
-            "/remote.css": ("remote.css", "text/css; charset=utf-8"),
-            "/remote.js": ("remote.js", "text/javascript; charset=utf-8"),
-            "/remote-setup": ("remote-setup.html", "text/html; charset=utf-8"),
-            "/remote-setup/": ("remote-setup.html", "text/html; charset=utf-8"),
-            "/remote-setup.css": ("remote-setup.css", "text/css; charset=utf-8"),
-            "/remote-setup.js": ("remote-setup.js", "text/javascript; charset=utf-8"),
-            "/manifest.webmanifest": (
-                "manifest.webmanifest",
-                "application/manifest+json",
-            ),
-            "/service-worker.js": (
-                "service-worker.js",
-                "text/javascript; charset=utf-8",
-            ),
-            "/assets/session-manager-nav.css": (
-                "assets/session-manager-nav.css",
-                "text/css; charset=utf-8",
-            ),
-            "/assets/session-manager-nav.js": (
-                "assets/session-manager-nav.js",
-                "text/javascript; charset=utf-8",
-            ),
-            "/assets/session-manager-icon.png": (
-                "assets/session-manager-icon.png",
-                "image/png",
-            ),
-            "/assets/vendor/qrcode.min.js": (
-                "assets/vendor/qrcode.min.js",
-                "text/javascript; charset=utf-8",
-            ),
-            "/assets/vendor/jsQR.js": (
-                "assets/vendor/jsQR.js",
-                "text/javascript; charset=utf-8",
-            ),
-        }
-        asset = static.get(path)
-        if asset is None:
+        if not self.respond_static(path):
             self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
-            return
-        self.respond_file(ROOT / asset[0], asset[1])
 
     def _dispatch_body(self, method: str) -> None:
         try:
@@ -530,42 +585,51 @@ class AdminHandler(ResponseHandler):
 class RemoteHandler(ResponseHandler):
     """Authenticated PWA interface on 0.0.0.0:8766."""
 
-    def _headers(self, content_type: str, length: int, *, cache: str) -> None:
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", cache)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("X-Frame-Options", "DENY")
+    STATIC_ROUTES = {
+        "/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+        "/pair": ("remote.html", "text/html; charset=utf-8", "no-cache"),
+        "/remote.css": (
+            "remote.css",
+            "text/css; charset=utf-8",
+            "public, max-age=31536000, immutable",
+        ),
+        "/remote.js": (
+            "remote.js",
+            "text/javascript; charset=utf-8",
+            "public, max-age=31536000, immutable",
+        ),
+        "/manifest.webmanifest": (
+            "manifest.webmanifest",
+            "application/manifest+json",
+            "no-cache",
+        ),
+        "/service-worker.js": (
+            "service-worker.js",
+            "text/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "/assets/session-manager-icon.png": (
+            "assets/session-manager-icon.png",
+            "image/png",
+            "public, max-age=86400",
+        ),
+        "/assets/vendor/qrcode.min.js": (
+            "assets/vendor/qrcode.min.js",
+            "text/javascript; charset=utf-8",
+            "public, max-age=86400",
+        ),
+        "/assets/vendor/jsQR.js": (
+            "assets/vendor/jsQR.js",
+            "text/javascript; charset=utf-8",
+            "public, max-age=86400",
+        ),
+    }
 
-    def respond_json(self, status: int, payload: object) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self._headers("application/json; charset=utf-8", len(body), cache="no-store")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def respond_file(
-        self, path: Path, content_type: str, *, cache: str = "public, max-age=3600"
-    ) -> None:
-        asset = STATIC_ASSETS.load(path, self.headers.get("Accept-Encoding", ""))
-        body = asset.body
-        self.send_response(HTTPStatus.OK)
-        self._headers(content_type, len(body), cache=cache)
-        self.send_header("Vary", "Accept-Encoding")
-        if asset.content_encoding:
-            self.send_header("Content-Encoding", asset.content_encoding)
+    def _file_extra_headers(self, path: Path) -> None:
         if path.name == "service-worker.js":
             self.send_header("Service-Worker-Allowed", "/")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > 2_100_000:
-            raise ValueError("request too large")
-        value = json.loads(self.rfile.read(length).decode("utf-8"))
-        return value if isinstance(value, dict) else {}
 
     def dispatch_api(self, method: str, payload: object = None) -> bool:
         if not self.path.startswith("/api/remote/"):
@@ -575,9 +639,7 @@ class RemoteHandler(ResponseHandler):
         if response is None:
             self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
         elif response.status == HTTPStatus.NO_CONTENT:
-            self.send_response(response.status)
-            self._headers("application/json; charset=utf-8", 0, cache="no-store")
-            self.end_headers()
+            self.respond_empty(response.status)
         else:
             self.respond_json(response.status, response.body)
         return True
@@ -586,52 +648,8 @@ class RemoteHandler(ResponseHandler):
         if self.dispatch_api("GET"):
             return
         path = urlparse(self.path).path
-        static = {
-            "/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
-            "/remote": ("remote.html", "text/html; charset=utf-8", "no-cache"),
-            "/remote/": ("remote.html", "text/html; charset=utf-8", "no-cache"),
-            "/pair": ("remote.html", "text/html; charset=utf-8", "no-cache"),
-            "/remote.css": (
-                "remote.css",
-                "text/css; charset=utf-8",
-                "public, max-age=31536000, immutable",
-            ),
-            "/remote.js": (
-                "remote.js",
-                "text/javascript; charset=utf-8",
-                "public, max-age=31536000, immutable",
-            ),
-            "/manifest.webmanifest": (
-                "manifest.webmanifest",
-                "application/manifest+json",
-                "no-cache",
-            ),
-            "/service-worker.js": (
-                "service-worker.js",
-                "text/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "/assets/session-manager-icon.png": (
-                "assets/session-manager-icon.png",
-                "image/png",
-                "public, max-age=86400",
-            ),
-            "/assets/vendor/qrcode.min.js": (
-                "assets/vendor/qrcode.min.js",
-                "text/javascript; charset=utf-8",
-                "public, max-age=86400",
-            ),
-            "/assets/vendor/jsQR.js": (
-                "assets/vendor/jsQR.js",
-                "text/javascript; charset=utf-8",
-                "public, max-age=86400",
-            ),
-        }
-        asset = static.get(path)
-        if asset is None:
+        if not self.respond_static(path):
             self.respond_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
-            return
-        self.respond_file(ROOT / asset[0], asset[1], cache=asset[2])
 
     def do_POST(self) -> None:
         try:

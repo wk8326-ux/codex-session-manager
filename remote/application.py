@@ -45,6 +45,19 @@ _MAX_IMAGE_BYTES = 1_200_000
 _CLIENT_MESSAGE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\Z", re.ASCII)
 
 
+def _unknown_status() -> dict:
+    """Fresh placeholder status for a thread whose state is not known yet."""
+
+    return {
+        "statusKnown": False,
+        "threadStatus": "",
+        "activeFlags": [],
+        "latestTurnStatus": "",
+        "latestTurnHasError": False,
+        "latestTurnHttpStatus": None,
+    }
+
+
 def _validated_image_url(value: object) -> str | None:
     if value is None or value == "":
         return None
@@ -203,14 +216,7 @@ class RemoteApplication:
         statuses = self.projection.list_statuses(
             [summary["threadId"] for summary in summaries]
         )
-        unknown = {
-            "statusKnown": False,
-            "threadStatus": "",
-            "activeFlags": [],
-            "latestTurnStatus": "",
-            "latestTurnHasError": False,
-            "latestTurnHttpStatus": None,
-        }
+        unknown = _unknown_status()
         enriched: list[dict] = []
         for summary in summaries:
             enriched.append({**summary, **(statuses.get(summary["threadId"]) or unknown)})
@@ -218,15 +224,7 @@ class RemoteApplication:
 
     def list_session_summaries(self) -> list[dict]:
         return [
-            {
-                **self._session_summary(session),
-                "statusKnown": False,
-                "threadStatus": "",
-                "activeFlags": [],
-                "latestTurnStatus": "",
-                "latestTurnHasError": False,
-                "latestTurnHttpStatus": None,
-            }
+            {**self._session_summary(session), **_unknown_status()}
             for session in self.remote_store.list_synced_sessions()
         ]
 

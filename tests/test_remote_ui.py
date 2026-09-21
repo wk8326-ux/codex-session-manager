@@ -1069,7 +1069,6 @@ vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.poll = p
 
         self.assertIn("url.pathname.startsWith('/api/')", script)
         self.assertNotIn("/api/remote", (ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
-        server = (ROOT / "app.py").read_text(encoding="utf-8")
         self.assertIn('/remote.css?v=29', script)
         self.assertIn('href="/remote.css?v=29"', html)
         self.assertIn('/remote.js?v=32', script)
@@ -1077,13 +1076,24 @@ vm.runInContext(`${source}; this.hydrate = hydrateSessionStatuses; this.poll = p
         self.assertIn("async function navigationResponse(event)", script)
         self.assertNotIn("location.reload()", (ROOT / "remote.js").read_text(encoding="utf-8"))
         self.assertNotIn("cache: 'no-store'", script)
-        self.assertIn(
-            '"/remote.css": (\n                "remote.css",\n                "text/css; charset=utf-8",\n                "public, max-age=31536000, immutable",\n            )',
-            server,
+        from app import RemoteHandler
+
+        routes = RemoteHandler.STATIC_ROUTES
+        self.assertEqual(
+            routes["/remote.css"],
+            (
+                "remote.css",
+                "text/css; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            ),
         )
-        self.assertIn(
-            '"/remote.js": (\n                "remote.js",\n                "text/javascript; charset=utf-8",\n                "public, max-age=31536000, immutable",\n            )',
-            server,
+        self.assertEqual(
+            routes["/remote.js"],
+            (
+                "remote.js",
+                "text/javascript; charset=utf-8",
+                "public, max-age=31536000, immutable",
+            ),
         )
         self.assertNotIn("'/assets/vendor/jsQR.js?v=1',", script)
 
