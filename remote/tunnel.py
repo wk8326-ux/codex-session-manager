@@ -11,8 +11,9 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener
 
+from probe_http import probe_proxy_handler
 from timeutil import utc_now as _utc_now
 
 
@@ -243,9 +244,19 @@ class FrpTunnelManager:
 
 
 def _http_probe(url: str, timeout: float) -> dict:
+    """Probe the tunnel layer directly, never through the system proxy.
+
+    The public layer answers "can a phone reach this tunnel", so routing it
+    through the desktop's proxy would measure the proxy instead of the tunnel.
+    A proxy that is off would also make a healthy tunnel look broken, which is
+    the failure mode that made remote access look unstable.
+    """
+
     started = time.monotonic()
+    handler = probe_proxy_handler(url)
+    opener = build_opener(handler) if handler is not None else build_opener()
     try:
-        with urlopen(
+        with opener.open(
             Request(url, headers={"User-Agent": "codex-session-manager-health"}),
             timeout=timeout,
         ) as response:

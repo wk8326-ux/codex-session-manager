@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 import time
-from ipaddress import ip_address
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import Request, build_opener
 
+from probe_http import probe_proxy_handler
 from timeutil import utc_now
 
 
@@ -52,20 +51,16 @@ def _probe_url(config: ChannelConfig) -> str:
     return base if base.endswith("/chat/completions") else base + "/chat/completions"
 
 
-def _is_loopback_url(url: str) -> bool:
-    hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
-    if hostname == "localhost" or hostname.endswith(".localhost"):
-        return True
-    try:
-        return ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
 def _default_opener(url: str):
-    if _is_loopback_url(url):
-        return build_opener(ProxyHandler({}))
-    return build_opener()
+    """Probe the channel directly, never through the Windows system proxy.
+
+    See ``probe_http`` for why inheriting the system proxy corrupts probe
+    results: it both mislabels healthy channels and makes a proxy 502
+    indistinguishable from the channel's own 502.
+    """
+
+    handler = probe_proxy_handler(url)
+    return build_opener(handler) if handler is not None else build_opener()
 
 
 def _checked_at() -> str:
