@@ -195,6 +195,26 @@ class RelaySetupScriptContractTests(unittest.TestCase):
             self.assertNotIn("a" * 64, result.stdout)
             self.assertFalse((Path(directory) / ".runtime").exists())
 
+    def test_frp_client_configs_ship_pool_and_health_check(self) -> None:
+        # "work connection pool is full, discarding" fired 633 times in one
+        # second with the default poolCount of 1, and the proxy kept
+        # forwarding connections while 127.0.0.1:8766 was down. Both the
+        # bundled example and the generated client config must carry the
+        # tuning so a fresh install cannot reproduce either failure.
+        example = (ROOT / "scripts" / "frpc.example.toml").read_text(encoding="utf-8")
+        installer = (ROOT / "scripts" / "setup-remote-client.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        for source in (example, installer):
+            self.assertIn("poolCount = 8", source)
+            self.assertIn("heartbeatInterval = 30", source)
+            self.assertIn("heartbeatTimeout = 90", source)
+            self.assertIn("[proxies.healthCheck]", source)
+            self.assertIn('type = "tcp"', source)
+            self.assertIn("maxFailed = 2", source)
+            self.assertIn("intervalSeconds = 3", source)
+
 
 class RelaySetupUiContractTests(unittest.TestCase):
     def test_remote_device_view_links_to_the_local_only_setup_wizard(self) -> None:

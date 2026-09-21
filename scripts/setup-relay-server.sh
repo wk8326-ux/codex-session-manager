@@ -134,6 +134,14 @@ proxyBindAddr = "127.0.0.1"
 method = "token"
 token = "${frp_token}"
 
+[transport]
+# The client keeps a pool of pre-established work connections so a burst of
+# remote requests does not have to handshake one at a time. The server-side
+# default of 5 silently caps whatever the client asks for, which reintroduces
+# the "work connection pool is full, discarding" failure the client tuning is
+# meant to remove.
+maxPoolCount = 20
+
 [transport.tls]
 force = true
 EOF

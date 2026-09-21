@@ -129,6 +129,11 @@ token = "$($config.token)"
 
 [transport]
 protocol = "tcp"
+poolCount = 8
+dialServerTimeout = 10
+dialServerKeepalive = 7200
+heartbeatInterval = 30
+heartbeatTimeout = 90
 
 [transport.tls]
 enable = true
@@ -139,6 +144,12 @@ type = "tcp"
 localIP = "127.0.0.1"
 localPort = 8766
 remotePort = $([int]$config.remotePort)
+
+[proxies.healthCheck]
+type = "tcp"
+timeoutSeconds = 2
+maxFailed = 2
+intervalSeconds = 3
 "@
 Set-Content -LiteralPath $configPath -Value $toml -Encoding UTF8
 if (-not (Test-Path -LiteralPath $logPath)) {

@@ -8,6 +8,14 @@ token = "replace-with-the-same-random-token-as-frps"
 
 [transport]
 protocol = "tcp"
+# Pre-established work connections the client keeps to the relay. The default
+# of 1 makes any burst of remote connections overflow the pool, which frpc
+# reports as "work connection pool is full, discarding".
+poolCount = 8
+dialServerTimeout = 10
+dialServerKeepalive = 7200
+heartbeatInterval = 30
+heartbeatTimeout = 90
 
 [transport.tls]
 enable = true
@@ -18,3 +26,12 @@ type = "tcp"
 localIP = "127.0.0.1"
 localPort = 8766
 remotePort = 18766
+
+# Fail the proxy fast when the local console is not listening. Without this,
+# frpc keeps forwarding work connections that can only end in
+# "connect to local service [127.0.0.1:8766] error: actively refused it".
+[proxies.healthCheck]
+type = "tcp"
+timeoutSeconds = 2
+maxFailed = 2
+intervalSeconds = 3
