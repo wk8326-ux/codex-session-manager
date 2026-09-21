@@ -23,6 +23,20 @@ class SessionAdapter(Protocol):
         raise NotImplementedError
 
 
+def _read_session_status(adapter: object, thread_id: str) -> SessionSnapshot:
+    """Prefer the cheap status read, falling back to a full thread read.
+
+    ``read_status`` skips transcript loading and measured roughly 30ms against
+    1.6-6.9s for ``read_thread`` on long sessions. Keeping the fallback means
+    adapters that only implement the older protocol still work.
+    """
+
+    reader = getattr(adapter, "read_status", None)
+    if callable(reader):
+        return reader(thread_id)
+    return adapter.read_thread(thread_id)
+
+
 Probe = Callable[[ChannelConfig], ProbeResult]
 
 CHANNEL_CATEGORIES = frozenset(
@@ -379,14 +393,17 @@ class WatchdogService:
         snapshot_error = ""
         if result.healthy:
             try:
-                snapshot = self._adapter.read_thread(session["threadId"])
+                snapshot = _read_session_status(self._adapter, session["threadId"])
             except CodexAdapterError as error:
                 snapshot_error = (
                     f"Codex session read failed ({type(error).__name__}): {error}"
                 )
         latest = snapshot.latest_turn if snapshot is not None else None
         if latest is not None:
-            if latest.status in TERMINAL_TURN_STATES:
+            # A turn that is still being written reports ``interrupted`` with no
+            # completion timestamp. Finalizing it here would mark a live resume
+            # as finished and hide the session from the retry bookkeeping.
+            if latest.status in TERMINAL_TURN_STATES and not latest.in_flight:
                 self._store.finalize_resumed_turn(latest.id, latest.status, now)
             self._store.mark_stale_resumed_turns_manual_attention(
                 session["id"], latest.id, now
@@ -403,6 +420,11 @@ class WatchdogService:
             )
 
         turn = snapshot.latest_turn if snapshot is not None else None
+        # The incident belongs to the turn that actually failed, which may be
+        # older than an evidence-free interrupting turn. Fingerprinting the
+        # wrong turn would create a fresh incident on every check and defeat
+        # the attempt/backoff bookkeeping.
+        evidence_turn = snapshot.evidence_turn if snapshot is not None else None
         resume_attempt: int | None = None
         retry_delay_seconds: int | None = None
         retry_next_check_at: str | None = None
@@ -410,15 +432,15 @@ class WatchdogService:
         resume_audit_detail: str | None = None
         # ``resume_candidate`` can only survive the downgrade above when resume
         # actions are enabled, so re-checking the setting here was dead weight.
-        if decision.code == "resume_candidate" and turn is not None:
+        if decision.code == "resume_candidate" and evidence_turn is not None:
             fingerprint = _incident_fingerprint(
-                session["id"], turn.id, decision.error_signature
+                session["id"], evidence_turn.id, decision.error_signature
             )
             incident = self._store.begin_incident(
                 {
                     "fingerprint": fingerprint,
                     "sessionId": session["id"],
-                    "turnId": turn.id,
+                    "turnId": evidence_turn.id,
                     "errorSignature": _error_category(decision.error_signature),
                     "firstSeenAt": now,
                 },
@@ -477,6 +499,15 @@ class WatchdogService:
                             )
                         except ValueError:
                             retry_next_check_at = None
+        # A resume decision is explained by the turn that actually failed, so
+        # the run log points at that turn; ``resumedTurnId`` carries the new one.
+        # Pointing the row at an evidence-free interrupting turn would make the
+        # log disagree with the incident it was created from.
+        recorded_turn = (
+            evidence_turn
+            if evidence_turn is not None and decision.code.startswith("resume")
+            else turn
+        )
         state = turn.status if turn is not None else (
             snapshot.thread_status if snapshot is not None else "unavailable"
         )
@@ -496,7 +527,7 @@ class WatchdogService:
             channel_status=result.category,
             http_status=result.http_status,
             session_state=state,
-            turn_id=turn.id if turn is not None else None,
+            turn_id=recorded_turn.id if recorded_turn is not None else None,
             error_category=_error_category(decision.error_signature),
             decision=decision.code,
             duration_ms=result.duration_ms,

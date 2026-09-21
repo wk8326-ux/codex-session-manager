@@ -115,6 +115,9 @@ class CodexRuntime:
     def read_thread(self, thread_id: str):
         return self._call("read_thread", thread_id)
 
+    def read_status(self, thread_id: str, *, turn_limit: int = 5):
+        return self._call("read_status", thread_id, turn_limit=turn_limit)
+
     def read_thread_detail(self, thread_id: str, turn_limit: int = 30) -> dict:
         return self._call("read_thread_detail", thread_id, turn_limit=turn_limit)
 

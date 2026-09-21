@@ -160,6 +160,118 @@ class SessionProjectionTests(unittest.TestCase):
             adapter.release.set()
             projection.close()
 
+    def test_status_cache_survives_inside_its_own_freshness_window(self) -> None:
+        class StatusAdapter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_status(self, thread_id: str):
+                self.calls += 1
+                return SimpleNamespace(
+                    thread_id=thread_id,
+                    thread_status="idle",
+                    active_flags=(),
+                    latest_turn=SimpleNamespace(
+                        status="completed",
+                        error_message="",
+                        http_status=None,
+                        in_flight=False,
+                    ),
+                    evidence_turn=None,
+                )
+
+        adapter = StatusAdapter()
+        projection = SessionProjection(
+            adapter, fresh_seconds=60, status_fresh_seconds=60
+        )
+        try:
+            first = projection.list_statuses(["thread"])
+            second = projection.list_statuses(["thread"])
+
+            # A longer status window keeps the cheap lifecycle answer warm while
+            # the PWA polls, instead of re-reading every session each heartbeat.
+            self.assertEqual(adapter.calls, 1)
+            self.assertEqual(first, second)
+            self.assertEqual(second["thread"]["latestTurnStatus"], "completed")
+        finally:
+            projection.close()
+
+    def test_status_timeout_falls_back_to_the_last_known_status(self) -> None:
+        class StallingStatusAdapter:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.release = threading.Event()
+                self.release.set()
+
+            def read_status(self, thread_id: str):
+                self.calls += 1
+                self.release.wait(5)
+                return SimpleNamespace(
+                    thread_id=thread_id,
+                    thread_status="idle",
+                    active_flags=(),
+                    latest_turn=SimpleNamespace(
+                        status="inProgress",
+                        error_message="",
+                        http_status=None,
+                        in_flight=True,
+                    ),
+                    evidence_turn=None,
+                )
+
+        adapter = StallingStatusAdapter()
+        projection = SessionProjection(
+            adapter, status_fresh_seconds=0, wait_seconds=0.2
+        )
+        try:
+            warm = projection.list_statuses(["thread"])
+            self.assertEqual(warm["thread"]["latestTurnStatus"], "inProgress")
+
+            adapter.release.clear()
+            started = time.monotonic()
+            stale = projection.list_statuses(["thread"])
+
+            self.assertLess(time.monotonic() - started, 1.5)
+            # Reporting "unknown" for a session that was just measured made the
+            # drawer render a live session as stopped, so the cache is served.
+            self.assertEqual(stale["thread"]["latestTurnStatus"], "inProgress")
+            self.assertTrue(stale["thread"]["latestTurnInFlight"])
+        finally:
+            adapter.release.set()
+            projection.close()
+
+    def test_status_prefers_read_status_over_the_full_thread_read(self) -> None:
+        class BothAdapter(Adapter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.status_calls = 0
+
+            def read_status(self, thread_id: str):
+                self.status_calls += 1
+                return SimpleNamespace(
+                    thread_id=thread_id,
+                    thread_status="idle",
+                    active_flags=(),
+                    latest_turn=SimpleNamespace(
+                        status="completed",
+                        error_message="",
+                        http_status=None,
+                        in_flight=False,
+                    ),
+                    evidence_turn=None,
+                )
+
+        adapter = BothAdapter()
+        adapter.release.set()
+        projection = SessionProjection(adapter)
+        try:
+            projection.list_statuses(["thread"])
+
+            self.assertEqual(adapter.status_calls, 1)
+            self.assertEqual(adapter.calls, 0)
+        finally:
+            projection.close()
+
 
 if __name__ == "__main__":
     unittest.main()

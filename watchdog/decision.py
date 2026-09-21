@@ -74,15 +74,23 @@ def decide(value: DecisionInput) -> Decision:
     turn = current.latest_turn
     if turn is None:
         return Decision("silent_no_turn", detail=current.thread_status)
-    if turn.status == "inProgress":
+    # A turn the App Server is still writing reports ``interrupted`` with no
+    # completion timestamp. Treating that as a terminal failure both mislabels
+    # a healthy session and can queue a resume for work that never stopped.
+    if turn.in_flight:
         return Decision("silent_session_running")
     if turn.status == "completed":
         return Decision("silent_session_completed")
     if turn.status not in {"failed", "interrupted", "systemError"}:
         return Decision("silent_unknown", detail=turn.status)
-    signature = _error_signature(turn)
+    # Codex can end a turn with a bare ``interrupted`` right after a turn that
+    # failed with a real API error. The newest turn then carries no evidence and
+    # the session was never resumed, so match rules against the newest turn that
+    # still explains the interruption.
+    evidence = current.evidence_turn or turn
+    signature = _error_signature(evidence)
     matched = bool(signature) and any(
-        _matches(turn, rule) for rule in value.recovery_rules
+        _matches(evidence, rule) for rule in value.recovery_rules
     )
     if matched:
         return Decision("resume_candidate", signature, "enabled recovery rule matched")

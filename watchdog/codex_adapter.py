@@ -121,6 +121,12 @@ def _turn_diagnostic_text(turn: dict) -> str:
     return _limited_text("\n".join(messages))
 
 
+def _epoch_seconds(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
 def _turn_snapshot(turn: object) -> TurnSnapshot:
     if not isinstance(turn, dict):
         raise CodexProtocolError("thread/read returned a malformed turn")
@@ -144,7 +150,45 @@ def _turn_snapshot(turn: object) -> TurnSnapshot:
         error_kind=error_kind,
         http_status=http_status,
         diagnostic_text=_turn_diagnostic_text(turn),
+        started_at=_epoch_seconds(turn.get("startedAt")),
+        completed_at=_epoch_seconds(turn.get("completedAt")),
     )
+
+
+def _recent_error_turn(turns: list[object], latest: TurnSnapshot | None) -> TurnSnapshot | None:
+    """Find the newest failed turn that still explains an unfinished session.
+
+    Only the turns *after* the newest success are considered. Once a turn
+    completes normally the session has moved past any earlier API failure, so
+    resuming from that old error would replay work the user already finished.
+    """
+
+    if latest is None or latest.status == "completed":
+        return None
+    # ``_latest_status_turn`` may skip trailing compatibility rollout records,
+    # so locate the real turn by id instead of assuming it is the last element.
+    index = next(
+        (
+            position
+            for position, turn in enumerate(turns)
+            if isinstance(turn, dict) and turn.get("id") == latest.id
+        ),
+        None,
+    )
+    if index is None:
+        return None
+    for raw_turn in reversed(turns[:index]):
+        if not isinstance(raw_turn, dict):
+            continue
+        try:
+            candidate = _turn_snapshot(raw_turn)
+        except CodexProtocolError:
+            continue
+        if candidate.status == "completed" and not candidate.has_error_evidence:
+            return None
+        if candidate.has_error_evidence:
+            return candidate
+    return None
 
 
 def _session_snapshot(thread: object, *, require_turns: bool) -> SessionSnapshot:
@@ -168,6 +212,9 @@ def _session_snapshot(thread: object, *, require_turns: bool) -> SessionSnapshot
         thread_status=thread_status,
         active_flags=active_flags,
         latest_turn=latest_turn,
+        recent_error_turn=(
+            _recent_error_turn(turns, latest_turn) if isinstance(turns, list) else None
+        ),
     )
 
 
@@ -303,6 +350,53 @@ class CodexAppServerAdapter:
         if snapshot.thread_id != thread_id:
             raise CodexProtocolError("thread/read returned a different thread id")
         return snapshot
+
+    def read_status(self, thread_id: str, *, turn_limit: int = 5) -> SessionSnapshot:
+        """Read just enough to classify a session, without loading transcripts.
+
+        ``thread/read`` with ``includeTurns=True`` returns the whole transcript
+        and measured 1.6-6.9s on long sessions, which is what pushed every
+        status refresh past its deadline. Pairing a metadata-only
+        ``thread/read`` (about 1ms) with ``thread/turns/list`` (about 30ms)
+        yields the same lifecycle answer for a fraction of the cost, so the
+        session list can stay live without making the local process look heavy.
+        """
+
+        bounded_limit = max(1, min(int(turn_limit), 20))
+        response = self._transport.request(
+            "thread/read", {"threadId": thread_id, "includeTurns": False}
+        )
+        if not isinstance(response, dict):
+            raise CodexProtocolError("thread/read returned a non-object response")
+        thread = response.get("thread")
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise CodexProtocolError("thread/read returned a different thread id")
+        thread_status, active_flags = _thread_state(thread.get("status"))
+        name = thread.get("name")
+
+        turns_response = self._transport.request(
+            "thread/turns/list", {"threadId": thread_id, "limit": bounded_limit}
+        )
+        if not isinstance(turns_response, dict):
+            raise CodexProtocolError("thread/turns/list returned a non-object response")
+        raw_turns = turns_response.get("data")
+        if not isinstance(raw_turns, list):
+            raise CodexProtocolError("thread/turns/list returned a malformed turns list")
+        # ``thread/turns/list`` is newest-first; the shared helpers expect the
+        # chronological order that ``thread/read`` produces.
+        turns: list[object] = list(reversed(raw_turns))
+        latest_turn_data = _latest_status_turn(turns)
+        latest_turn = (
+            _turn_snapshot(latest_turn_data) if latest_turn_data is not None else None
+        )
+        return SessionSnapshot(
+            thread_id=thread_id,
+            name=name if isinstance(name, str) else "",
+            thread_status=thread_status,
+            active_flags=active_flags,
+            latest_turn=latest_turn,
+            recent_error_turn=_recent_error_turn(turns, latest_turn),
+        )
 
     def _read_thread_response(self, thread_id: str) -> dict:
         response = self._transport.request(

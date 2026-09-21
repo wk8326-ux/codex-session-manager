@@ -19,7 +19,8 @@ Codex 会话的自动恢复和远程人工控制，不负责启动普通项目�
 ## 核心不变量
 
 1. 渠道不可用时保持静默，绝不发送续跑消息。
-2. `completed` 和 `inProgress` 在错误规则匹配前短路。
+2. `completed` 和在飞 turn 在错误规则匹配前短路；在飞以 `completedAt` 缺失为准，
+   因为 App Server 会把仍在写入的 turn 报告为 `interrupted`。
 3. 结果不确定的写请求不自动重发，避免同一会话收到重复消息。
 4. App Server 断开不会终止 HTTP Host；Runtime 会重连并重新订阅事件。
 5. 管理端先于 Codex、FRP 和调度器就绪，重功能不能阻塞故障页面。

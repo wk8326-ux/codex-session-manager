@@ -416,6 +416,96 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertEqual(incident["status"], "manual_attention")
         self.assertEqual(resumed_run["decision"], "resume_manual_attention")
 
+    def test_live_resumed_turn_is_not_finalized_as_interrupted(self) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, failed_snapshot(), ["turn-new"]
+        )
+        session = self.create_session(secrets)
+        service.check_session(session["id"], NOW)
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-failed\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        self.assertEqual(
+            self.store.get_incident(fingerprint)["status"], "started"
+        )
+
+        # The App Server reports a turn it is still writing as ``interrupted``
+        # with no completion timestamp. Finalizing it here would resolve the
+        # incident and hide a resume that is still running.
+        adapter.snapshot = SessionSnapshot(
+            THREAD_ID,
+            "resumed session",
+            "active",
+            (),
+            TurnSnapshot(
+                "turn-new",
+                "interrupted",
+                "",
+                "",
+                None,
+                "",
+                started_at=1788525391,
+                completed_at=None,
+            ),
+        )
+
+        run = service.check_session(session["id"], "2026-07-31T06:05:30Z")
+
+        self.assertEqual(run["decision"], "silent_session_running")
+        self.assertEqual(self.store.get_incident(fingerprint)["status"], "started")
+
+    def test_resume_matches_an_error_turn_behind_an_evidence_free_interrupt(
+        self,
+    ) -> None:
+        self.store.update_settings({"resumeActionsEnabled": True})
+        healthy = ProbeResult("healthy", 200, "channel responded normally", 8, NOW)
+        failed = TurnSnapshot(
+            "turn-503",
+            "failed",
+            "upstream unavailable",
+            "httpConnectionFailed",
+            503,
+            "",
+            1788525300,
+            1788525380,
+        )
+        # The newest turn carries no evidence, but the 503 right before it is
+        # what actually stopped the session.
+        interrupted = SessionSnapshot(
+            THREAD_ID,
+            "interrupted session",
+            "idle",
+            (),
+            TurnSnapshot(
+                "turn-interrupted",
+                "interrupted",
+                "",
+                "",
+                None,
+                "",
+                1788525391,
+                1788525391,
+            ),
+            failed,
+        )
+        service, secrets, _probe, adapter = make_service(
+            self.store, healthy, interrupted, ["turn-new"]
+        )
+        session = self.create_session(secrets)
+
+        run = service.check_session(session["id"], NOW)
+
+        self.assertEqual(run["decision"], "resume_started")
+        # The incident fingerprint must point at the turn that failed, or every
+        # check would open a fresh incident and defeat the retry bookkeeping.
+        self.assertEqual(run["turnId"], "turn-503")
+        fingerprint = hashlib.sha256(
+            f"{session['id']}\0turn-503\0httpConnectionFailed:http:503".encode()
+        ).hexdigest()
+        self.assertIsNotNone(self.store.get_incident(fingerprint))
+
     def test_healthy_channel_resumes_one_503_incident_once(self) -> None:
         self.store.update_settings({"resumeActionsEnabled": True})
         secrets = MemorySecretStore()

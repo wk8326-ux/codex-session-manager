@@ -73,14 +73,39 @@ sudo iptables -S INPUT
 Nginx 只把手机域名转发到 FRP 在 VPS 本机创建的端口：
 
 ```nginx
+upstream lpc_remote {
+    server 127.0.0.1:18766;
+    keepalive 16;
+}
+
 server {
     listen 80;
     listen [::]:80;
     server_name console.example.com;
 
-    location / {
-        proxy_pass http://127.0.0.1:18766;
+    # 截图以 base64 JSON 上传，Nginx 默认 1m 会在到达 PWA 后端前先返回 413。
+    client_max_body_size 8m;
+
+    # 事件流是一次最长 30 秒的长轮询。Nginx 默认缓冲代理响应，会把事件
+    # 压在缓冲区里，手机端看起来就是慢好几秒。
+    location /api/remote/events {
+        proxy_pass http://lpc_remote;
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location / {
+        proxy_pass http://lpc_remote;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -92,6 +117,8 @@ server {
 ```
 
 使用 Certbot 或其他 ACME 客户端为域名签发证书，并强制 HTTP 跳转 HTTPS。
+
+`scripts/setup-relay-server.sh` 会按上面的内容生成站点配置，手工部署时以脚本为准。
 
 ## Windows 端
 

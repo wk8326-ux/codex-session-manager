@@ -155,9 +155,11 @@ Desktop runner 是当前控制台的全局单例。添加监控会话不会额�
 
 ### 关于“运行中”与 `notLoaded`
 
-监控器启动的是独立的 Codex App Server 进程。`thread/read` 能可靠读取已经写入本地记录的最新 turn；如果该 turn 为 `inProgress`，控制台会显示“会话运行中”并静默。但是 App Server 的 `active` / `notLoaded` 是该 App Server 进程自己的内存状态，不能代表桌面 Codex 应用中是否仍打开或正在显示同一会话。
+监控器启动的是独立的 Codex App Server 进程。状态判定不依赖 `thread/read` 的完整 transcript，而是用元数据读取加 `thread/turns/list`，两者合计约 30ms；完整读取在长会话上实测要 1.6–6.9 秒，正是它让每次状态刷新都超时。App Server 的 `active` / `notLoaded` 是该 App Server 进程自己的内存状态，不能代表桌面 Codex 应用中是否仍打开或正在显示同一会话。
 
-因此，当记录显示 `interrupted` 但没有 429、502、503、504 等可恢复 API 错误时，控制台会明确记录“最新 turn 已中断，但没有可确认的可恢复 API 错误”，并保持静默。它不会把桌面端视觉上的活动状态推断为可续跑，避免对真实工作会话发送重复提示词。
+App Server 会把一个仍在写入的 turn 报告为 `interrupted`，此时 `startedAt` 有值而 `completedAt` 为空。控制台据此判定“会话运行中”并静默：把它当成终态会误标健康会话，也会为从未停止的工作排入续跑。真实终态在实测数据里始终带 `completedAt`。
+
+当最新 turn 是无错误证据的 `interrupted` 时，控制台会向前查找最近一个仍能解释这次中断的失败 turn（遇到正常完成的 turn 即停止），并用它匹配恢复规则和生成事件指纹。否则最新 turn 没有错误证据时只会记录“最新 turn 已中断，但没有可确认的可恢复 API 错误”并保持静默，使真正的 503 永远不会触发续跑。它不会把桌面端视觉上的活动状态推断为可续跑，避免对真实工作会话发送重复提示词。
 - 全局续跑开关关闭；此时仍会记录“仅观察到续跑候选”。
 
 内置恢复规则可识别最新 Codex turn 中的 HTTP 429、502、503、504，以及若干超时、限流和上游错误模式。除了 Codex 的结构化 HTTP 状态字段，控制台也会严格识别已知上游错误文本中的 `unexpected status 503`、`last status: 429`、`upstream_status: HTTP 502` 等格式；普通会话文本不参与匹配。恢复规则严格匹配；不要把未知异常宽泛地标记为可恢复。

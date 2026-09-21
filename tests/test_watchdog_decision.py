@@ -12,13 +12,26 @@ def snapshot(
     message: str = "",
     diagnostic: str = "",
     flags=(),
+    started_at: int | None = None,
+    completed_at: int | None = None,
+    recent_error: TurnSnapshot | None = None,
 ) -> SessionSnapshot:
     return SessionSnapshot(
         "thread",
         "name",
         "idle",
         tuple(flags),
-        TurnSnapshot("turn", status, message, kind, http, diagnostic),
+        TurnSnapshot(
+            "turn",
+            status,
+            message,
+            kind,
+            http,
+            diagnostic,
+            started_at,
+            completed_at,
+        ),
+        recent_error,
     )
 
 
@@ -152,6 +165,91 @@ class DecisionTests(unittest.TestCase):
                     decide(DecisionInput("healthy", waiting, [])).code,
                     "silent_manual_attention",
                 )
+
+    def test_a_turn_without_a_completion_timestamp_is_still_running(self) -> None:
+        # The App Server labels a turn it is still writing as ``interrupted``.
+        # The missing completion timestamp is what proves the session is alive,
+        # and reporting it as a failure would resume work that never stopped.
+        rules = [{"matchType": "http_status", "pattern": "503", "enabled": True}]
+
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot("interrupted", started_at=1789957920, completed_at=None),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "silent_session_running")
+        self.assertEqual(result.error_signature, "")
+
+    def test_completed_turn_is_not_treated_as_running(self) -> None:
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot("completed", started_at=1789957000, completed_at=1789957100),
+                [],
+            )
+        )
+
+        self.assertEqual(result.code, "silent_session_completed")
+
+    def test_error_evidence_behind_an_interrupt_still_triggers_a_resume(self) -> None:
+        # Regression: a session that died with 503 was interrupted again without
+        # error evidence, so matching only the newest turn reported "no
+        # recoverable API error" and the session never resumed.
+        rules = [{"matchType": "http_status", "pattern": "503", "enabled": True}]
+        failed = TurnSnapshot(
+            "turn-503",
+            "failed",
+            "upstream unavailable",
+            "httpConnectionFailed",
+            503,
+            "",
+            1788525300,
+            1788525380,
+        )
+
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot(
+                    "interrupted",
+                    started_at=1788525391,
+                    completed_at=1788525391,
+                    recent_error=failed,
+                ),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "resume_candidate")
+        self.assertEqual(result.error_signature, "httpConnectionFailed:http:503")
+
+    def test_old_error_is_ignored_after_the_session_completed(self) -> None:
+        rules = [{"matchType": "http_status", "pattern": "503", "enabled": True}]
+        stale = TurnSnapshot(
+            "turn-503",
+            "failed",
+            "upstream unavailable",
+            "httpConnectionFailed",
+            503,
+        )
+
+        result = decide(
+            DecisionInput(
+                "healthy",
+                snapshot(
+                    "completed",
+                    started_at=1788526000,
+                    completed_at=1788526100,
+                    recent_error=stale,
+                ),
+                rules,
+            )
+        )
+
+        self.assertEqual(result.code, "silent_session_completed")
 
     def test_all_seeded_http_status_rules_require_an_exact_enabled_match(self) -> None:
         for status in (429, 502, 503, 504):

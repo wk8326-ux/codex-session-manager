@@ -605,10 +605,15 @@
     const threadStatus = session?.threadStatus || '';
     const activeStates = ['active', 'inProgress', 'running', 'started'];
     const failedStates = ['failed', 'interrupted', 'systemError', 'cancelled'];
+    // The App Server labels a turn it is still writing as "interrupted". The
+    // backend converts that to inProgress, and this flag keeps the drawer
+    // honest even if an older cached payload arrives without the conversion.
+    if (session?.latestTurnInFlight || activeStates.includes(latestStatus)) {
+      return 'inProgress';
+    }
     if (session?.latestTurnHasError || failedStates.includes(latestStatus)) {
       return latestStatus || 'failed';
     }
-    if (activeStates.includes(latestStatus)) return 'inProgress';
     if (latestStatus === 'completed') return 'completed';
     if ((session?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
     if (failedStates.includes(threadStatus)) return threadStatus;

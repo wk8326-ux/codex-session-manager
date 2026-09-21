@@ -627,6 +627,169 @@ class CodexAdapterTests(unittest.TestCase):
 
         self.assertEqual([session.thread_id for session in sessions], [THREAD_ID, other_id])
 
+    def test_read_status_uses_cheap_metadata_and_reports_an_in_flight_turn(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "name": "running-session",
+                        "status": {"type": "active", "activeFlags": ["streaming"]},
+                    }
+                },
+                "thread/turns/list": {
+                    "data": [
+                        {
+                            "id": "turn-newest",
+                            "status": "interrupted",
+                            "startedAt": 1789957920,
+                            "completedAt": None,
+                            "durationMs": None,
+                            "error": None,
+                            "items": [],
+                        },
+                        {
+                            "id": "turn-older",
+                            "status": "completed",
+                            "startedAt": 1789957000,
+                            "completedAt": 1789957100,
+                            "durationMs": 100,
+                            "items": [],
+                        },
+                    ],
+                    "nextCursor": None,
+                },
+            }
+        )
+
+        snapshot = CodexAppServerAdapter(transport).read_status(THREAD_ID, turn_limit=5)
+
+        self.assertEqual(snapshot.name, "running-session")
+        self.assertEqual(snapshot.thread_status, "active")
+        self.assertEqual(snapshot.active_flags, ("streaming",))
+        self.assertIsNotNone(snapshot.latest_turn)
+        self.assertEqual(snapshot.latest_turn.id, "turn-newest")
+        # A turn the server is still writing has no completion timestamp, which
+        # is the only reliable signal that separates it from a real failure.
+        self.assertTrue(snapshot.latest_turn.in_flight)
+        self.assertIsNone(snapshot.recent_error_turn)
+        self.assertEqual(
+            transport.calls,
+            [
+                ("thread/read", {"threadId": THREAD_ID, "includeTurns": False}),
+                ("thread/turns/list", {"threadId": THREAD_ID, "limit": 5}),
+            ],
+        )
+
+    def test_read_status_finds_the_error_turn_behind_an_evidence_free_interrupt(
+        self,
+    ) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "name": "failed-session",
+                        "status": {"type": "idle"},
+                    }
+                },
+                "thread/turns/list": {
+                    "data": [
+                        {
+                            "id": "turn-interrupted",
+                            "status": "interrupted",
+                            "startedAt": 1788525391,
+                            "completedAt": 1788525391,
+                            "durationMs": 0,
+                            "error": None,
+                            "items": [],
+                        },
+                        {
+                            "id": "turn-503",
+                            "status": "failed",
+                            "startedAt": 1788525300,
+                            "completedAt": 1788525380,
+                            "durationMs": 80,
+                            "error": {
+                                "message": "upstream unavailable",
+                                "codexErrorInfo": {
+                                    "httpConnectionFailed": {"httpStatusCode": 503}
+                                },
+                            },
+                            "items": [],
+                        },
+                    ]
+                },
+            }
+        )
+
+        snapshot = CodexAppServerAdapter(transport).read_status(THREAD_ID)
+
+        self.assertFalse(snapshot.latest_turn.in_flight)
+        self.assertEqual(snapshot.latest_turn.id, "turn-interrupted")
+        self.assertIsNotNone(snapshot.recent_error_turn)
+        self.assertEqual(snapshot.recent_error_turn.id, "turn-503")
+        self.assertEqual(snapshot.recent_error_turn.http_status, 503)
+        self.assertIs(snapshot.evidence_turn, snapshot.recent_error_turn)
+
+    def test_read_status_ignores_errors_the_session_already_moved_past(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {
+                    "thread": {
+                        "id": THREAD_ID,
+                        "name": "recovered-session",
+                        "status": {"type": "idle"},
+                    }
+                },
+                "thread/turns/list": {
+                    "data": [
+                        {
+                            "id": "turn-done",
+                            "status": "completed",
+                            "startedAt": 1788526000,
+                            "completedAt": 1788526100,
+                            "durationMs": 100,
+                            "items": [],
+                        },
+                        {
+                            "id": "turn-503",
+                            "status": "failed",
+                            "startedAt": 1788525300,
+                            "completedAt": 1788525380,
+                            "durationMs": 80,
+                            "error": {
+                                "message": "upstream unavailable",
+                                "codexErrorInfo": {
+                                    "httpConnectionFailed": {"httpStatusCode": 503}
+                                },
+                            },
+                            "items": [],
+                        },
+                    ]
+                },
+            }
+        )
+
+        snapshot = CodexAppServerAdapter(transport).read_status(THREAD_ID)
+
+        self.assertEqual(snapshot.latest_turn.status, "completed")
+        # The session completed normally after the failure, so replaying the old
+        # 503 would resume work the user already finished.
+        self.assertIsNone(snapshot.recent_error_turn)
+        self.assertIsNone(snapshot.evidence_turn)
+
+    def test_read_status_rejects_malformed_turn_list(self) -> None:
+        transport = FakeTransport(
+            {
+                "thread/read": {"thread": {"id": THREAD_ID, "status": {"type": "idle"}}},
+                "thread/turns/list": {"data": {}},
+            }
+        )
+
+        with self.assertRaises(CodexProtocolError):
+            CodexAppServerAdapter(transport).read_status(THREAD_ID)
+
 
 class QueueStdout:
     def __init__(self) -> None:

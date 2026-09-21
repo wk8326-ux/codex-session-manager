@@ -53,6 +53,7 @@ def _unknown_status() -> dict:
         "threadStatus": "",
         "activeFlags": [],
         "latestTurnStatus": "",
+        "latestTurnInFlight": False,
         "latestTurnHasError": False,
         "latestTurnHttpStatus": None,
     }

@@ -360,6 +360,17 @@ const cases = [
     expected: 'inProgress',
     session: { statusKnown: true, threadStatus: 'active', latestTurnStatus: 'inProgress' },
   },
+  {
+    // The backend converts a still-running turn to inProgress, and this flag
+    // keeps the drawer honest for cached payloads from before that change.
+    expected: 'inProgress',
+    session: {
+      statusKnown: true,
+      threadStatus: 'idle',
+      latestTurnStatus: 'interrupted',
+      latestTurnInFlight: true,
+    },
+  },
 ];
 for (const item of cases) {
   const actual = context.sessionSnapshotStatus(item.session);
