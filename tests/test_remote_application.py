@@ -5,11 +5,20 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from remote.application import RemoteApplication, RemoteNotFound, RemoteValidationError
+from remote.application import (
+    RemoteApplication,
+    RemoteApplicationError,
+    RemoteNotFound,
+    RemoteValidationError,
+)
 from remote.approvals import RemoteApprovalBroker
 from remote.events import RemoteEventHub
 from remote.store import RemoteStore
-from watchdog.codex_adapter import CodexAdapterError, DefiniteSendFailure
+from watchdog.codex_adapter import (
+    CodexAdapterError,
+    DefiniteSendFailure,
+    UncertainSendFailure,
+)
 
 
 THREAD_ID = "00000000-0000-4000-8000-000000000001"
@@ -191,6 +200,49 @@ class RemoteApplicationTests(unittest.TestCase):
             )
 
         self.assertEqual(self.adapter.sent, [(THREAD_ID, "第一条", None)])
+
+    def test_uncertain_send_is_never_retried_with_the_same_message_id(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        payload = {"message": "结果不明", "clientMessageId": "phone-message-uncertain"}
+        self.adapter.send_error = UncertainSendFailure("transport exited")
+
+        with self.assertRaises(RemoteApplicationError):
+            self.application.send_message(synced["id"], payload)
+
+        self.adapter.send_error = None
+        replay = self.application.send_message(synced["id"], payload)
+
+        self.assertEqual(
+            self.adapter.sent,
+            [(THREAD_ID, "结果不明", None)],
+            "an uncertain delivery must not be resent automatically",
+        )
+        self.assertEqual(replay["delivery"], "confirming")
+        self.assertTrue(replay["confirmationPending"])
+        self.assertTrue(replay["idempotentReplay"])
+        self.assertEqual(replay["clientMessageId"], "phone-message-uncertain")
+
+    def test_uncertain_send_does_not_block_a_new_message_id(self) -> None:
+        synced = self.application.create_synced_session(
+            {"name": "Woxsheet", "threadId": THREAD_ID}
+        )
+        self.adapter.send_error = UncertainSendFailure("transport exited")
+        with self.assertRaises(RemoteApplicationError):
+            self.application.send_message(
+                synced["id"],
+                {"message": "第一条", "clientMessageId": "phone-message-uncertain-1"},
+            )
+
+        self.adapter.send_error = None
+        response = self.application.send_message(
+            synced["id"],
+            {"message": "第二条", "clientMessageId": "phone-message-uncertain-2"},
+        )
+
+        self.assertEqual(response["turnId"], "turn-2")
+        self.assertEqual(len(self.adapter.sent), 2)
 
     def test_message_accepts_one_valid_screenshot_and_rejects_invalid_data(self) -> None:
         synced = self.application.create_synced_session(
