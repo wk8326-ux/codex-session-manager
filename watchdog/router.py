@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
+
+from timeutil import parse_utc
 
 from .application import ResourceConflictError, ResourceNotFoundError
 from .codex_adapter import CodexAdapterError
@@ -266,7 +267,7 @@ class WatchdogHttpApi:
         for key in ("from", "to"):
             if key in result:
                 try:
-                    datetime.strptime(str(result[key]), "%Y-%m-%dT%H:%M:%SZ")
+                    parse_utc(str(result[key]))
                 except ValueError:
                     raise ValidationError(f"{key} must be a UTC timestamp") from None
         if result.get("from") and result.get("to") and result["from"] > result["to"]:

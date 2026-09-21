@@ -9,13 +9,10 @@ import time
 import tomllib
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+from timeutil import utc_now as _utc_now
 
 
 def _process_executable(pid: int) -> Path | None:

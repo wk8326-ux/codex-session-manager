@@ -4,6 +4,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
+from timeutil import utc_now as now_utc
+
 
 class ScheduledService(Protocol):
     def run_due(self, now: str) -> object:
@@ -16,10 +18,6 @@ class RecordStore(Protocol):
 
     def next_check_at(self) -> str | None:
         raise NotImplementedError
-
-
-def now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def local_date() -> str:

@@ -4,10 +4,11 @@ import json
 import time
 from ipaddress import ip_address
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
+
+from timeutil import utc_now
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ def _default_opener(url: str):
 
 
 def _checked_at() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utc_now()
 
 
 def probe_channel(config: ChannelConfig, *, opener=None, clock=time.perf_counter) -> ProbeResult:

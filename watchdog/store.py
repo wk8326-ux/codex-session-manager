@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import AbstractContextManager
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
+
+from timeutil import format_utc, parse_utc, shift_utc, utc_now
 
 from .channels import ProbeResult
 from .row_mapping import row_to_dict
@@ -94,7 +96,7 @@ class WatchdogStore:
             initialize_schema(connection)
             self._cancel_unstarted_desktop_bridge_jobs(
                 connection,
-                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                utc_now(),
             )
 
     @staticmethod
@@ -199,7 +201,7 @@ class WatchdogStore:
             if columns.get("resumeDispatchMode") == "direct_app_server":
                 self._cancel_unstarted_desktop_bridge_jobs(
                     connection,
-                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    utc_now(),
                     all_sessions=True,
                     detail=(
                         "desktop bridge dispatch was cancelled after switching "
@@ -281,9 +283,7 @@ class WatchdogStore:
                     (*values, session_id),
                 )
             if "enabled" in changes and not bool(changes["enabled"]):
-                cancelled_at = str(changes.get("updatedAt") or "") or datetime.now(
-                    timezone.utc
-                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                cancelled_at = str(changes.get("updatedAt") or "") or utc_now()
                 self._cancel_unstarted_desktop_bridge_jobs(
                     connection,
                     cancelled_at,
@@ -547,12 +547,7 @@ class WatchdogStore:
 
     @staticmethod
     def _lease_expiry(claimed_at: str, lease_seconds: int) -> str:
-        current = datetime.strptime(claimed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
-        return (current + timedelta(seconds=lease_seconds)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        return shift_utc(claimed_at, seconds=lease_seconds)
 
     def claim_desktop_bridge_job(
         self,
@@ -953,12 +948,8 @@ class WatchdogStore:
         if delay_seconds is None or not last_attempt_at:
             return False
         try:
-            previous = datetime.strptime(
-                last_attempt_at, "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(tzinfo=timezone.utc)
-            current = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=timezone.utc
-            )
+            previous = parse_utc(last_attempt_at)
+            current = parse_utc(now)
         except (TypeError, ValueError):
             return False
         return current >= previous + timedelta(seconds=delay_seconds)
@@ -1206,11 +1197,9 @@ class WatchdogStore:
 
     def prune_records(self, now_utc: str) -> None:
         settings = self.get_settings()
-        current = datetime.strptime(now_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
-        cutoff = (current - timedelta(days=settings["recordRetentionDays"])).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
+        current = parse_utc(now_utc)
+        cutoff = format_utc(
+            current - timedelta(days=settings["recordRetentionDays"])
         )
         with self._connect() as connection:
             aged_rows = connection.execute(

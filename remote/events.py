@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from datetime import datetime, timezone
 from typing import Callable
 from uuid import uuid4
 
-
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+from timeutil import utc_now as _timestamp
 
 
 def _string(value: object) -> str:

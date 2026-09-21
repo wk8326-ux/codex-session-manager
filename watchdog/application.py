@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
 from typing import Callable
+
+from timeutil import parse_utc, utc_now
 
 from .channels import ChannelConfig, ProbeResult
 from .secrets import SecretStore, SecretStoreError
@@ -28,10 +29,6 @@ class ResourceNotFoundError(LookupError):
 
 class ResourceConflictError(RuntimeError):
     """Raised when a watchdog mutation conflicts with persisted state."""
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _strict_bool(value: object, field: str) -> bool:
@@ -61,7 +58,7 @@ def _safe_probe(result: ProbeResult, now: str, api_key: str) -> ProbeResult:
         duration = 0
     checked_at = result.checked_at
     try:
-        datetime.strptime(checked_at, "%Y-%m-%dT%H:%M:%SZ")
+        parse_utc(checked_at)
     except (TypeError, ValueError):
         checked_at = now
     detail = str(result.detail or "").replace(api_key, "[redacted]")[:500]

@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
-from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
+
+from timeutil import parse_utc, shift_utc, utc_now as _utc_now
 
 from .channels import ChannelConfig, ProbeResult
 from .codex_adapter import CodexAdapterError, DefiniteSendFailure
@@ -98,21 +99,11 @@ DECISION_DETAILS = {
 
 
 def _add_minutes(value: str, minutes: int) -> str:
-    current = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
-    )
-    return (current + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return shift_utc(value, minutes=minutes)
 
 
 def _add_seconds(value: str, seconds: int) -> str:
-    current = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
-    )
-    return (current + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return shift_utc(value, seconds=seconds)
 
 
 def _safe_detail(detail: object, api_key: str = "") -> str:
@@ -158,7 +149,7 @@ def _normalize_probe_result(result: ProbeResult, now: str) -> ProbeResult:
     )
     checked_at = result.checked_at
     try:
-        datetime.strptime(checked_at, "%Y-%m-%dT%H:%M:%SZ")
+        parse_utc(checked_at)
     except (TypeError, ValueError):
         checked_at = now
     return ProbeResult(
@@ -174,8 +165,8 @@ def _healthy_probe_is_fresh(result: ProbeResult, now: str) -> bool:
     if result.category != "healthy":
         return True
     try:
-        checked = datetime.strptime(result.checked_at, "%Y-%m-%dT%H:%M:%SZ")
-        current = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ")
+        checked = parse_utc(result.checked_at)
+        current = parse_utc(now)
     except (TypeError, ValueError):
         return False
     age = (current - checked).total_seconds()

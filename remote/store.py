@@ -8,10 +8,12 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
+
+from timeutil import format_utc, now_datetime, utc_now
 
 
 class RemoteStoreError(RuntimeError):
@@ -24,10 +26,6 @@ class PairingRejected(RemoteStoreError):
 
 class MessageDeliveryConflict(RemoteStoreError):
     """A client message ID was reused with different content."""
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _digest(value: str) -> str:
@@ -155,9 +153,9 @@ class RemoteStore:
         secret = secrets.token_urlsafe(32)
         comparison_code = f"{secrets.randbelow(1_000_000):06d}"
         created_at = utc_now()
-        expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=lifetime_seconds)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires_at = format_utc(
+            now_datetime() + timedelta(seconds=lifetime_seconds)
+        )
         with self._connect() as connection:
             connection.execute(
                 "DELETE FROM remote_pairings WHERE expires_at < ? OR claimed_at IS NOT NULL",

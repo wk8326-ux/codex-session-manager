@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Callable
 from uuid import uuid4
+
+from timeutil import format_utc, now_datetime
 
 
 class ApprovalError(RuntimeError):
@@ -37,11 +39,11 @@ SUPPORTED_METHODS = {
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_datetime()
 
 
 def _timestamp(value: datetime) -> str:
-    return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return format_utc(value)
 
 
 def _text(value: object, limit: int = 2_000) -> str:
