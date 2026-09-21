@@ -416,7 +416,22 @@ class CodexAppServerAdapter:
         return detail
 
     def list_threads(self, limit: int = 5) -> list[SessionSnapshot]:
-        response = self._transport.request("thread/list", {"limit": limit})
+        """List recent sessions from the state DB without scanning transcripts.
+
+        ``thread/list`` defaults to ``useStateDbOnly=False``, which makes the App
+        Server scan every rollout JSONL to repair thread metadata. On this
+        machine that is 232 files / 2.1GB, so ``limit=50`` took 16.1s and still
+        returned only 7 distinct sessions because ``limit`` counts scanned rows,
+        not sessions. The request then tripped the 10s transport timeout and
+        marked the whole runtime disconnected.
+
+        Asking for state-DB-only rows returns the same 50 distinct sessions in
+        0.01s, so the list stays live and no longer degrades the connection.
+        """
+
+        response = self._transport.request(
+            "thread/list", {"limit": limit, "useStateDbOnly": True}
+        )
         if not isinstance(response, dict) or not isinstance(response.get("data"), list):
             raise CodexProtocolError("thread/list returned malformed data")
         snapshots: list[SessionSnapshot] = []

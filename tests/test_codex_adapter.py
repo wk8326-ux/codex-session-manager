@@ -598,7 +598,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(sessions[0].thread_id, THREAD_ID)
         self.assertEqual(sessions[0].name, "watchdog-integration-test")
         self.assertIsNone(sessions[0].latest_turn)
-        self.assertEqual(transport.calls, [("thread/list", {"limit": 5})])
+        self.assertEqual(
+            transport.calls,
+            [("thread/list", {"limit": 5, "useStateDbOnly": True})],
+        )
 
     def test_list_threads_deduplicates_repeated_codex_records(self) -> None:
         duplicate = {
