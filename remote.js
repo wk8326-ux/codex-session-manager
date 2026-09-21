@@ -19,6 +19,13 @@
   const IDLE_REFRESH_MS = 8000;
   const HIDDEN_REFRESH_MS = 30000;
   const SESSION_STATUS_REFRESH_MS = 45000;
+  // Refreshing the whole session list re-reads every synced thread's status.
+  // That measured 2064ms on a cold cache and then 2ms once cached, so the
+  // periodic cost lands entirely on whichever heartbeat falls after the 60s
+  // cache expiry. Idle sessions change rarely and the event stream already
+  // pushes live turn and approval events, so an idle console backs off instead
+  // of paying that cost every 45s.
+  const IDLE_STATUS_REFRESH_MS = 150000;
   const LIVE_ACTIVITY_GRACE_MS = 180000;
   const INITIAL_LIVE_TURN_MAX_AGE_MS = 7200000;
   const CONNECTION_FAILURE_THRESHOLD = 3;
@@ -1734,11 +1741,26 @@
     }, normalizedDelay);
   }
 
+  function sessionStatusRefreshDelay() {
+    if (document.visibilityState === 'hidden') return HIDDEN_REFRESH_MS;
+    const live = state.sessions.some(session => sessionSnapshotStatus(session) === 'inProgress');
+    return live ? SESSION_STATUS_REFRESH_MS : IDLE_STATUS_REFRESH_MS;
+  }
+
+  function scheduleSessionStatusHeartbeat(delay = sessionStatusRefreshDelay()) {
+    clearTimeout(state.sessionStatusTimer);
+    state.sessionStatusTimer = setTimeout(async () => {
+      state.sessionStatusTimer = 0;
+      if (document.visibilityState !== 'hidden') await hydrateSessionStatuses();
+      // Recomputed after every pass so a session that starts or stops running
+      // changes the cadence immediately instead of at the next fixed tick.
+      scheduleSessionStatusHeartbeat();
+    }, Math.max(0, Number(delay) || 0));
+  }
+
   function startSessionStatusHeartbeat() {
     if (state.sessionStatusTimer) return;
-    state.sessionStatusTimer = setInterval(() => {
-      if (document.visibilityState !== 'hidden') hydrateSessionStatuses();
-    }, SESSION_STATUS_REFRESH_MS);
+    scheduleSessionStatusHeartbeat();
   }
 
   function restoreCachedConversation(session) {
@@ -2760,7 +2782,13 @@
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') releaseMessageFocus();
       if (document.visibilityState === 'hidden') stopQrScanner();
-      if (document.visibilityState !== 'hidden') hydrateSessionStatuses();
+      if (document.visibilityState !== 'hidden') {
+        hydrateSessionStatuses();
+        // A hidden tab may have parked a long idle heartbeat, so returning to
+        // the foreground restarts the cadence from now instead of waiting out
+        // the remaining backoff.
+        scheduleSessionStatusHeartbeat();
+      }
       if (!state.selectedSessionId) return;
       cancelConversationRefresh();
       scheduleConversationRefresh(document.visibilityState === 'hidden' ? HIDDEN_REFRESH_MS : 80);

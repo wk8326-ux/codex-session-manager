@@ -998,6 +998,15 @@ if (!malformed.textContent.includes('<img src=x onerror=alert(1)>')) process.exi
 
         self.assertIn("SESSION_STATUS_REFRESH_MS", script)
         self.assertIn("function startSessionStatusHeartbeat()", script)
+        # Idle consoles must back off instead of re-reading every synced
+        # thread's status on a fixed cadence.
+        self.assertIn("IDLE_STATUS_REFRESH_MS", script)
+        self.assertIn("function sessionStatusRefreshDelay()", script)
+        self.assertIn("function scheduleSessionStatusHeartbeat(delay = sessionStatusRefreshDelay())", script)
+        self.assertNotIn(
+            "state.sessionStatusTimer = setInterval(",
+            script,
+        )
         hydrate_start = script.index("  async function hydrateSessionStatuses")
         hydrate_source = script[
             hydrate_start:script.index("\n  async function loadWorkspaceData", hydrate_start)
