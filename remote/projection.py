@@ -7,6 +7,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from typing import Callable
 
@@ -39,12 +40,16 @@ class SessionProjection:
         max_status_entries: int = 96,
         generation_provider: Callable[[], int] | None = None,
         max_workers: int = 4,
+        wait_seconds: float = 3.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._adapter = adapter
         self._fresh_seconds = max(0.0, fresh_seconds)
         self._max_sessions = max(1, int(max_sessions))
         self._max_status_entries = max(1, int(max_status_entries))
+        # A concurrent reader must never block a request for long: the PWA
+        # polls frequently, so serving a slightly older view beats stalling.
+        self._wait_seconds = max(0.1, float(wait_seconds))
         self._generation_provider = generation_provider or (lambda: 0)
         self._clock = clock
         self._lock = threading.RLock()
@@ -79,17 +84,20 @@ class SessionProjection:
     def read(self, thread_id: str, *, turn_limit: int = 6, force: bool = False) -> dict:
         bounded_limit = max(1, min(int(turn_limit), 30))
         self._refresh_generation()
+        deadline = self._clock() + self._wait_seconds
         while True:
+            stale: dict | None = None
             with self._lock:
                 entry = self._entries.get(thread_id)
-                if (
-                    not force
-                    and entry is not None
-                    and entry.turn_limit >= bounded_limit
-                    and self._clock() - entry.fetched_at <= self._fresh_seconds
-                ):
-                    self._entries.move_to_end(thread_id)
-                    return self._limited(entry.detail, bounded_limit)
+                if entry is not None:
+                    if (
+                        not force
+                        and entry.turn_limit >= bounded_limit
+                        and self._clock() - entry.fetched_at <= self._fresh_seconds
+                    ):
+                        self._entries.move_to_end(thread_id)
+                        return self._limited(entry.detail, bounded_limit)
+                    stale = entry.detail
                 event = self._inflight.get(thread_id)
                 if event is None:
                     event = threading.Event()
@@ -99,7 +107,21 @@ class SessionProjection:
                     owner = False
             if owner:
                 break
-            if not event.wait(12):
+            remaining = deadline - self._clock()
+            if remaining > 0:
+                event.wait(remaining)
+            with self._lock:
+                entry = self._entries.get(thread_id)
+                if (
+                    entry is not None
+                    and entry.turn_limit >= bounded_limit
+                    and self._clock() - entry.fetched_at <= self._fresh_seconds
+                ):
+                    self._entries.move_to_end(thread_id)
+                    return self._limited(entry.detail, bounded_limit)
+            if self._clock() >= deadline:
+                if stale is not None:
+                    return self._limited(stale, bounded_limit)
                 raise CodexAdapterError("Codex session projection timed out")
             force = False
 
@@ -149,10 +171,20 @@ class SessionProjection:
                     self._statuses.popitem(last=False)
             return thread_id, copy.deepcopy(status)
 
-        futures = [
-            self._executor.submit(read_status, thread_id) for thread_id in unique_ids
-        ]
-        return dict(future.result() for future in futures)
+        futures = {
+            self._executor.submit(read_status, thread_id): thread_id
+            for thread_id in unique_ids
+        }
+        results: dict[str, dict | None] = {}
+        deadline = self._clock() + self._wait_seconds
+        for future, thread_id in futures.items():
+            try:
+                _, status = future.result(timeout=max(0.0, deadline - self._clock()))
+            except FutureTimeoutError:
+                future.cancel()
+                status = None
+            results[thread_id] = status
+        return results
 
     def stats(self) -> dict:
         with self._lock:

@@ -115,6 +115,51 @@ class SessionProjectionTests(unittest.TestCase):
         finally:
             projection.close()
 
+    def test_waiting_reader_falls_back_to_cached_view_instead_of_erroring(
+        self,
+    ) -> None:
+        adapter = Adapter()
+        adapter.release.set()
+        projection = SessionProjection(adapter, fresh_seconds=0, wait_seconds=0.1)
+        try:
+            projection.read("thread")
+            adapter.release.clear()
+            slow = threading.Thread(target=projection.read, args=("thread",))
+            slow.start()
+            deadline = time.monotonic() + 1
+            while adapter.calls < 2 and time.monotonic() < deadline:
+                time.sleep(0.005)
+
+            result = projection.read("thread")
+
+            self.assertEqual(result["threadId"], "thread")
+            adapter.release.set()
+            slow.join(timeout=1)
+        finally:
+            adapter.release.set()
+            projection.close()
+
+    def test_list_statuses_does_not_block_on_a_stalled_adapter(self) -> None:
+        class StalledAdapter(Adapter):
+            def read_thread(self, thread_id: str):
+                self.calls += 1
+                self.release.wait(5)
+                return super().read_thread(thread_id)
+
+        adapter = StalledAdapter()
+        projection = SessionProjection(adapter, fresh_seconds=0, wait_seconds=0.2)
+        try:
+            started = time.monotonic()
+            statuses = projection.list_statuses(["one", "two"])
+
+            self.assertLess(time.monotonic() - started, 1.5)
+            self.assertEqual(set(statuses), {"one", "two"})
+            self.assertIsNone(statuses["one"])
+            self.assertIsNone(statuses["two"])
+        finally:
+            adapter.release.set()
+            projection.close()
+
 
 if __name__ == "__main__":
     unittest.main()
