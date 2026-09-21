@@ -9,6 +9,7 @@ import time
 import tomllib
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -274,6 +275,32 @@ def _relay_target(config_path: Path) -> tuple[str, int] | None:
     return (host, port) if host else None
 
 
+def _probe_all(probes: list[tuple[str, Callable[[], dict]]]) -> dict[str, dict]:
+    """Run independent probes concurrently and keep their declared order.
+
+    Each probe blocks on network I/O for up to ``probe_timeout``. Running them
+    one after another made a single supervision pass as slow as the sum of all
+    timeouts, so tunnel state lagged behind reality by tens of seconds.
+    """
+
+    def run(probe: Callable[[], dict]) -> dict:
+        try:
+            return probe()
+        except Exception as error:  # a broken probe must not kill supervision
+            return {
+                "ok": False,
+                "latencyMs": None,
+                "detail": f"{type(error).__name__}: {error}",
+            }
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=len(probes)) as pool:
+        futures = [(name, pool.submit(run, probe)) for name, probe in probes]
+        for name, future in futures:
+            results[name] = future.result()
+    return results
+
+
 def _tcp_probe(target: tuple[str, int] | None, timeout: float) -> dict:
     if target is None:
         return {"ok": False, "latencyMs": None, "detail": "relay is not configured"}
@@ -360,21 +387,43 @@ class TunnelSupervisor:
 
     def check_once(self) -> dict:
         base = self._adapter.status()
-        local = self._http_probe(self._local_url, self._probe_timeout)
         configured = bool(base.get("configured"))
-        relay = self._tcp_probe(
-            _relay_target(self._adapter.config_path), self._probe_timeout
-        ) if configured else {
+        public_base = self._public_url_provider().strip().rstrip("/")
+        relay_target = _relay_target(self._adapter.config_path) if configured else None
+        probes: list[tuple[str, Callable[[], dict]]] = [
+            (
+                "local",
+                lambda: self._http_probe(self._local_url, self._probe_timeout),
+            )
+        ]
+        if configured:
+            probes.append(
+                (
+                    "relay",
+                    lambda: self._tcp_probe(relay_target, self._probe_timeout),
+                )
+            )
+        if public_base:
+            probes.append(
+                (
+                    "public",
+                    lambda: self._http_probe(
+                        f"{public_base}/api/remote/health", self._probe_timeout
+                    ),
+                )
+            )
+        probed = _probe_all(probes)
+        local = probed["local"]
+        relay = probed.get("relay") or {
             "ok": False,
             "latencyMs": None,
             "detail": "tunnel is not configured",
         }
-        public_base = self._public_url_provider().strip().rstrip("/")
-        public = (
-            self._http_probe(f"{public_base}/api/remote/health", self._probe_timeout)
-            if public_base
-            else {"ok": False, "latencyMs": None, "detail": "public URL is not configured"}
-        )
+        public = probed.get("public") or {
+            "ok": False,
+            "latencyMs": None,
+            "detail": "public URL is not configured",
+        }
         if relay.get("ok"):
             self._relay_failures = 0
         else:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -336,6 +337,39 @@ class TunnelSupervisorTests(unittest.TestCase):
                 supervisor._next_restart_at,
                 supervisor._last_restart_at,
             )
+
+    def test_probes_run_concurrently_instead_of_sequentially(self) -> None:
+        delay = 0.4
+
+        def slow_http(_url: str, _timeout: float) -> dict:
+            time.sleep(delay)
+            return {"ok": True, "latencyMs": 1, "detail": ""}
+
+        def slow_tcp(_target: object, _timeout: float) -> dict:
+            time.sleep(delay)
+            return {"ok": True, "latencyMs": 1, "detail": ""}
+
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = FakeTunnelAdapter(Path(directory))
+            supervisor = TunnelSupervisor(
+                adapter,
+                local_url="http://127.0.0.1:8766/api/remote/health",
+                public_url_provider=lambda: "https://console.example.com",
+                restart_cooldown_seconds=0,
+                http_probe=slow_http,
+                tcp_probe=slow_tcp,
+            )
+
+            started = time.monotonic()
+            status = supervisor.check_once()
+            elapsed = time.monotonic() - started
+
+        self.assertTrue(status["health"]["local"]["ok"])
+        self.assertTrue(status["health"]["relay"]["ok"])
+        self.assertTrue(status["health"]["public"]["ok"])
+        # Three sequential probes would need >= 3 * delay; concurrent ones
+        # need only about one.
+        self.assertLess(elapsed, delay * 2.5)
 
 
 if __name__ == "__main__":
