@@ -3,7 +3,16 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+
+# Retention defaults that shipped before v4. Databases still sitting on these
+# exact values were never customized by the user, so the migration below may
+# tighten them; any other value is treated as a deliberate choice.
+_LEGACY_RETENTION_DAYS = 90
+_LEGACY_RECORD_LIMIT = 10000
+DEFAULT_RETENTION_DAYS = 14
+DEFAULT_RECORD_LIMIT = 2000
 
 
 def initialize_schema(connection: sqlite3.Connection) -> None:
@@ -15,8 +24,8 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY CHECK (id = 1),
             default_interval_minutes INTEGER NOT NULL DEFAULT 15,
             minimum_interval_minutes INTEGER NOT NULL DEFAULT 5,
-            record_retention_days INTEGER NOT NULL DEFAULT 90,
-            record_limit INTEGER NOT NULL DEFAULT 10000,
+            record_retention_days INTEGER NOT NULL DEFAULT 14,
+            record_limit INTEGER NOT NULL DEFAULT 2000,
             scheduler_enabled INTEGER NOT NULL DEFAULT 1,
             resume_actions_enabled INTEGER NOT NULL DEFAULT 0,
             resume_dispatch_mode TEXT NOT NULL DEFAULT 'direct_app_server'
@@ -101,7 +110,8 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     _ensure_column(
         connection, "recovery_rules", "is_builtin", "INTEGER NOT NULL DEFAULT 0"
     )
-    if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
+    previous_version = _read_schema_version(connection)
+    if previous_version is None:
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     else:
         connection.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
@@ -110,9 +120,49 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
                id, default_interval_minutes, minimum_interval_minutes,
                record_retention_days, record_limit, scheduler_enabled,
                resume_actions_enabled
-           ) VALUES (1, 15, 5, 90, 10000, 1, 0)"""
+           ) VALUES (1, 15, 5, 14, 2000, 1, 0)"""
     )
+    _migrate_retention_defaults(connection, previous_version)
     _seed_recovery_rules(connection)
+
+
+def _read_schema_version(connection: sqlite3.Connection) -> int | None:
+    row = connection.execute(
+        "SELECT version FROM schema_version LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row[0])
+
+
+def _migrate_retention_defaults(
+    connection: sqlite3.Connection, previous_version: int | None
+) -> None:
+    """Tighten retention only for databases left on the old defaults.
+
+    A 10k-row / 90-day window let silent probes dominate the audit table: the
+    live database had 10030 rows, 4678 of them ``silent_channel_unavailable``.
+    Rows are pruned only while the scheduler runs, so an untouched default
+    eventually costs every record query. Users who already chose their own
+    retention keep their numbers.
+    """
+    # Gated on the schema version so a user who later picks 90/10000 on purpose
+    # is not silently reset on the next start.
+    if previous_version is not None and previous_version >= 4:
+        return
+    connection.execute(
+        """UPDATE watchdog_settings
+              SET record_retention_days = ?, record_limit = ?
+            WHERE id = 1
+              AND record_retention_days = ?
+              AND record_limit = ?""",
+        (
+            DEFAULT_RETENTION_DAYS,
+            DEFAULT_RECORD_LIMIT,
+            _LEGACY_RETENTION_DAYS,
+            _LEGACY_RECORD_LIMIT,
+        ),
+    )
 
 
 def _ensure_column(

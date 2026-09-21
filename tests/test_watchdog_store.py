@@ -204,8 +204,8 @@ class WatchdogStoreTests(unittest.TestCase):
         self.assertEqual(settings["minimumIntervalMinutes"], 5)
         self.assertFalse(settings["resumeActionsEnabled"])
         self.assertEqual(settings["resumeDispatchMode"], "direct_app_server")
-        self.assertEqual(settings["recordRetentionDays"], 90)
-        self.assertEqual(settings["recordLimit"], 10000)
+        self.assertEqual(settings["recordRetentionDays"], 14)
+        self.assertEqual(settings["recordLimit"], 2000)
 
         self.store.initialize()
 
@@ -219,6 +219,85 @@ class WatchdogStoreTests(unittest.TestCase):
             {"429", "502", "503", "504"},
         )
         self.assertTrue(all(rule["builtIn"] for rule in rules))
+
+    def test_initialize_tightens_legacy_default_retention(self) -> None:
+        legacy_path = Path(self.temp.name) / "legacy-retention.db"
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                """CREATE TABLE schema_version (version INTEGER NOT NULL)"""
+            )
+            connection.execute("INSERT INTO schema_version(version) VALUES (3)")
+            connection.execute(
+                """CREATE TABLE watchdog_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    default_interval_minutes INTEGER NOT NULL DEFAULT 15,
+                    minimum_interval_minutes INTEGER NOT NULL DEFAULT 5,
+                    record_retention_days INTEGER NOT NULL DEFAULT 90,
+                    record_limit INTEGER NOT NULL DEFAULT 10000,
+                    scheduler_enabled INTEGER NOT NULL DEFAULT 1,
+                    resume_actions_enabled INTEGER NOT NULL DEFAULT 0,
+                    resume_dispatch_mode TEXT NOT NULL DEFAULT 'direct_app_server'
+                )"""
+            )
+            connection.execute(
+                "INSERT INTO watchdog_settings(id) VALUES (1)"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        WatchdogStore(legacy_path).initialize()
+        settings = WatchdogStore(legacy_path).get_settings()
+
+        self.assertEqual(settings["recordRetentionDays"], 14)
+        self.assertEqual(settings["recordLimit"], 2000)
+
+    def test_initialize_keeps_customized_retention(self) -> None:
+        legacy_path = Path(self.temp.name) / "custom-retention.db"
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                """CREATE TABLE schema_version (version INTEGER NOT NULL)"""
+            )
+            connection.execute("INSERT INTO schema_version(version) VALUES (3)")
+            connection.execute(
+                """CREATE TABLE watchdog_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    default_interval_minutes INTEGER NOT NULL DEFAULT 15,
+                    minimum_interval_minutes INTEGER NOT NULL DEFAULT 5,
+                    record_retention_days INTEGER NOT NULL DEFAULT 90,
+                    record_limit INTEGER NOT NULL DEFAULT 10000,
+                    scheduler_enabled INTEGER NOT NULL DEFAULT 1,
+                    resume_actions_enabled INTEGER NOT NULL DEFAULT 0,
+                    resume_dispatch_mode TEXT NOT NULL DEFAULT 'direct_app_server'
+                )"""
+            )
+            connection.execute(
+                """INSERT INTO watchdog_settings(
+                       id, record_retention_days, record_limit
+                   ) VALUES (1, 30, 5000)"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        WatchdogStore(legacy_path).initialize()
+        settings = WatchdogStore(legacy_path).get_settings()
+
+        self.assertEqual(settings["recordRetentionDays"], 30)
+        self.assertEqual(settings["recordLimit"], 5000)
+
+    def test_initialize_does_not_reset_retention_after_upgrade(self) -> None:
+        self.store.update_settings(
+            {"recordRetentionDays": 90, "recordLimit": 10000}
+        )
+
+        self.store.initialize()
+
+        settings = self.store.get_settings()
+        self.assertEqual(settings["recordRetentionDays"], 90)
+        self.assertEqual(settings["recordLimit"], 10000)
 
     def test_custom_recovery_rule_supports_crud_without_mutating_builtins(self) -> None:
         rule = self.store.create_recovery_rule(
