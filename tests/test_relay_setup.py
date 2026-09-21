@@ -154,6 +154,18 @@ class RelaySetupScriptContractTests(unittest.TestCase):
         self.assertIn("systemctl enable --now lpc-frps.service", script)
         self.assertIn("LPC_CONFIG_BUNDLE=", script)
 
+    def test_relay_nginx_disables_buffering_for_the_long_poll_feed(self) -> None:
+        script = (ROOT / "scripts" / "setup-relay-server.sh").read_text(
+            encoding="utf-8"
+        )
+
+        # The event feed is a long poll. Buffering it delays every push and
+        # the default 1m body limit rejects screenshot uploads with 413.
+        self.assertIn("location /api/remote/events", script)
+        self.assertIn("proxy_buffering off;", script)
+        self.assertIn("client_max_body_size 8m;", script)
+        self.assertIn("proxy_set_header Connection \"\";", script)
+
     def test_windows_installer_dry_run_decodes_without_writing_the_token(self) -> None:
         bundle = encoded_bundle()
         with tempfile.TemporaryDirectory() as directory:

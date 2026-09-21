@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
 
+from diagnostics import report as report_diagnostic
+
 from .models import SessionSnapshot, TurnSnapshot
 
 
@@ -669,8 +671,12 @@ class StdioJsonRpcClient:
             self._on_attention(
                 thread_id if isinstance(thread_id, str) else "", method
             )
-        except Exception:
-            pass
+        except Exception as error:
+            report_diagnostic(
+                "watchdog.codex_adapter",
+                f"attention handler failed for {method}",
+                error,
+            )
 
         turn_id = params.get("turnId")
         normalized_turn_id = turn_id if isinstance(turn_id, str) else ""
@@ -682,8 +688,13 @@ class StdioJsonRpcClient:
                     thread_id if isinstance(thread_id, str) else "",
                     normalized_turn_id,
                 )
-            except Exception:
+            except Exception as error:
                 auto_approve = False
+                report_diagnostic(
+                    "watchdog.codex_adapter",
+                    f"approval policy failed for {method}",
+                    error,
+                )
             if not auto_approve and self._queue_server_approval(
                 request_id, method, params
             ):
@@ -749,7 +760,12 @@ class StdioJsonRpcClient:
 
         try:
             return bool(self._approval_broker.offer(method, captured, resolve))
-        except Exception:
+        except Exception as error:
+            report_diagnostic(
+                "watchdog.codex_adapter",
+                f"approval broker rejected {method}",
+                error,
+            )
             return False
 
     @staticmethod
@@ -779,8 +795,12 @@ class StdioJsonRpcClient:
             event_params["watchdogDecision"] = watchdog_decision
         try:
             self._on_event(method, event_params)
-        except Exception:
-            pass
+        except Exception as error:
+            report_diagnostic(
+                "watchdog.codex_adapter",
+                f"event handler failed for {method}",
+                error,
+            )
 
     def _fail_pending(self, error: BaseException) -> None:
         with self._pending_lock:

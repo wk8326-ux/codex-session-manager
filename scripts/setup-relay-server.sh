@@ -167,14 +167,42 @@ EOF
 nginx_site="/etc/nginx/sites-available/local-project-console"
 backup_if_present "$nginx_site"
 cat >"$nginx_site" <<EOF
+upstream lpc_remote {
+    server 127.0.0.1:${REMOTE_PORT};
+    keepalive 16;
+}
+
 server {
     listen 80;
     listen [::]:80;
     server_name ${DOMAIN};
 
-    location / {
-        proxy_pass http://127.0.0.1:${REMOTE_PORT};
+    # Screenshots travel through this relay as base64 JSON. Nginx defaults to
+    # 1m and would answer 413 before the request ever reached the PWA backend.
+    client_max_body_size 8m;
+
+    # The event feed is a long poll (up to 30s). Nginx buffers proxied
+    # responses by default, which holds the event until the buffer fills and
+    # makes the phone feel several seconds behind. Disable buffering and give
+    # the connection enough idle time to survive a full long poll.
+    location /api/remote/events {
+        proxy_pass http://lpc_remote;
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location / {
+        proxy_pass http://lpc_remote;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
