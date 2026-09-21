@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import time
 import unittest
+from contextlib import redirect_stderr
 
 from remote.approvals import (
     InvalidApprovalDecision,
@@ -147,6 +149,48 @@ class RemoteApprovalBrokerTests(unittest.TestCase):
         self.assertEqual(self.audit[-1]["outcome"], "expired")
         self.assertEqual(broker.list_pending(), [])
         broker.close()
+
+    def test_failing_audit_and_event_publishers_are_reported_not_swallowed(
+        self,
+    ) -> None:
+        def failing_audit(_record: dict) -> None:
+            raise RuntimeError("audit database is locked")
+
+        def failing_publish(_method: str, _params: dict) -> None:
+            raise RuntimeError("event hub is closed")
+
+        broker = RemoteApprovalBroker(
+            lambda: {THREAD_ID},
+            timeout_seconds=5,
+            publish_event=failing_publish,
+            record_audit=failing_audit,
+        )
+        try:
+            captured = io.StringIO()
+            with redirect_stderr(captured):
+                broker.offer(
+                    "item/commandExecution/requestApproval",
+                    {
+                        "threadId": THREAD_ID,
+                        "turnId": "turn-1",
+                        "command": ["npm", "test"],
+                    },
+                    self.decisions.append,
+                )
+                pending = broker.list_pending()[0]
+                resolved = broker.resolve(
+                    pending["id"],
+                    "acceptForSession",
+                    {"id": "phone-1", "name": "My phone"},
+                )
+
+            self.assertEqual(resolved["status"], "resolved")
+            output = captured.getvalue()
+            self.assertIn("failed to record audit entry", output)
+            self.assertIn("audit database is locked", output)
+            self.assertIn("failed to publish", output)
+        finally:
+            broker.close()
 
 
 if __name__ == "__main__":

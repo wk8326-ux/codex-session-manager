@@ -6,6 +6,8 @@ import threading
 import time
 from collections.abc import Callable
 
+from diagnostics import report as report_diagnostic
+
 from .codex_adapter import (
     CodexAdapterError,
     CodexAppServerAdapter,
@@ -68,8 +70,12 @@ class CodexRuntime:
         if broker is not None:
             try:
                 broker.close()
-            except Exception:
-                pass
+            except Exception as error:
+                report_diagnostic(
+                    "watchdog.codex_runtime",
+                    "failed to close the approval broker",
+                    error,
+                )
 
     def set_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         with self._condition:
@@ -170,8 +176,12 @@ class CodexRuntime:
         if stale_client is not None:
             try:
                 stale_client.close()
-            except Exception:
-                pass
+            except Exception as error:
+                report_diagnostic(
+                    "watchdog.codex_runtime",
+                    "failed to close a stale App Server client",
+                    error,
+                )
         client = None
         try:
             client = self._client_factory(
@@ -184,8 +194,12 @@ class CodexRuntime:
             if client is not None:
                 try:
                     client.close()
-                except Exception:
-                    pass
+                except Exception as close_error:
+                    report_diagnostic(
+                        "watchdog.codex_runtime",
+                        "failed to close a partially connected App Server client",
+                        close_error,
+                    )
             with self._condition:
                 self._connecting = False
                 self._last_error = f"{type(error).__name__}: {error}"
@@ -214,8 +228,12 @@ class CodexRuntime:
         if client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as error:
+                report_diagnostic(
+                    "watchdog.codex_runtime",
+                    "failed to close the App Server client",
+                    error,
+                )
 
     @staticmethod
     def _client_alive(client: object | None) -> bool:

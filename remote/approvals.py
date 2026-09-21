@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 from uuid import uuid4
 
+from diagnostics import report as report_diagnostic
 from timeutil import format_utc, now_datetime
 
 
@@ -303,8 +304,15 @@ class RemoteApprovalBroker:
         }
         try:
             self._record_audit(record)
-        except Exception:
-            pass
+        except Exception as error:
+            # An audit write failure must not block the user's decision, but it
+            # has to stay visible: silently losing approval history hides real
+            # security-relevant events.
+            report_diagnostic(
+                "remote.approvals",
+                f"failed to record audit entry for approval {pending.public['id']}",
+                error,
+            )
         self._publish(
             "remote/approvalResolved",
             pending.public,
@@ -331,5 +339,9 @@ class RemoteApprovalBroker:
                     "status": status,
                 },
             )
-        except Exception:
-            pass
+        except Exception as error:
+            report_diagnostic(
+                "remote.approvals",
+                f"failed to publish {method} for approval {public['id']}",
+                error,
+            )

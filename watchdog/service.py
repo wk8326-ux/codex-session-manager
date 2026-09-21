@@ -408,11 +408,9 @@ class WatchdogService:
         retry_next_check_at: str | None = None
         resume_outcome: str | None = None
         resume_audit_detail: str | None = None
-        if (
-            decision.code == "resume_candidate"
-            and settings["resumeActionsEnabled"]
-            and turn is not None
-        ):
+        # ``resume_candidate`` can only survive the downgrade above when resume
+        # actions are enabled, so re-checking the setting here was dead weight.
+        if decision.code == "resume_candidate" and turn is not None:
             fingerprint = _incident_fingerprint(
                 session["id"], turn.id, decision.error_signature
             )
