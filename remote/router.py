@@ -9,6 +9,7 @@ from .application import (
     RemoteApplication,
     RemoteApplicationError,
     RemoteNotFound,
+    RemoteReadTimeout,
     RemoteValidationError,
 )
 from .native_capture import NativeCaptureError
@@ -145,6 +146,10 @@ class AdminRemoteApi:
             return RemoteResponse(HTTPStatus.NOT_FOUND, {"message": str(error)})
         except (TypeError, ValueError):
             return RemoteResponse(HTTPStatus.BAD_REQUEST, {"message": "事件游标或等待时间无效。"})
+        except RemoteReadTimeout as error:
+            # 504 tells the caller the read deadline expired and retrying is
+            # reasonable, instead of the 502 that also means "upstream broken".
+            return RemoteResponse(HTTPStatus.GATEWAY_TIMEOUT, {"message": str(error)})
         except RemoteApplicationError as error:
             return RemoteResponse(HTTPStatus.BAD_GATEWAY, {"message": str(error)})
         except NativeCaptureError as error:
@@ -240,6 +245,8 @@ class RemoteHttpApi:
             return RemoteResponse(HTTPStatus.BAD_REQUEST, {"message": str(error)})
         except RemoteNotFound as error:
             return RemoteResponse(HTTPStatus.NOT_FOUND, {"message": str(error)})
+        except RemoteReadTimeout as error:
+            return RemoteResponse(HTTPStatus.GATEWAY_TIMEOUT, {"message": str(error)})
         except RemoteApplicationError as error:
             return RemoteResponse(HTTPStatus.BAD_GATEWAY, {"message": str(error)})
         return None

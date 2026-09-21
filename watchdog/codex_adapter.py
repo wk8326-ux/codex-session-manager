@@ -53,8 +53,23 @@ class UncertainSendFailure(CodexAdapterError):
     """The request was written but its outcome could not be confirmed."""
 
 
+class CodexReadTimeout(CodexAdapterError):
+    """A read-only App Server request exceeded its deadline.
+
+    Kept separate from ``UncertainSendFailure`` because the two need opposite
+    handling. An unconfirmed *write* may have landed, so it must never be
+    retried and the connection is treated as suspect. A read that timed out
+    proves nothing about the connection, and measured behaviour showed the
+    difference mattered: one slow ``thread/list`` marked the whole runtime
+    disconnected, so every later status query failed with 503 as well.
+    """
+
+
 class CodexProtocolError(CodexAdapterError):
     """Raised when the App Server returns an incompatible response."""
+
+
+READ_ONLY_METHODS = frozenset({"thread/list", "thread/read", "thread/turns/list"})
 
 
 def _codex_error(error: object) -> tuple[str, int | None]:
@@ -645,6 +660,11 @@ class StdioJsonRpcClient:
     ) -> dict:
         if self._closed:
             raise CodexAdapterError("Codex App Server transport is closed")
+        # A read-only request cannot mutate session state, so failing it is a
+        # plain read failure rather than an unconfirmed write. Reporting the
+        # difference keeps a slow list call from being treated as a reason to
+        # tear down and rebuild the App Server connection.
+        read_only = method in READ_ONLY_METHODS
         with self._pending_lock:
             request_id = self._next_id
             self._next_id += 1
@@ -657,6 +677,10 @@ class StdioJsonRpcClient:
         except BaseException as error:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
+            if read_only:
+                raise CodexReadTimeout(
+                    f"Codex App Server read could not be sent: {method}"
+                ) from error
             raise UncertainSendFailure(
                 f"Codex App Server request write was not confirmed: {method}"
             ) from error
@@ -665,6 +689,10 @@ class StdioJsonRpcClient:
         if not pending.event.wait(wait_seconds):
             with self._pending_lock:
                 self._pending.pop(request_id, None)
+            if read_only:
+                raise CodexReadTimeout(
+                    f"Codex App Server read timed out: {method}"
+                )
             raise UncertainSendFailure(
                 f"Codex App Server request timed out: {method}"
             )

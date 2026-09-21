@@ -15,6 +15,7 @@ from watchdog.codex_adapter import (
     CodexAdapterError,
     CodexAppServerAdapter,
     CodexProtocolError,
+    CodexReadTimeout,
     DefiniteSendFailure,
     RpcTransport,
     StdioJsonRpcClient,
@@ -1128,8 +1129,11 @@ class StdioJsonRpcClientTests(unittest.TestCase):
         self.assertNotIn("accept", repr(responses))
         self.assertNotIn("acceptForSession", repr(responses))
 
-    def test_request_times_out_and_close_terminates_only_owned_child(self) -> None:
-        with self.assertRaises(UncertainSendFailure):
+    def test_read_request_times_out_and_close_terminates_only_owned_child(self) -> None:
+        # A read-only timeout must not be reported as an unconfirmed write: the
+        # old contract let one slow thread/read mark the whole runtime
+        # disconnected, so later status queries failed too.
+        with self.assertRaises(CodexReadTimeout):
             self.client.request("thread/read", {"threadId": THREAD_ID}, timeout=0.02)
 
         self.client.close()
@@ -1137,6 +1141,14 @@ class StdioJsonRpcClientTests(unittest.TestCase):
         self.assertTrue(self.process.stdin.closed)
         self.assertTrue(self.process.terminated)
         self.assertFalse(self.process.killed)
+
+    def test_write_request_timeout_is_still_an_uncertain_send_failure(self) -> None:
+        # The opposite contract still holds for writes: turn/start may have
+        # landed, so the caller must never blindly retry it.
+        with self.assertRaises(UncertainSendFailure) as raised:
+            self.client.request("turn/start", {"threadId": THREAD_ID}, timeout=0.02)
+
+        self.assertNotIsInstance(raised.exception, CodexReadTimeout)
 
     def test_explicit_json_rpc_error_is_a_definite_failure(self) -> None:
         errors: list[BaseException] = []

@@ -12,6 +12,7 @@ from .codex_adapter import (
     CodexAdapterError,
     CodexAppServerAdapter,
     CodexProtocolError,
+    CodexReadTimeout,
     DefiniteSendFailure,
     StdioJsonRpcClient,
     UncertainSendFailure,
@@ -140,7 +141,11 @@ class CodexRuntime:
             raise CodexAdapterError("Codex App Server is unavailable")
         try:
             return getattr(adapter, method)(*args, **kwargs)
-        except (DefiniteSendFailure, CodexProtocolError):
+        except (DefiniteSendFailure, CodexProtocolError, CodexReadTimeout):
+            # A read that timed out says nothing about connection health, so the
+            # runtime stays connected and the next caller retries cheaply.
+            # Tearing the client down here was what turned one slow request into
+            # a blanket "Codex connection is unavailable" for every later call.
             raise
         except (UncertainSendFailure, CodexAdapterError):
             self._mark_disconnected()

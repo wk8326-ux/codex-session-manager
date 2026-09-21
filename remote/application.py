@@ -7,7 +7,11 @@ import re
 import sqlite3
 from urllib.parse import urlparse
 
-from watchdog.codex_adapter import CodexAdapterError, DefiniteSendFailure
+from watchdog.codex_adapter import (
+    CodexAdapterError,
+    CodexReadTimeout,
+    DefiniteSendFailure,
+)
 from watchdog.validation import (
     ValidationError,
     validate_required_text,
@@ -35,6 +39,15 @@ class RemoteNotFound(RemoteApplicationError):
 
 class RemoteValidationError(RemoteApplicationError):
     pass
+
+
+class RemoteReadTimeout(RemoteApplicationError):
+    """A Codex read deadline expired; the caller should retry.
+
+    Distinct from a generic application error so the router can answer 504
+    instead of 502. Callers previously saw 502 for both a slow read and a
+    genuinely broken upstream, which gave no hint that retrying was enough.
+    """
 
 
 _IMAGE_DATA_URL = re.compile(
@@ -232,6 +245,8 @@ class RemoteApplication:
     def list_local_sessions(self, limit: int) -> list[dict]:
         try:
             snapshots = self.adapter.list_threads(limit=limit)
+        except CodexReadTimeout as error:
+            raise RemoteReadTimeout("Codex 本机会话读取超时，请重试。") from error
         except CodexAdapterError as error:
             raise RemoteApplicationError("Codex 本机会话当前不可读取。") from error
         synced_ids = {

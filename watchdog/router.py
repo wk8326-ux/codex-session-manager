@@ -6,7 +6,7 @@ from typing import Any
 from timeutil import parse_utc
 
 from .application import ResourceConflictError, ResourceNotFoundError
-from .codex_adapter import CodexAdapterError
+from .codex_adapter import CodexAdapterError, CodexReadTimeout
 from .store import ChannelInUseError, WatchdogStoreError
 from .validation import ValidationError
 
@@ -42,6 +42,11 @@ class WatchdogHttpApi:
             return ApiResponse(409, {"message": str(error)})
         except (ValidationError, TypeError, ValueError) as error:
             return ApiResponse(400, {"message": str(error)})
+        except CodexReadTimeout:
+            # A read deadline is retryable and says nothing about whether the
+            # connection is up, so it must not reuse the "connection is
+            # unavailable" 503 that the caller would read as a hard outage.
+            return ApiResponse(504, {"message": "Codex session read timed out."})
         except CodexAdapterError:
             return ApiResponse(503, {"message": "Codex connection is unavailable."})
         except Exception:
