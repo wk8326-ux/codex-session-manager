@@ -100,10 +100,6 @@ class FrpTunnelManager:
         self._last_exit_code: int | None = None
 
     @classmethod
-    def from_base_path(cls, base_path: Path) -> "FrpTunnelManager":
-        return cls.from_runtime_path(Path(base_path) / ".runtime")
-
-    @classmethod
     def from_runtime_path(cls, runtime_path: Path) -> "FrpTunnelManager":
         runtime_dir = Path(runtime_path) / "frp"
         default_executable = runtime_dir / (

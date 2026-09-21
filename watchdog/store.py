@@ -977,17 +977,6 @@ class WatchdogStore:
         with self._connect() as connection:
             connection.execute("UPDATE recovery_incidents SET status = CASE WHEN attempt_count >= 3 THEN 'manual_attention' ELSE 'failed' END, detail = ? WHERE fingerprint = ?", (detail, fingerprint))
 
-    def mark_incident_manual_attention(self, fingerprint: str, resolved_at: str) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                """UPDATE recovery_incidents
-                   SET status = 'manual_attention',
-                       resolved_at = ?,
-                       detail = 'send outcome requires manual confirmation'
-                   WHERE fingerprint = ?""",
-                (resolved_at, fingerprint),
-            )
-
     def finalize_resume_outcome(
         self,
         fingerprint: str,

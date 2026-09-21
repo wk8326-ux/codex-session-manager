@@ -52,17 +52,6 @@ class ApplicationPaths:
     def database_path(self) -> Path:
         return self.data_root / "watchdog.db"
 
-    @property
-    def system_runtime_root(self) -> Path:
-        return self.runtime_root / "system-startup"
-
-    @property
-    def system_log_root(self) -> Path:
-        # Keep source-mode diagnostics where existing scripts and users expect them.
-        if self.mode == "source":
-            return self.system_runtime_root
-        return self.log_root / "system-startup"
-
     @classmethod
     def resolve(
         cls,
