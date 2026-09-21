@@ -599,27 +599,57 @@
     return labels[value] || value || '未知';
   }
 
-  function sessionSnapshotStatus(session) {
-    if (session?.statusKnown === false) return 'unknown';
-    const latestStatus = session?.latestTurnStatus || '';
-    const threadStatus = session?.threadStatus || '';
+  // Single source of truth for session liveness.
+  //
+  // The drawer list and the conversation view used to run two different
+  // chains: the list fell back to 'stopped' while the detail view added a
+  // 180s activity grace and an explicit error check. The same session could
+  // therefore read "已停止" in the list and "已完成" as soon as it was opened.
+  // Both callers now pass whichever payload they hold into this resolver, so
+  // one session has exactly one status.
+  //
+  // The fallback is deliberately 'unknown' rather than 'stopped': absence of
+  // evidence is not evidence that a session ended, and claiming "已停止" made
+  // users believe a still-running session had finished.
+  function resolveSessionStatus({ summary = null, detail = null, activity = null } = {}) {
     const activeStates = ['active', 'inProgress', 'running', 'started'];
     const failedStates = ['failed', 'interrupted', 'systemError', 'cancelled'];
+    const turns = detail?.turns || [];
+    const latest = turns.at(-1);
+    const latestItem = (latest?.items || []).at(-1);
+    const detailError = typeof detail?.latestTurnError === 'string' ? detail.latestTurnError : '';
+    const latestError = (detailError || (typeof latest?.error === 'string' ? latest.error : '')).trim();
+    if (latestError) return 'failed';
+    const latestStatus = detail?.latestTurnStatus || latest?.status || summary?.latestTurnStatus || '';
     // The App Server labels a turn it is still writing as "interrupted". The
     // backend converts that to inProgress, and this flag keeps the drawer
     // honest even if an older cached payload arrives without the conversion.
-    if (session?.latestTurnInFlight || activeStates.includes(latestStatus)) {
-      return 'inProgress';
+    if (summary?.latestTurnInFlight) return 'inProgress';
+    if (['failed', 'systemError'].includes(latestStatus)) return latestStatus;
+    if (summary?.latestTurnHasError && latestStatus && latestStatus !== 'completed') {
+      return failedStates.includes(latestStatus) ? latestStatus : 'failed';
     }
-    if (session?.latestTurnHasError || failedStates.includes(latestStatus)) {
-      return latestStatus || 'failed';
-    }
+    if (activeStates.includes(latestStatus)) return 'inProgress';
+    if (activeStates.includes(latestItem?.status)) return 'inProgress';
     if (latestStatus === 'completed') return 'completed';
-    if ((session?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
+    if (failedStates.includes(latestStatus)) return latestStatus;
+    const recentContent = activity
+      && Date.now() - (activity.lastConversationActivityAt || 0) < LIVE_ACTIVITY_GRACE_MS;
+    const recentEvent = activity
+      && Date.now() - (activity.lastEventAt || 0) < LIVE_ACTIVITY_GRACE_MS;
+    if (recentContent || recentEvent) return 'inProgress';
+    const flags = summary?.activeFlags || detail?.activeFlags || [];
+    if (flags.some(flag => activeStates.includes(flag))) return 'inProgress';
+    const threadStatus = summary?.threadStatus || detail?.status || '';
     if (failedStates.includes(threadStatus)) return threadStatus;
     if (activeStates.includes(threadStatus)) return 'inProgress';
     if (threadStatus === 'completed') return 'completed';
-    return 'stopped';
+    return 'unknown';
+  }
+
+  function sessionSnapshotStatus(session) {
+    if (session?.statusKnown === false) return 'unknown';
+    return resolveSessionStatus({ summary: session });
   }
 
   function setSessionStatusOverride(threadId, status) {
@@ -1408,28 +1438,11 @@
   }
 
   function conversationStatus(detail) {
-    return conversationStatusWithActivity(detail, state);
+    return resolveSessionStatus({ detail, activity: state });
   }
 
   function conversationStatusWithActivity(detail, activity) {
-    const turns = detail?.turns || [];
-    const latest = turns.at(-1);
-    const latestItem = (latest?.items || []).at(-1);
-    const activeStates = ['active', 'inProgress', 'running', 'started'];
-    const latestStatus = detail?.latestTurnStatus || latest?.status || '';
-    const detailError = typeof detail?.latestTurnError === 'string' ? detail.latestTurnError : '';
-    const latestError = (detailError || (typeof latest?.error === 'string' ? latest.error : '')).trim();
-    if (latestError) return 'failed';
-    if (['failed', 'systemError'].includes(latestStatus)) return latestStatus;
-    if (activeStates.includes(latestStatus)) return 'inProgress';
-    if (activeStates.includes(latestItem?.status)) return 'inProgress';
-    if (latestStatus === 'completed') return 'completed';
-    const recentContent = Date.now() - (activity.lastConversationActivityAt || 0) < LIVE_ACTIVITY_GRACE_MS;
-    const recentEvent = Date.now() - (activity.lastEventAt || 0) < LIVE_ACTIVITY_GRACE_MS;
-    if (recentContent || recentEvent) return 'inProgress';
-    if (latestStatus) return latestStatus;
-    if ((detail?.activeFlags || []).some(flag => activeStates.includes(flag))) return 'inProgress';
-    return detail?.status === 'notLoaded' ? 'idle' : (detail?.status || 'idle');
+    return resolveSessionStatus({ detail, activity });
   }
 
   function uuidV7Timestamp(value) {

@@ -331,6 +331,17 @@ class RemoteApplicationTests(unittest.TestCase):
         self.application.delete_synced_session(synced["id"])
         self.assertEqual(self.application.list_sessions(), [])
 
+    def test_local_session_list_surfaces_an_unreadable_codex(self) -> None:
+        # The picker calls this endpoint directly, so an adapter failure has to
+        # become an application error the router can turn into a clear status
+        # instead of an unhandled exception.
+        self.adapter.list_threads = lambda limit: (_ for _ in ()).throw(
+            CodexAdapterError("Codex App Server request timed out: thread/list")
+        )
+
+        with self.assertRaises(RemoteApplicationError):
+            self.application.list_local_sessions(limit=50)
+
     def test_session_list_reads_the_latest_turn_without_opening_the_session(self) -> None:
         self.adapter.thread_snapshot = SimpleNamespace(
             thread_id=THREAD_ID,

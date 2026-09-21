@@ -371,6 +371,13 @@ const cases = [
       latestTurnInFlight: true,
     },
   },
+  {
+    // A session the backend knows about but has no turn evidence for must not
+    // render as stopped: the list used to say "已停止" here while the detail
+    // view disagreed as soon as the conversation loaded.
+    expected: 'unknown',
+    session: { statusKnown: true, threadStatus: 'notLoaded', latestTurnStatus: '' },
+  },
 ];
 for (const item of cases) {
   const actual = context.sessionSnapshotStatus(item.session);
@@ -572,9 +579,15 @@ if (!result || result.data !== value) process.exit(1);
 
     def test_explicit_turn_errors_override_stale_active_thread_state(self) -> None:
         script = (ROOT / "remote.js").read_text(encoding="utf-8")
-        start = script.index("  function conversationStatus(detail) {")
-        end = script.index("\n  function uuidV7Timestamp", start)
-        function_source = script[start:end]
+        # conversationStatus is now a thin wrapper over the shared resolver that
+        # the drawer list also uses, so the fixture has to pull in both.
+        resolver_start = script.index("  function resolveSessionStatus(")
+        resolver_end = script.index("\n  function sessionSnapshotStatus", resolver_start)
+        wrapper_start = script.index("  function conversationStatus(detail) {")
+        wrapper_end = script.index("\n  function activityLabel", wrapper_start)
+        function_source = (
+            script[resolver_start:resolver_end] + "\n" + script[wrapper_start:wrapper_end]
+        )
         node_script = r"""
 const vm = require('vm');
 const source = process.argv[1];
