@@ -247,6 +247,10 @@ class WatchdogServiceTests(unittest.TestCase):
 
         self.assertEqual(run["decision"], "resume_candidate_observed")
         self.assertEqual(run["turnId"], "turn-failed")
+        # The blocked-resume case has to read differently from a plain silent
+        # run, otherwise "no rule matched" and "rule matched but blocked" look
+        # identical and the user keeps asking why recovery never fired.
+        self.assertIn("resume actions are turned off", run["detailSanitized"])
         self.assertEqual(adapter.read_calls, [THREAD_ID])
         self.assertEqual(adapter.start_calls, [])
         stored_runs = self.store.list_monitor_runs({})

@@ -85,7 +85,14 @@ TURN_ID = re.compile(
 )
 DECISION_DETAILS = {
     "resume_candidate": "enabled recovery rule matched",
-    "resume_candidate_observed": "enabled recovery rule matched",
+    # Kept distinct from ``resume_candidate`` on purpose: this code means the
+    # rule matched but the global resume switch blocked the send. Recording the
+    # same text for both made "no rule matched" and "rule matched but blocked"
+    # indistinguishable in the run log, which is what users kept reporting as
+    # "命中规则却不续跑".
+    "resume_candidate_observed": (
+        "enabled recovery rule matched, but resume actions are turned off"
+    ),
     "resume_started": "resumed turn started; waiting for final outcome",
     "resume_queued": "waiting for Codex Desktop bridge",
     "resume_cancelled": "bridge dispatch was cancelled because monitoring was disabled",

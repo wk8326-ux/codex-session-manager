@@ -58,6 +58,18 @@ class WatchdogUiTests(unittest.TestCase):
         self.assertIn('prefers-reduced-motion: reduce', html)
         self.assertIn('@media (max-width: 820px)', html)
         self.assertIn('@media (max-width: 520px)', html)
+
+    def test_blocked_resume_candidates_are_visible_instead_of_silent(self) -> None:
+        # The default keeps auto-resume off, which is safe, but a matched rule
+        # that is then blocked must not render as an unexplained "静默".
+        html = (ROOT / "watchdog.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="resume-candidate-notice"', html)
+        self.assertIn("已命中 · 续跑关闭", html)
+        self.assertIn("已命中恢复规则（续跑关闭）", html)
+        self.assertIn("resume actions are turned off", (
+            ROOT / "watchdog" / "service.py"
+        ).read_text(encoding="utf-8"))
         for state in ("loading", "empty", "unavailable", "disabled"):
             self.assertIn(f'data-view-state="{state}"', html)
 

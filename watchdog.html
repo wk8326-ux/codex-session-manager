@@ -213,6 +213,7 @@
     .view-notice p { margin: 0; color: var(--text-secondary); }
     .view-notice.disabled { color: var(--text-warning); background: var(--surface-warning); border-color: rgba(173, 107, 29, 0.2); }
     .view-notice.unavailable { color: var(--text-danger); background: var(--surface-danger); border-color: rgba(180, 69, 56, 0.2); }
+    .view-notice.matched { color: var(--text-warning); background: var(--surface-warning); border-color: rgba(173, 107, 29, 0.32); }
 
     .board { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); box-shadow: var(--shadow-raised); overflow: hidden; }
     .board-toolbar { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px 0 22px; border-bottom: 1px solid var(--border-subtle); }
@@ -490,6 +491,11 @@
             <div><strong>自动续跑已关闭</strong><p>当前只执行渠道和会话检查，不会发送续跑提示词。</p></div>
           </div>
 
+          <div class="view-notice matched" id="resume-candidate-notice" data-view-state="matched" role="status" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+            <div><strong>已有会话命中恢复规则</strong><p>检测到可续跑的异常，但自动续跑总开关处于关闭状态，因此没有发送提示词。开启总开关后，这些会话会在下次检查时自动续跑。</p></div>
+          </div>
+
           <div class="view-notice disabled" id="scheduler-disabled-notice" data-view-state="disabled" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
             <div><strong>定时监控已暂停</strong><p>会话和渠道配置仍可管理，也可以手动立即检查。</p></div>
@@ -536,7 +542,7 @@
             <form class="filters-row" id="runs-filter-form">
               <div class="compact-field"><label for="run-filter-session">会话</label><select id="run-filter-session" name="sessionId"><option value="">全部会话</option></select></div>
               <div class="compact-field"><label for="run-filter-channel">渠道</label><select id="run-filter-channel" name="channelId"><option value="">全部渠道</option></select></div>
-              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">静默：仅观察续跑候选</option><option value="resume_queued">等待桌面桥接</option><option value="resume_cancelled">续跑已取消</option><option value="resume_started">续跑已启动</option><option value="resume_completed">续跑已完成</option><option value="resume_failed">续跑后失败</option><option value="resume_interrupted">续跑被中断</option><option value="resume_manual_attention">续跑需要关注</option><option value="resume_sent">旧记录：已续跑</option><option value="resume_action_failed">续跑请求失败</option><option value="silent_manual_attention">需要关注</option></select></div>
+              <div class="compact-field"><label for="run-filter-decision">处理结果</label><select id="run-filter-decision" name="decision"><option value="">全部结果</option><option value="silent_session_running">静默：会话运行中</option><option value="silent_channel_unavailable">静默：渠道不可用</option><option value="silent_session_completed">静默：任务已完成</option><option value="resume_candidate_observed">已命中恢复规则（续跑关闭）</option><option value="resume_queued">等待桌面桥接</option><option value="resume_cancelled">续跑已取消</option><option value="resume_started">续跑已启动</option><option value="resume_completed">续跑已完成</option><option value="resume_failed">续跑后失败</option><option value="resume_interrupted">续跑被中断</option><option value="resume_manual_attention">续跑需要关注</option><option value="resume_sent">旧记录：已续跑</option><option value="resume_action_failed">续跑请求失败</option><option value="silent_manual_attention">需要关注</option></select></div>
               <div class="compact-field"><label for="run-filter-from">开始时间</label><input id="run-filter-from" name="from" type="datetime-local"></div>
               <div class="compact-field"><label for="run-filter-to">结束时间</label><input id="run-filter-to" name="to" type="datetime-local"></div>
               <div class="filter-actions"><button class="button" type="submit">筛选记录</button><button class="button ghost" id="reset-run-filters" type="button">重置</button></div>
@@ -871,7 +877,10 @@
       if (decision === 'resume_manual_attention') return { label: '需要关注', tone: 'warning' };
       if (decision === 'resume_action_failed') return { label: '续跑失败', tone: 'danger' };
       if (decision === 'silent_manual_attention') return { label: '需要关注', tone: 'warning' };
-      if (decision === 'resume_candidate_observed') return { label: '静默', tone: 'warning' };
+      // Distinct from plain 静默: the recovery rule did match, the send was
+      // blocked by the global switch. Showing "静默" here is what made users
+      // believe recovery rules were being ignored.
+      if (decision === 'resume_candidate_observed') return { label: '已命中 · 续跑关闭', tone: 'warning' };
       if (String(decision || '').startsWith('silent_') || ['retry_waiting', 'sending_in_progress'].includes(decision)) return { label: '静默', tone: 'neutral' };
       return { label: '需要关注', tone: 'warning' };
     }
@@ -901,6 +910,18 @@
       resumeControl.setAttribute('aria-pressed', String(resumeEnabled));
       resumeControl.querySelector('span:last-child').innerHTML = `<strong>${resumeEnabled ? '续跑开启' : '续跑关闭'}</strong> · ${resumeEnabled ? '自动处理' : '只读'}`;
       document.getElementById('resume-disabled-notice').hidden = resumeEnabled;
+      // The switch being off is the normal state, so the generic notice above
+      // stays quiet. This one only appears once a run actually shows a blocked
+      // resume candidate, which turns an invisible block into an actionable
+      // hint without changing the safe default.
+      const blockedCandidates = appState.runs.filter(run => run.decision === 'resume_candidate_observed').length;
+      const candidateNotice = document.getElementById('resume-candidate-notice');
+      candidateNotice.hidden = resumeEnabled || blockedCandidates === 0;
+      if (!candidateNotice.hidden) {
+        candidateNotice.querySelector('p').textContent = blockedCandidates === 1
+          ? '检测到 1 个会话命中恢复规则，但自动续跑总开关处于关闭状态，因此没有发送提示词。开启总开关后，它会在下次检查时自动续跑。'
+          : `检测到 ${blockedCandidates} 个会话命中恢复规则，但自动续跑总开关处于关闭状态，因此没有发送提示词。开启总开关后，它们会在下次检查时自动续跑。`;
+      }
       document.getElementById('scheduler-disabled-notice').hidden = appState.status.schedulerEnabled !== false;
       document.getElementById('codex-unavailable-notice').hidden = appState.status.codexConnected !== false;
 
